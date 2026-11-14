@@ -23,8 +23,8 @@ import { TEMPER_READ_TOOLS, getTemperToken } from "../lib/mcp-auth.js";
  *   prohibition.
  * - **`approval: never()`** — every tool below is a READ performed under the caller's own
  *   credential, so an approval prompt would ask a human to authorize reading their own data.
- *   It would also be undeliverable as posed: this agent's `input.requested` override
- *   (`channels/events.ts`) can only post ephemeral TEXT, so the prompt is a message with no
+ *   It would also be undeliverable as posed: this agent's `interaction.opened` override
+ *   (`lib/events.ts`) can only post ephemeral TEXT, so the prompt is a message with no
  *   affordance to answer it, and the turn stalls until it times out. `always()`/`once()`
  *   become worth revisiting when a write tool is added — and a write is what would make them
  *   worth building the interaction for.

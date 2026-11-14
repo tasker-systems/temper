@@ -43,8 +43,9 @@ export function normalizeSiteBaseUrl(raw: string | null | undefined): string | n
  * Runtime, not build time. The site URL is a per-deployment value, and this
  * agent reads all of its deployment config at request time (see CLAUDE.md, "read
  * at request time") so an unset variable fails a mention rather than the deploy.
- * `instructions/citations.ts` calls this from a `session.started` resolver, so
- * the `TEMPER_API_URL` passed here is the running function's own environment.
+ * `instructions/citations.ts` calls this from a `defineDynamic` resolver, which
+ * eve runs before each model call, so the `TEMPER_API_URL` passed here is the
+ * running function's own environment.
  *
  * When the base URL is absent the agent still answers — it cites by title and
  * says a link isn't available, rather than emitting a broken or invented URL.

@@ -201,7 +201,7 @@ describe("no read of TEMPER_API_URL / TEMPER_MCP_URL bypasses the gate", () => {
    */
   const NO_CREDENTIAL = new Set([
     "instrumentation/otlp.ts: spanProcessors: otlpSpanProcessors({ mcpEndpoint: process.env.TEMPER_MCP_URL }),",
-    "instructions/citations.ts: markdown: citationLinkInstruction(process.env.TEMPER_API_URL),",
+    "instructions/citations.ts: defineInstructions({ content: citationLinkInstruction(process.env.TEMPER_API_URL) }),",
   ]);
   const GATED_FILES = ["connections/temper.ts", "lib/link.ts", "lib/mint.ts"];
 

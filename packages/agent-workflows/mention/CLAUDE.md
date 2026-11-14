@@ -70,7 +70,7 @@ too, so a successful turn mints twice — that is cheap on purpose: the server h
 **cached** access token without touching the refresh token whenever it outlives a 5-minute skew
 (`slack_grant_vault_service.rs`, `mint_access_token`), so the second mint is a row read, never a
 second spend of the grant. What the pre-flight buys is the distinct replies. If the first
-mint failure happened inside `getToken` it would be a **failed turn**, routed to the `turn.failed`
+mint failure happened inside `getToken` it would be a **failed turn**, routed to the `turn.settled`
 handler, which says one deliberately detail-free sentence — collapsing "you were never vaulted",
 "an admin hasn't approved you" and "the network hiccuped" into a single generic error, when only
 the last is worth retrying. Do not move the mint into `getToken` alone.
@@ -113,7 +113,7 @@ is discarded, never logged.
 broken-credential messages name the user's handle and their account state, which is nobody else's
 business. The
 dispatching arm sends no ephemeral of its own — the model's answer *is* the reply, delivered by
-the `message.completed` override, which is ephemeral for the stronger reason that it was produced
+the `content.completed` override, which is ephemeral for the stronger reason that it was produced
 under that human's full temper reach. In all of it: no task numbers, no dates, no internal plans
 in user-facing copy.
 
@@ -133,21 +133,30 @@ reach. It is public on purpose, because silence was the one outcome worth refusi
 wrong invariant is a maintenance hazard, because the next person greps for it, finds the one real
 call, and cannot tell a deliberate exception from a regression.)
 
-**Public sinks are not only `thread.post` — `thread.startTyping` is one too.** eve's
-`reasoning.appended` default pushes `firstNonEmptyLine(event.reasoningSoFar)` into the typing
-status, and its `actions.requested` default pushes `state.pendingToolCallMessage` (the model's own
-mid-turn narration) or the tool names. Both are overridden in `agent/lib/events.ts` with the
-constant `WORKING_STATUS`, and nothing writes `pendingToolCallMessage` any more — populating it
-was feeding an un-overridden public sink. eve 0.7x added three more such defaults —
-`reasoning.completed` (the finished reasoning) and `action.partial` / `action.result` (a tool
-call's input-derived label) — overridden the same way. Since eve 0.7x the overrides are a Slack
-**renderer** (`ephemeralRenderer`, passed as `slackChannel({ renderers })`), not an `events` map:
-each handler replaces the default by never calling `next`. The renderer also no-ops `received`
-(no `Thinking...` status while `onAppMention` decides) and returns no `taskCard` (eve would post a
-public task card), both to keep what 0.18 rendered. `turn.started` and `authorization.completed` are left as
-eve's defaults, verified content-free. `tests/events.test.ts` derives all of this from eve's real
-`defaultEvents` **at runtime**, so an eve upgrade that ADDS a default handler fails the test
-instead of silently installing a new sink.
+**Public sinks are not only `thread.post` — the thread status (`thread.startTyping`) is one too.**
+Since eve's v27 session events (adopted here at eve 0.91), eve's Slack defaults put model-derived
+text in the status from five handlers: `content.delta` and `content.completed` (the running and
+finished **reasoning**), `call.requested` (`state.pendingToolCallMessage` — the model's own mid-turn
+narration — or the call's label), and `call.progress` / `call.settled` (the call's label, which is
+built from its input). `agent/lib/events.ts` overrides each with the constant `WORKING_STATUS` or
+nothing, and nothing writes `pendingToolCallMessage` — populating it would feed an un-overridden
+public sink. The `thread.post` sinks are overridden too: the `reply` text part of
+`content.completed` (the answer), a failed `turn.settled` / `session.ended` (whose defaults quote the
+error), and a non-sign-in `interaction.opened` (eve's default posts approval/question cards). A
+`content.completed` text part in any phase but `reply` is narration and delivers nothing, the same
+fail-closed test eve's default applies.
+
+The overrides are a Slack **renderer** (`ephemeralRenderer`, passed as `slackChannel({ renderers })`):
+each handler replaces the default by never calling `next`. The one that calls it is a **sign-in**'s
+`interaction.opened`, whose context eve narrows to private delivery and whose default delivers the
+challenge ephemerally. The renderer also no-ops `received` (no `Thinking...` status while
+`onAppMention` decides) and returns no `taskCard` (eve would post a public task card), both to keep
+what 0.18 rendered. `turn.started`, `turn.paused`, `model.started`, `model.settled`,
+`response.admitted`, `response.settled` and `interaction.settled` are left as eve's defaults, each
+verified content-free (`model.started` only because no override writes `threadStatus` or task
+results — see `events.ts`). `tests/events.test.ts` derives all of this from eve's real
+`defaultEvents` and `defaultInteractionEvents` **at runtime**, so an eve upgrade that ADDS a default
+handler fails the test instead of silently installing a new sink.
 
 **DMs are explicitly refused.** `agent/channels/slack.ts` supplies `onDirectMessage: async () =>
 null`. This is load-bearing: eve resolves `onDirectMessage ?? onMessage ?? defaultOnMessage`, and the
@@ -171,7 +180,7 @@ inbound-identity pipe above.
 decorated `slug-<uuid>` `ref` verbatim (its `parseRef` keeps only the trailing UUID). `{BASE}` is the
 deployment's own site URL (temperkb.io for the community app, the customer's host when self-hosted),
 so it **cannot** be baked into the committed prompt. `agent/instructions/citations.ts` is a
-`defineDynamic` instructions resolver that binds `{BASE}` from `TEMPER_API_URL` on `session.started`
+`defineDynamic` instructions resolver that binds `{BASE}` from `TEMPER_API_URL` before each model call
 (pure shaping in `agent/lib/citation-link.ts`, unit-tested in `tests/citation-link.test.ts`).
 
 > **`agent/instructions/` is a DISCOVERY directory too**, the third after `channels/` and
@@ -180,7 +189,7 @@ so it **cannot** be baked into the committed prompt. `agent/instructions/citatio
 > by the dynamic line that binds it. Dynamic, not build-time `instructions.ts`: eve captures an
 > `instructions.ts` at `eve build` (where CI has no `TEMPER_API_URL`), whereas a `defineDynamic`
 > resolver reads the deployed function's own env, matching this agent's "read every deployment
-> variable at request time" rule. The env read is INSIDE the `session.started` handler, so `eve build`
+> variable at request time" rule. The env read is INSIDE the resolver function, so `eve build`
 > discovery does not require `TEMPER_API_URL` present. An unset base degrades to a link-less "cite by
 > title, never invent a URL" instruction rather than emitting a broken host.
 
@@ -223,15 +232,15 @@ value.
 
 **`getToken` fails closed.** Every `refused` arm throws `ConnectionAuthorizationFailedError`
 with `retryable: false` — **not** `ConnectionAuthorizationRequiredError`, which would tell eve to
-run an authorization flow and emit `authorization.required`, whose default handler posts a
-framework-owned **public** status line an override cannot reach (known constraint 1 below). There is
+run an authorization flow and open a sign-in (`interaction.opened`, kind `sign-in`), whose default
+handler posts a framework-owned **public** status line (known constraint 1 below). There is
 no interactive flow to run: re-linking and admin approval both happen out of band. In practice the
 pre-flight means this path only fires for a grant that stopped being mintable *between* the
 pre-flight and the tool call — it must still fail closed rather than call the MCP server with no
 credential. The thrown `reason` carries the refusal (`standing:denied`, not a flat `revoked`), so
 the distinction survives into the log even though the user-facing remedy is grouped.
 
-## eve inbound identity contract (verified against eve@0.18.1; re-verified against eve@0.73.0)
+## eve inbound identity contract (verified against eve@0.18.1; re-verified against eve@0.73.0 and eve@0.91.0)
 
 Verified by reading the installed package, not the docs:
 `node_modules/eve/dist/src/public/channels/slack/auth.js` (`buildSlackAuthContext`),
@@ -278,10 +287,12 @@ which is why parsing is never necessary.
   differ (Enterprise Grid, Slack Connect channels) a principal minted before the upgrade and one
   minted after would not match.
 - **`subject` is NEVER set** by this channel. Do not read it.
-- **THERE IS NO EMAIL.** Attributes the Slack channel sets are exactly: `author_type`,
-  `channel_id`, `thread_ts`, `user_id`, plus optional `user_name`, `full_name`, `team_id`.
-  Any temper account link must therefore key off the opaque `principalId` — an email-based
-  auto-link is not expressible with what arrives on the wire.
+- **DO NOT KEY ON EMAIL.** Attributes the Slack channel sets are exactly: `author_type`,
+  `channel_id`, `thread_ts`, `user_id`, plus optional `user_name`, `full_name`, `team_id`, and —
+  since eve 0.91 — `email`, set only when Slack's user lookup returns one (it needs the
+  `users:read.email` scope, which `slack-app-manifest.yml` does not request). It is a profile field
+  the workspace controls, not a verified identity, so any temper account link keys off the opaque
+  `principalId`. Nothing in this agent reads `email`; keep it that way.
 - **Reject non-humans.** `principalType !== "user"` must not dispatch; bots surface as `"service"`.
   The gate is written `=== "user"` (not `!== "service"`) so a principalType eve adds later is
   refused by default rather than admitted by accident.
@@ -299,14 +310,15 @@ which is why parsing is never necessary.
 
 ## Known constraints for later tasks
 
-1. **The `authorization.required` link challenge must be private.** An override of that event gets
-   `SlackAuthorizationEventContext` — only `postEphemeral`, `postDirectMessage`, and `state`. There
+1. **A sign-in challenge must be private.** A renderer's `interaction.opened` handler for a
+   `sign-in` gets `SlackAuthorizationEventContext` — only `postEphemeral`, `postDirectMessage`, and `state`. There
    is deliberately **no public `post`** and no raw `slack.request` escape hatch, because the
    sign-in challenge is a credential: anyone who completes it binds their identity to the session's
    connection. An override can change the words, not the audience. So T2's account-link challenge
    has to be ephemeral or DM. (`postDirectMessage` needs the `im:write` scope — already in the
    manifest.) eve's *default* handler additionally posts a public link-free status and edits it on
-   `authorization.completed`; that public post is framework-owned and not reachable from an override.
+   `interaction.settled`; that public post is framework-owned. (A handler that skips `next` would
+   suppress it, at the cost of delivering the challenge itself and losing the edit-in-place.)
 2. **ONE DEPLOYMENT SERVES ONE SLACK WORKSPACE.** This is a hard ceiling, not a convention, and it
    is the single most important fact on this page. Verified end-to-end in eve@0.18.1 +
    `@vercel/connect@0.2.2`:
