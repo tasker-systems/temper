@@ -34,6 +34,12 @@ tool call against a Temper server, which is authoritative — there is no local 
   assert at BOTH ends of a splice — discipline, not a lock. When only frontmatter changes, use
   `update_resource_meta`: it takes both tiers, each a per-key patch, so `"open_meta": {}` touches
   nothing.
+- **Two writers to one meta key overwrite each other unless the write says what it expects.**
+  `update_resource_meta` and `update_resource` take `expect`, e.g.
+  `{"open": {"claim_id": null}}` (a top-level `null` is "absent"). If any expectation fails, nothing
+  is written and the error's `data.precondition.failed` lists each key with its `current` value.
+  Guard on a value unique to you: a `current` equal to your own value means your earlier attempt
+  landed.
 - **A task's stage, mode and effort are `managed_meta` keys:** `temper-stage` (`backlog`,
   `in-progress`, `done`, `cancelled`; `list_resources`' `stage` filter takes the same values), `temper-mode` (`plan`: a decision, spec or findings, saved as
   a `research` or `decision` resource; `build`: code) and `temper-effort` (`small`, `medium`,

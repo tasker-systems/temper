@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::error_details::ErrorDetails;
+use crate::types::precondition::PreconditionFailure;
 
 /// What kind of diagnostic this is. Never `error` — errors are the
 /// [`ErrorPayload`] tier, not diagnostics on a
@@ -75,12 +76,35 @@ pub struct ErrorPayload {
     /// Optional next-step hint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
-    /// Structured detail, in the shape the HTTP door puts in `error.details`: the refusal list of
-    /// a plan the server would not run, each with its `reason` and `teaches`. Present only for a
-    /// refused plan; skipped when `None`, so other errors' payloads carry no `details` key.
+    /// Structured detail, present only for a refused plan and a failed conditional write; skipped
+    /// when `None`, so other errors' payloads carry no `details` key. See [`PayloadDetails`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     // `ErrorDetails` derives no `JsonSchema` and `ErrorPayload`'s schema is published nowhere; a
     // consumer of that schema must derive it for `ErrorDetails` before dropping this skip.
     #[cfg_attr(feature = "mcp", schemars(skip))]
-    pub details: Option<ErrorDetails>,
+    pub details: Option<PayloadDetails>,
+}
+
+/// What an [`ErrorPayload`]'s `details` carries.
+///
+/// Untagged, and unambiguous by required field: a refused plan's list requires `refusals`, a
+/// failed conditional write requires `failed`.
+///
+/// - **`Refusal`**: what the HTTP door puts in `error.details`, the refused plan's list, each
+///   entry with its `reason` and `teaches`.
+/// - **`Precondition`**: what the HTTP door puts in `error.precondition`, every failed expectation
+///   with the value there now (`{"failed": [{tier, key, expected, current}]}`). The CLI caller is
+///   the caller the server answered, and the server answers it only to a reader, so the values
+///   belong here; the `message` beside it names keys only.
+///
+/// Not a third [`ErrorDetails`] arm: that union is published in `openapi.json` and pinned, and
+/// this payload is the CLI's own.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "diagnostics.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(untagged)]
+pub enum PayloadDetails {
+    Refusal(ErrorDetails),
+    Precondition(PreconditionFailure),
 }

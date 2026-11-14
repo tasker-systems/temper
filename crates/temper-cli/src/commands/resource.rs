@@ -2225,6 +2225,8 @@ pub struct UpdateParams<'a> {
     pub format: crate::format::OutputFormat,
     /// Per-act correlation + authorship for the update act (from `--invocation`/`--confidence`/…).
     pub act: temper_core::types::ActInput,
+    /// Meta expectations (`--expect`/`--expect-absent`); `None` is an unconditional update.
+    pub expect: Option<temper_core::types::precondition::MetaExpect>,
 }
 
 /// Build a partial `ManagedMeta` from update CLI flags. Returns `None` if no
@@ -2672,7 +2674,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     // it server-side); type_to goes through MoveSpec and travels first-class on
     // the wire (type is no longer a managed_meta key).
     let cmd = UpdateResource {
-        expect: None,
+        expect: params.expect.clone(),
         resource: id,
         title: params.title.map(String::from),
         // CLI update has no --slug flag; the server derives the slug from an
@@ -2753,6 +2755,8 @@ pub struct MetaSetParams<'a> {
     pub r#ref: &'a str,
     pub managed: &'a str,
     pub open: &'a str,
+    /// Meta expectations (`--expect`/`--expect-absent`); `None` is an unconditional write.
+    pub expect: Option<temper_core::types::precondition::MetaExpect>,
     pub act: temper_core::types::ActInput,
     pub format: crate::format::OutputFormat,
 }
@@ -2781,7 +2785,7 @@ pub fn meta_set(params: MetaSetParams<'_>) -> Result<()> {
     }
 
     let payload = MetaUpdatePayload {
-        expect: None,
+        expect: params.expect,
         resource_id: uuid::Uuid::from(id).into(),
         managed_meta,
         open_meta,
@@ -3512,6 +3516,7 @@ mod build_helpers_tests {
     /// Tests override only the fields they exercise.
     fn empty_update_params(r#ref: &str) -> UpdateParams<'_> {
         UpdateParams {
+            expect: None,
             r#ref,
             type_to: None,
             context_to: None,

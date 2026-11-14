@@ -66,6 +66,8 @@ impl MetaExpect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "precondition.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub enum PreconditionTier {
     Open,
@@ -88,6 +90,8 @@ impl PreconditionTier {
 /// else is ever added: no actor, time, event, position, revision or count.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "precondition.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct FailedExpectation {
     pub tier: PreconditionTier,
@@ -104,6 +108,8 @@ pub struct FailedExpectation {
 /// `412 PRECONDITION_FAILED`, carried as `error.precondition`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "precondition.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct PreconditionFailure {
     pub failed: Vec<FailedExpectation>,

@@ -587,10 +587,3 @@ vercel rollback <deployment-url-or-id>   # a specific one
 `rollback` re-points the production alias with no rebuild. If the bad deploy also
 applied a schema change, roll that target's schema back per the runbook before/with
 the alias rollback.
-
-**Rolling back past conditional meta writes disarms them, silently.** A deployment from before
-`expect` existed on `PUT /api/resources/{id}/meta` and `PATCH /api/resources/{id}` does not know
-the field: it ignores it and applies the write unconditionally with a `200`, where the current
-server would have refused a stale write with `412 PRECONDITION_FAILED`. Nothing errors, so a
-client coordinating through guarded keys (a claim, a lease) loses its mutual exclusion without
-noticing. Roll back past it only knowing that, and tell those callers.

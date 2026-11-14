@@ -181,6 +181,24 @@ pub enum ClientError {
     #[error("{message}")]
     DataArtifactRefusal { message: String },
 
+    /// A conditional write whose expectations did not all hold (HTTP 412, code
+    /// [`temper_core::error::PRECONDITION_FAILED_CODE`]): nothing was applied. `failure` lists every
+    /// failed expectation with the value there now, which the server sends only to a caller who
+    /// can read the resource.
+    ///
+    /// **`Display` names the failed keys and never a value**, exactly as core's
+    /// [`TemperError::PreconditionFailed`](temper_core::error::TemperError::PreconditionFailed)
+    /// does: the sentence reaches logs (the retry loop's warning, `client_err_to_temper`'s
+    /// fallback), so values travel only in `failure`.
+    ///
+    /// Not retried: the server judged the guard and it failed, so the same request would fail
+    /// the same way. A `current` equal to the value this caller was writing means an earlier
+    /// attempt of its own landed (a lost answer, then a replay).
+    #[error("{}", .failure.message())]
+    PreconditionFailed {
+        failure: temper_core::types::precondition::PreconditionFailure,
+    },
+
     #[error("rate limited — retry after {retry_after:?}")]
     RateLimited { retry_after: Duration },
 

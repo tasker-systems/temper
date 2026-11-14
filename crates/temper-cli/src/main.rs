@@ -106,6 +106,12 @@ fn main() {
                         details.cli_command.as_deref(),
                     );
                 }
+                temper_cli::error::TemperError::PreconditionFailed(failure) => {
+                    temper_cli::output::error(format!(
+                        "temper: {}",
+                        temper_cli::error::render_precondition_failure(failure)
+                    ));
+                }
                 _ => {
                     temper_cli::output::error(format!("temper: {e}"));
                 }
@@ -335,6 +341,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     body,
                     sources,
                     content_block,
+                    expect,
                     act,
                 } => {
                     let params = temper_cli::commands::resource::UpdateParams {
@@ -365,6 +372,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         sources: &sources,
                         content_block,
                         format: output_format,
+                        expect: expect.into_meta_expect()?,
                         act: act.into_act_input()?,
                     };
                     temper_cli::commands::resource::update(&config, &params)
@@ -392,12 +400,14 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         r#ref,
                         managed,
                         open,
+                        expect,
                         act,
                     } => temper_cli::commands::resource::meta_set(
                         temper_cli::commands::resource::MetaSetParams {
                             r#ref: &r#ref,
                             managed: &managed,
                             open: &open,
+                            expect: expect.into_meta_expect()?,
                             act: act.into_act_input()?,
                             format: output_format,
                         },

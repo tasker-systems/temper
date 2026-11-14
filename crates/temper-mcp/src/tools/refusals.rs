@@ -5,9 +5,14 @@
 //! refusal at once, and `UNREADABLE_PLAN`, its bounded account of a body it could not read.
 //! temper-client types them as [`ClientError::PlanRefused`] and [`ClientError::UnreadablePlan`].
 //! Both tools render them here, so the two doors cannot disagree about what a refusal looks like.
+//!
+//! The meta writes (`update_resource_meta`, `update_resource`) render their conditional-write
+//! refusal here too, [`precondition_failed`], for the same reason: the agent receives the same
+//! typed object the HTTP door puts under `error`.
 
 use temper_client::error::ClientError;
-use temper_core::types::error_details::PlanRefusalDetails;
+use temper_core::types::error_details::{ErrorDetail, PlanRefusalDetails};
+use temper_core::types::precondition::PreconditionFailure;
 
 /// What the API refused: the noun the prose names, so an ask's caller is never told about a plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +103,40 @@ pub(crate) fn map_refusable_error(
     }
 }
 
+/// Render a conditional write's refusal: an expectation it carried did not hold, and nothing was
+/// written.
+///
+/// A caller error the agent acts on (re-read, then decide), so `invalid_params` and never
+/// `internal_error`. **Values travel only in `data`**, which is the HTTP door's `error` object
+/// itself ([`ErrorDetail`] with `code` `PRECONDITION_FAILED` and `precondition` set), so an agent
+/// branches on `data.code` and reads `data.precondition.failed[*].current` without parsing
+/// English. The message is [`PreconditionFailure::message`]: key names only, because a message is
+/// what a host logs.
+///
+/// The API logs the refusal (code and key names) at its own door; this hop adds no log line.
+pub(crate) fn precondition_failed(context: &str, failure: PreconditionFailure) -> rmcp::ErrorData {
+    let message = failure.message();
+    let detail = ErrorDetail {
+        code: temper_core::error::PRECONDITION_FAILED_CODE.to_string(),
+        message: message.clone(),
+        details: None,
+        precondition: Some(failure),
+    };
+    let data = serde_json::to_value(detail)
+        .inspect_err(|error| {
+            tracing::error!(context, %error, "precondition refusal did not serialize");
+        })
+        .ok();
+    rmcp::ErrorData::invalid_params(
+        format!(
+            "{context}: {message}; nothing was written. `data.precondition.failed` holds each \
+             failed key with what is there now (a `current` equal to the value you were writing \
+             means an earlier attempt of yours landed)"
+        ),
+        data,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +149,35 @@ mod tests {
             detail: "`limit` must be at least 1".to_string(),
             teaches: None,
         }
+    }
+
+    /// **A failed guard is a caller error whose `data` is the HTTP door's `error` object, and whose
+    /// message carries no value.** FAILS IF it is rendered as `internal_error`, `data` is dropped
+    /// or reshaped, or a value reaches the message.
+    #[test]
+    fn a_precondition_refusal_carries_the_http_error_object_as_data() {
+        use temper_core::types::precondition::{FailedExpectation, PreconditionTier};
+        let failure = PreconditionFailure {
+            failed: vec![FailedExpectation {
+                tier: PreconditionTier::Open,
+                key: Some("claim_id".into()),
+                expected: serde_json::Value::Null,
+                current: serde_json::json!("claim-of-someone-else"),
+            }],
+        };
+        let err = precondition_failed("update_resource_meta", failure.clone());
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("open.claim_id"), "{}", err.message);
+        assert!(
+            !err.message.contains("claim-of-someone-else"),
+            "{}",
+            err.message
+        );
+        let data = err.data.expect("the refusal rides data");
+        assert_eq!(data["code"], "PRECONDITION_FAILED");
+        assert!(data.get("details").is_none(), "{data}");
+        let back: ErrorDetail = serde_json::from_value(data).expect("typed");
+        assert_eq!(back.precondition, Some(failure));
     }
 
     /// **An ask's refusal and an unreadable ask name the ask, never a plan**, and the refusal

@@ -1,5 +1,6 @@
 pub use temper_core::error::{Result, TemperError};
 use temper_core::types::error_details::{ErrorDetails, PlanRefusalDetails};
+use temper_core::types::PayloadDetails;
 
 /// CLI-only error surface for commands whose failures don't belong in the
 /// shared [`TemperError`] vocabulary.
@@ -74,18 +75,48 @@ impl From<TemperError> for CliError {
 /// Result alias for CLI commands that can raise a [`CliError`].
 pub type CliResult<T> = std::result::Result<T, CliError>;
 
-/// The structured `details` a [`TemperError`] carries onto the payload, in the shape the HTTP door
-/// puts in `error.details`. Only a refused plan has any; every other error is `None` and its payload
-/// carries no `details` key.
-fn error_details(e: &TemperError) -> Option<ErrorDetails> {
+/// The structured `details` a [`TemperError`] carries onto the payload. A refused plan carries its
+/// list in the shape the HTTP door puts in `error.details`; a failed conditional write carries every
+/// failed expectation with its current value, in the shape the HTTP door puts in
+/// `error.precondition`. Every other error is `None` and its payload carries no `details` key.
+fn error_details(e: &TemperError) -> Option<PayloadDetails> {
     match e {
-        TemperError::PlanRefused { refusals, .. } => {
-            Some(ErrorDetails::PlanRefusals(PlanRefusalDetails {
+        TemperError::PlanRefused { refusals, .. } => Some(PayloadDetails::Refusal(
+            ErrorDetails::PlanRefusals(PlanRefusalDetails {
                 refusals: refusals.clone(),
-            }))
+            }),
+        )),
+        TemperError::PreconditionFailed(failure) => {
+            Some(PayloadDetails::Precondition(failure.clone()))
         }
         _ => None,
     }
+}
+
+/// The prose a human reads on stderr for a failed conditional write: the error's key-only sentence,
+/// then one line per failed expectation with what was expected and what is there now (`absent` for
+/// a top-level `null`). Values appear here because this is the caller the server answered, and the
+/// server sends them only to a reader; nothing here is logged.
+pub fn render_precondition_failure(
+    failure: &temper_core::types::precondition::PreconditionFailure,
+) -> String {
+    let shown = |v: &serde_json::Value| match v {
+        serde_json::Value::Null => "absent".to_string(),
+        other => other.to_string(),
+    };
+    let mut out = format!("{}; nothing was written", failure.message());
+    for f in &failure.failed {
+        let name = match &f.key {
+            Some(key) => format!("{}.{key}", f.tier.as_str()),
+            None => f.tier.as_str().to_string(),
+        };
+        out.push_str(&format!(
+            "\n  {name}: expected {}, now {}",
+            shown(&f.expected),
+            shown(&f.current)
+        ));
+    }
+    out
 }
 
 /// Render a [`TemperError`] as a JSON `ErrorPayload` string for stdout.
@@ -210,6 +241,74 @@ mod tests {
         let back: PlanRefusalDetails =
             serde_json::from_value(raw["details"].clone()).expect("the HTTP door's details type");
         assert_eq!(back.refusals, refusals);
+    }
+
+    fn a_precondition_failure() -> temper_core::types::precondition::PreconditionFailure {
+        use temper_core::types::precondition::{
+            FailedExpectation, PreconditionFailure, PreconditionTier,
+        };
+        PreconditionFailure {
+            failed: vec![
+                FailedExpectation {
+                    tier: PreconditionTier::Open,
+                    key: Some("claim_id".into()),
+                    expected: serde_json::Value::Null,
+                    current: serde_json::json!("claim-b"),
+                },
+                FailedExpectation {
+                    tier: PreconditionTier::Managed,
+                    key: Some("temper-stage".into()),
+                    expected: serde_json::json!("doing"),
+                    current: serde_json::Value::Null,
+                },
+            ],
+        }
+    }
+
+    /// **A failed conditional write's payload carries code `PRECONDITION_FAILED`, a key-only
+    /// message, and every failed entry with its current value in `details.failed`.** FAILS IF the
+    /// payload drops `details`, reshapes the entries, or the message carries a value.
+    #[test]
+    fn a_failed_guards_payload_carries_each_current_value_in_details() {
+        let failure = a_precondition_failure();
+        let err = TemperError::PreconditionFailed(failure.clone());
+        for rendered in [
+            render_error_payload(&err, None),
+            render_cli_error_payload(&CliError::Temper(TemperError::PreconditionFailed(
+                failure.clone(),
+            ))),
+        ] {
+            let raw: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON");
+            assert_eq!(raw["code"], "PRECONDITION_FAILED", "{rendered}");
+            let message = raw["message"].as_str().expect("a message");
+            assert_eq!(
+                message,
+                "2 preconditions failed: open.claim_id, managed.temper-stage"
+            );
+            assert!(!message.contains("claim-b") && !message.contains("doing"));
+            assert_eq!(
+                raw["details"],
+                serde_json::json!({"failed": [
+                    {"tier": "open", "key": "claim_id", "expected": null, "current": "claim-b"},
+                    {"tier": "managed", "key": "temper-stage", "expected": "doing", "current": null},
+                ]}),
+                "{rendered}"
+            );
+            let back: temper_core::types::precondition::PreconditionFailure =
+                serde_json::from_value(raw["details"].clone()).expect("the HTTP door's type");
+            assert_eq!(back, failure);
+        }
+    }
+
+    /// The stderr prose names each failed key with what was expected and what is there now.
+    #[test]
+    fn a_failed_guards_prose_shows_expected_and_current() {
+        assert_eq!(
+            render_precondition_failure(&a_precondition_failure()),
+            "2 preconditions failed: open.claim_id, managed.temper-stage; nothing was written\n  \
+             open.claim_id: expected absent, now \"claim-b\"\n  \
+             managed.temper-stage: expected \"doing\", now absent"
+        );
     }
 
     /// Every other error's payload carries no `details` key at all.

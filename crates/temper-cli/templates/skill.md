@@ -33,6 +33,12 @@ refused, so commands take `--context @me/<ctx>`.
 - **Implicit stdin on `update` is a whole-body rewrite.** Never call `update` inside a
   `while read … < file` loop. A body write replaces everything: Re-read immediately before writing,
   assert at BOTH ends of a splice, prefer the narrowest write — discipline, not a lock.
+- **Two writers to one meta key overwrite each other unless the write says what it expects.**
+  `resource meta set` and `resource update` take `--expect '{"open":{"claim_id":null}}'` (a
+  top-level `null` is "absent") and `--expect-absent open:<key>`: if any expectation fails, nothing
+  is written, the command exits non-zero, and `--format json` prints code `PRECONDITION_FAILED`
+  with each failed key's current value in `details.failed`. Guard on a value unique to you: a
+  `current` equal to your own value means your earlier attempt landed.
 - **Read only what you need:** `show <ref> --without body`, `list … --with open-meta`, `--fields`.
 
 ## Outcome discipline — every task, goal or not

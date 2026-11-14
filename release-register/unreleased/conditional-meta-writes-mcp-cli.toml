@@ -1,0 +1,43 @@
+title    = "MCP update_resource_meta and update_resource, and the CLI's resource meta set and resource update, carry a meta expect; a failed guard is a typed refusal on every door, and update_resource_meta also returns the view its write left"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+What changed: the meta preconditions PUT /meta and PATCH already judge now reach them from every
+first-party door.
+
+- temper-client: update_meta and update forward the payload's expect (unchanged types). A 412 under
+  code PRECONDITION_FAILED maps to the new ClientError::PreconditionFailed { failure }, keyed on the
+  code; a 412 without the code, or whose error.precondition does not parse or lists nothing, stays
+  Server { status: 412 } naming the contract disagreement. Its Display is the key-only sentence
+  ("1 precondition failed: open.claim_id"), never a value. It is never retried.
+- MCP: update_resource_meta and update_resource gain an optional `expect` input
+  ({open?, managed?}, the HTTP type). A failed guard is an invalid_params tool error, never
+  internal_error, whose message names keys only and whose data is the HTTP door's error object:
+  {code: "PRECONDITION_FAILED", message, precondition: {failed: [{tier, key, expected, current}]}}.
+  update_resource_meta answers {updated, id, view}, where view is the PUT /meta answer itself (was
+  {updated, id}).
+- CLI: resource meta set and resource update gain --expect '<json>' (the same object) and the
+  repeatable --expect-absent open:<key> | managed:<key> (the key expected null). A malformed flag,
+  an unknown member, or a key expected both absent and present is refused client-side as
+  bad-request. A failed guard exits 1; with --format json, stdout is an ErrorPayload whose code is
+  "PRECONDITION_FAILED", whose message names keys only, and whose details is
+  {failed: [{tier, key, expected, current}]} (the HTTP door's error.precondition). Without it,
+  stderr prints the sentence and one line per key: "open.claim_id: expected absent, now "x"".
+  ErrorPayload.details is now an untagged union of the refused plan's list and that payload
+  (diagnostics.ts gains PayloadDetails; precondition.ts is new).
+
+Who observes it: only callers that pass expect or the new flags. Without them every tool and command
+behaves as before, except update_resource_meta's answer, which gains `view`.
+
+Why additive: one optional input per tool, two optional flags per command, one new response member,
+one new client variant (ClientError is non_exhaustive), one new CLI error code. Why behavioral: a
+guarded write may now be refused where the same write without the guard lands.
+
+Exit code and stdout code: exit 1, code PRECONDITION_FAILED.
+
+Witnesses: tests/e2e/tests/meta_precondition_doors_test.rs (both MCP tools and both CLI commands
+end to end, the two-claimant race through MCP, and a relay retry after commit meeting its own
+value); the client, MCP and CLI unit tests beside each change. Release relevance: signal-only.
+'''

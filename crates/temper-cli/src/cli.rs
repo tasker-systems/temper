@@ -165,6 +165,79 @@ pub struct ActArgs {
     pub model: Option<String>,
 }
 
+/// Meta expectations for a conditional write: `resource meta set` and `resource update`.
+///
+/// The write lands only if every expectation holds now, judged by the server under the resource's
+/// writer lock; otherwise nothing is written and the command fails with `PRECONDITION_FAILED`.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct ExpectArgs {
+    /// Write only if these meta values hold now, as a JSON object:
+    /// '{"open":{"KEY":VALUE},"managed":{"temper-KEY":VALUE}}'. A top-level null means
+    /// absent, and a key need not be one this write sets. If any does not hold, nothing is written,
+    /// the exit code is 1, and `--format json` prints code PRECONDITION_FAILED with each failed key
+    /// and its current value in `details.failed`. Guard on a value unique to you: a current value
+    /// equal to your own means an earlier attempt of yours landed.
+    #[arg(long, value_name = "JSON")]
+    pub expect: Option<String>,
+    /// Write only if this key is absent now: `open:<key>` or `managed:<key>`. Repeatable, and
+    /// combined with --expect; the same as naming the key with null there.
+    #[arg(long, value_name = "TIER:KEY")]
+    pub expect_absent: Vec<String>,
+}
+
+impl ExpectArgs {
+    /// The flags as the wire's `expect`, or `None` when neither was given (an unconditional write,
+    /// exactly as before). Only the flags' own shape is checked here; which keys a tier may name is
+    /// the server's rule, refused there with a `400`.
+    pub fn into_meta_expect(
+        self,
+    ) -> Result<Option<temper_core::types::precondition::MetaExpect>, temper_core::error::TemperError>
+    {
+        use temper_core::error::TemperError;
+        if self.expect.is_none() && self.expect_absent.is_empty() {
+            return Ok(None);
+        }
+        let mut expect: temper_core::types::precondition::MetaExpect = match self.expect.as_deref()
+        {
+            Some(raw) => serde_json::from_str(raw).map_err(|e| {
+                TemperError::BadRequest(format!(
+                    "--expect is not a meta expectation (an object with optional `open` and \
+                     `managed` objects; any other member is refused): {e}"
+                ))
+            })?,
+            None => Default::default(),
+        };
+        for flag in &self.expect_absent {
+            let (tier, key) = match flag.split_once(':') {
+                Some(("open", key)) => (&mut expect.open, key),
+                Some(("managed", key)) => (&mut expect.managed, key),
+                _ => {
+                    return Err(TemperError::BadRequest(format!(
+                        "--expect-absent {flag:?} is not `open:<key>` or `managed:<key>`"
+                    )))
+                }
+            };
+            if key.is_empty() {
+                return Err(TemperError::BadRequest(format!(
+                    "--expect-absent {flag:?} names no key"
+                )));
+            }
+            match tier.get(key) {
+                Some(value) if !value.is_null() => {
+                    return Err(TemperError::BadRequest(format!(
+                        "--expect-absent {flag:?} contradicts --expect, which expects a value \
+                         for that key"
+                    )))
+                }
+                _ => {
+                    tier.insert(key.to_string(), serde_json::Value::Null);
+                }
+            }
+        }
+        Ok(Some(expect))
+    }
+}
+
 impl ActArgs {
     /// Parse the flags into the shared [`temper_core::types::ActInput`] wire shape. The invocation
     /// ref resolves trailing-UUID-only (like every other ref). The
@@ -975,6 +1048,9 @@ pub enum ResourceAction {
         /// that has more than one block. The block must belong to the resource and be non-folded.
         #[arg(long)]
         content_block: Option<uuid::Uuid>,
+        /// Meta expectations that make this update conditional.
+        #[command(flatten)]
+        expect: ExpectArgs,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,
@@ -1137,6 +1213,11 @@ pub enum ResourceAction {
 }
 
 #[derive(Subcommand, Debug)]
+// The same reasoning as `Commands`: `Set` now flattens two arg groups beside `Get`'s one ref.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "clap arg-definition enum, parsed once"
+)]
 pub enum ResourceMetaAction {
     /// Read a resource's frontmatter — both tiers, body untouched.
     ///
@@ -1169,6 +1250,9 @@ pub enum ResourceMetaAction {
         /// as absent.
         #[arg(long, required = true)]
         open: String,
+        /// Meta expectations that make this write conditional.
+        #[command(flatten)]
+        expect: ExpectArgs,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,
@@ -4489,5 +4573,78 @@ mod data_artifact_ask_tests {
             }
             _ => panic!("expected data-artifact ask"),
         }
+    }
+}
+
+#[cfg(test)]
+mod expect_args_tests {
+    use super::ExpectArgs;
+    use serde_json::{json, Value};
+    use temper_core::error::TemperError;
+
+    fn args(expect: Option<&str>, absent: &[&str]) -> ExpectArgs {
+        ExpectArgs {
+            expect: expect.map(String::from),
+            expect_absent: absent.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn refused(a: ExpectArgs) -> String {
+        match a.into_meta_expect() {
+            Err(TemperError::BadRequest(m)) => m,
+            other => panic!("expected a bad request, got {other:?}"),
+        }
+    }
+
+    /// No flag is no expectation: the write stays unconditional, exactly as before.
+    #[test]
+    fn no_flag_is_no_expectation() {
+        assert_eq!(args(None, &[]).into_meta_expect().unwrap(), None);
+    }
+
+    /// `--expect` and `--expect-absent` combine into one expectation, each absent key as `null`.
+    /// FAILS IF either flag is dropped or an absent key lands in the wrong tier.
+    #[test]
+    fn the_two_flags_combine_into_one_expectation() {
+        let got = args(
+            Some(r#"{"open":{"owner":"me"},"managed":{"temper-stage":"doing"}}"#),
+            &["open:claim_id", "managed:temper-branch"],
+        )
+        .into_meta_expect()
+        .unwrap()
+        .expect("an expectation");
+        assert_eq!(got.open.get("owner"), Some(&json!("me")));
+        assert_eq!(got.open.get("claim_id"), Some(&Value::Null));
+        assert_eq!(got.managed.get("temper-stage"), Some(&json!("doing")));
+        assert_eq!(got.managed.get("temper-branch"), Some(&Value::Null));
+
+        let only_absent = args(None, &["open:claim_id"])
+            .into_meta_expect()
+            .unwrap()
+            .expect("an expectation");
+        assert_eq!(only_absent.open.len(), 1);
+        assert!(only_absent.managed.is_empty());
+    }
+
+    /// The flags' own shape is checked here: an unknown member (never silently dropped), bad
+    /// JSON, a malformed or keyless `--expect-absent`, and a key expected both present and absent.
+    #[test]
+    fn a_malformed_flag_is_refused_never_dropped() {
+        assert!(refused(args(Some(r#"{"opne":{"k":1}}"#), &[])).contains("--expect"));
+        assert!(refused(args(Some("not json"), &[])).contains("--expect"));
+        assert!(refused(args(None, &["claim_id"])).contains("open:<key>"));
+        assert!(refused(args(None, &["body:x"])).contains("open:<key>"));
+        assert!(refused(args(None, &["open:"])).contains("names no key"));
+        assert!(refused(args(
+            Some(r#"{"open":{"claim_id":"me"}}"#),
+            &["open:claim_id"]
+        ))
+        .contains("contradicts"));
+        // Naming it absent twice is not a contradiction.
+        assert!(
+            args(Some(r#"{"open":{"claim_id":null}}"#), &["open:claim_id"])
+                .into_meta_expect()
+                .is_ok()
+        );
     }
 }

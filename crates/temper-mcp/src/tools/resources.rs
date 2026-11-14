@@ -300,6 +300,17 @@ pub struct UpdateResourceInput {
     /// you mean to state the list in full, silent data loss when you meant to add one.
     #[serde(default)]
     pub open_meta_add: Option<serde_json::Value>,
+    /// Optional per-key **expected meta values**: the write lands only if every one holds now,
+    /// judged under the resource's writer lock in the write's own transaction. Shape:
+    /// `{"open": {"<key>": <value>}, "managed": {"temper-<key>": <value>}}`; a top-level `null`
+    /// means "absent". A key need not be one this call writes. If any does not hold, nothing is
+    /// written and the tool errors with `data.code` `PRECONDITION_FAILED` and
+    /// `data.precondition.failed` listing each key with what is there now. Make guarded values
+    /// unique to you (a claim id): a refusal whose `current` is your own value means an earlier
+    /// attempt of yours landed. Not on `facet`, `doc_type`, or identity keys; a key may not be
+    /// both guarded here and added to in `open_meta_add`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<temper_core::types::precondition::MetaExpect>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
     /// keys; all optional. `confidence` required when any other authorship field is supplied.
     #[serde(flatten)]
@@ -333,6 +344,17 @@ pub struct UpdateResourceMetaInput {
     /// `descriptor`, `date`, …) are advertised for shape/ranking but not required.
     #[schemars(schema_with = "open_meta_input_schema")]
     pub open_meta: serde_json::Value,
+    /// Optional per-key **expected meta values**: the write lands only if every one holds now,
+    /// judged under the resource's writer lock in the write's own transaction. Shape:
+    /// `{"open": {"<key>": <value>}, "managed": {"temper-<key>": <value>}}`; a top-level `null`
+    /// means "absent". A key need not be one this call writes. If any does not hold, nothing is
+    /// written and the tool errors with `data.code` `PRECONDITION_FAILED` and
+    /// `data.precondition.failed` listing each key with what is there now. Make guarded values
+    /// unique to you (a claim id): a refusal whose `current` is your own value means an earlier
+    /// attempt of yours landed. Not on `facet`, `doc_type`, or identity keys; a key may not be
+    /// both guarded here and added to in `open_meta_add`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<temper_core::types::precondition::MetaExpect>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
     /// keys; all optional. `confidence` required when any other authorship field is supplied.
     #[serde(flatten)]
@@ -381,6 +403,9 @@ pub struct DeleteResourceResponse {
 pub struct UpdateResourceMetaResponse {
     pub updated: bool,
     pub id: Uuid,
+    /// The resource as the write left it, both meta tiers filled: the `PUT /meta` answer itself,
+    /// in the shape `GET /api/resources/{id}/meta` answers.
+    pub view: ResourceView,
 }
 
 /// MCP's `list_resources` envelope — the paging state a caller needs to know whether it is looking
@@ -1072,7 +1097,7 @@ pub async fn update_resource(
     };
 
     let request = temper_workflow::types::resource::ResourceUpdateRequest {
-        expect: None,
+        expect: input.expect,
         title: input.title.clone(),
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
@@ -1110,6 +1135,9 @@ pub async fn update_resource(
             // server fault — the row persists as history, the address is not writable.
             ClientError::Gone { message } => rmcp::ErrorData::invalid_params(message, None),
             ClientError::ResourceErased { id } => erased_error(id),
+            ClientError::PreconditionFailed { failure } => {
+                super::refusals::precondition_failed("update_resource", failure)
+            }
             ClientError::Server {
                 status: 400,
                 message,
@@ -1199,7 +1227,7 @@ pub async fn update_resource_meta(
     // the id from the path and the backend dropped caller-supplied hashes (recomputed
     // server-side, Phase 5) — so they carry named placeholders, not claims.
     let payload = temper_core::types::managed_meta::MetaUpdatePayload {
-        expect: None,
+        expect: input.expect,
         resource_id: ResourceId::from(input.id),
         managed_meta: input.managed_meta,
         open_meta: input.open_meta,
@@ -1208,7 +1236,7 @@ pub async fn update_resource_meta(
         act: input.act,
     };
 
-    client
+    let view = client
         .resources()
         .update_meta(input.id, &payload)
         .await
@@ -1224,6 +1252,9 @@ pub async fn update_resource_meta(
                 rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
             }
             ClientError::ResourceErased { id } => erased_error(id),
+            ClientError::PreconditionFailed { failure } => {
+                super::refusals::precondition_failed("update_resource_meta", failure)
+            }
             ClientError::Server {
                 status: 400,
                 message,
@@ -1234,9 +1265,12 @@ pub async fn update_resource_meta(
             ),
         })?;
 
+    // The write's own answer, never a second read: a re-read could show a later writer's
+    // value, and a claimant reads this view to see what its write left.
     let response = UpdateResourceMetaResponse {
         updated: true,
         id: input.id,
+        view,
     };
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&response)),

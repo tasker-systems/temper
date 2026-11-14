@@ -104,6 +104,11 @@ impl<'a> ResourceClient<'a> {
     }
 
     /// Update an existing resource.
+    ///
+    /// A `request.expect` makes the update conditional on per-key meta values: if any does not
+    /// hold, nothing is applied and the answer is
+    /// [`ClientError::PreconditionFailed`], carrying
+    /// each failed key and what is there now.
     pub async fn update(&self, id: Uuid, request: &ResourceUpdateRequest) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let op = &ops::UPDATE_RESOURCE;
@@ -391,6 +396,10 @@ impl<'a> ResourceClient<'a> {
     /// The server reconciles frontmatter-provenance edges from the new
     /// open_meta on success; errors during reconciliation are logged
     /// server-side and do not fail this call.
+    ///
+    /// A `payload.expect` makes the write conditional on per-key meta values: if any does not
+    /// hold, nothing is written and the answer is
+    /// [`ClientError::PreconditionFailed`].
     pub async fn update_meta(&self, id: Uuid, payload: &MetaUpdatePayload) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let op = &ops::UPDATE_META;
