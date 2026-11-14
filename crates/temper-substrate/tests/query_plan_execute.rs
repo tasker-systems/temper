@@ -91,6 +91,7 @@ async fn mk(
 fn two_stage_find(query: &str) -> ValidatedComposition {
     let stage = |name: &str, input: Option<StageInput>| {
         StageNode::Act(ActInvocation {
+            order: None,
             name: StageName::parse(name).unwrap(),
             act: ActName::FindExact,
             intention: Some(Intention {
@@ -273,6 +274,7 @@ fn one_find_exact(query: &str, bound: Option<Vec<Uuid>>) -> ValidatedComposition
             }],
         },
         stages: vec![StageNode::Act(ActInvocation {
+            order: None,
             name,
             act: ActName::FindExact,
             intention: Some(Intention {
@@ -311,6 +313,7 @@ fn find_exact_paged(query: &str, terms: Vec<(BoundTerm, i64)>) -> ValidatedCompo
             }],
         },
         stages: vec![StageNode::Act(ActInvocation {
+            order: None,
             name,
             act: ActName::FindExact,
             intention: Some(Intention {
@@ -558,6 +561,7 @@ async fn a_stage_named_after_a_reserved_word_still_compiles_to_valid_sql(pool: s
         let down = StageName::parse("downstream").unwrap();
         let stage = |n: &StageName, input: Option<StageInput>| {
             StageNode::Act(ActInvocation {
+                order: None,
                 name: n.clone(),
                 act: ActName::FindExact,
                 intention: Some(Intention {
@@ -657,6 +661,7 @@ async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set
 
     let find = |n: &StageName, input: Option<StageInput>| {
         StageNode::Act(ActInvocation {
+            order: None,
             name: n.clone(),
             act: ActName::FindExact,
             intention: Some(Intention {
@@ -764,6 +769,7 @@ async fn difference_subtracts_and_swapping_the_arms_changes_the_answer(pool: sql
 
     let find = |n: &StageName, input: Option<StageInput>| {
         StageNode::Act(ActInvocation {
+            order: None,
             name: n.clone(),
             act: ActName::FindExact,
             intention: Some(Intention {
@@ -857,6 +863,7 @@ fn wide_then_narrowed(query: &str, bind_to_wide: bool) -> ValidatedComposition {
     let mut stages = Vec::new();
     if bind_to_wide {
         stages.push(StageNode::Act(ActInvocation {
+            order: None,
             name: wide.clone(),
             act: ActName::FindAboutAnywhere,
             // No vector, deliberately — the caller of this helper asserts the wide stage refuses
@@ -874,6 +881,7 @@ fn wide_then_narrowed(query: &str, bind_to_wide: bool) -> ValidatedComposition {
         }));
     }
     stages.push(StageNode::Act(ActInvocation {
+        order: None,
         name: narrowed.clone(),
         act: ActName::FindExact,
         intention: Some(Intention {
@@ -1012,6 +1020,7 @@ fn one_find_about_anywhere(
             }],
         },
         stages: vec![StageNode::Act(ActInvocation {
+            order: None,
             name,
             act: ActName::FindAboutAnywhere,
             intention: Some(Intention {
@@ -1273,6 +1282,7 @@ fn walk_plan(seeds: Vec<Uuid>, bound: Option<Vec<Uuid>>) -> ValidatedComposition
             }],
         },
         stages: vec![StageNode::Act(ActInvocation {
+            order: None,
             name: StageName::parse("near").unwrap(),
             act: ActName::FollowFrom,
             intention: None,
@@ -1317,6 +1327,7 @@ fn walk_plan_paged(seeds: Vec<Uuid>, terms: Vec<(BoundTerm, i64)>) -> ValidatedC
             }],
         },
         stages: vec![StageNode::Act(ActInvocation {
+            order: None,
             name: StageName::parse("near").unwrap(),
             act: ActName::FollowFrom,
             intention: None,

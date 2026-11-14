@@ -135,6 +135,7 @@ fn one_find(
             }],
         },
         stages: vec![StageNode::Act(ActInvocation {
+            order: None,
             name,
             act: ActName::FindExact,
             intention: Some(Intention {
@@ -172,6 +173,7 @@ fn selection_then_find(doc_type: &str, query: &str) -> ValidatedComposition {
         },
         stages: vec![
             StageNode::Act(ActInvocation {
+                order: None,
                 name: sel.clone(),
                 act: ActName::FindResourcesWith,
                 // No intention: a pure selection asks the corpus nothing.
@@ -187,6 +189,7 @@ fn selection_then_find(doc_type: &str, query: &str) -> ValidatedComposition {
                 artifact_filter: vec![],
             }),
             StageNode::Act(ActInvocation {
+                order: None,
                 name: find,
                 act: ActName::FindExact,
                 intention: Some(Intention {
@@ -221,6 +224,7 @@ fn selection_owned_by(owner: &str) -> ValidatedComposition {
         },
         stages: vec![
             StageNode::Act(ActInvocation {
+                order: None,
                 name: sel.clone(),
                 act: ActName::FindResourcesWith,
                 intention: None,
@@ -235,6 +239,7 @@ fn selection_owned_by(owner: &str) -> ValidatedComposition {
                 artifact_filter: vec![],
             }),
             StageNode::Act(ActInvocation {
+                order: None,
                 name: find,
                 act: ActName::FindExact,
                 intention: Some(Intention {
@@ -602,6 +607,7 @@ fn a_narrowing_this_door_cannot_apply_is_refused_rather_than_dropped() {
             }],
         },
         stages: vec![StageNode::Act(ActInvocation {
+            order: None,
             name,
             act: ActName::FindExact,
             intention: Some(Intention {
@@ -670,6 +676,7 @@ fn walk_paged(seeds: Vec<Uuid>, terms: Vec<(BoundTerm, i64)>) -> ValidatedCompos
             }],
         },
         stages: vec![StageNode::Act(ActInvocation {
+            order: None,
             name,
             // A walk asks the corpus nothing, so it carries no intention.
             act: ActName::FollowFrom,
@@ -808,6 +815,7 @@ async fn open_meta_reaches_only_the_arm_that_asked_for_it(pool: PgPool) {
     let silent = StageName::parse("silent").unwrap();
     let stage = |n: &StageName| {
         StageNode::Act(ActInvocation {
+            order: None,
             name: n.clone(),
             act: ActName::FindExact,
             intention: Some(Intention {
@@ -879,6 +887,7 @@ mod server_side_embedding {
 
     fn find_about(stage: &str, query: &str) -> StageNode {
         StageNode::Act(ActInvocation {
+            order: None,
             name: StageName::parse(stage).unwrap(),
             act: ActName::FindAboutAnywhere,
             // **No embedding.** This is the ruby gem / TypeScript package / MCP caller — the whole
@@ -1214,6 +1223,7 @@ async fn an_intermediate_survey_stage_discloses_the_regions_it_matched(pool: PgP
             },
             stages: vec![
                 StageNode::Act(ActInvocation {
+                    order: None,
                     name: StageName::parse("mid").unwrap(),
                     act: ActName::Survey,
                     intention: Some(Intention {
@@ -1228,6 +1238,7 @@ async fn an_intermediate_survey_stage_discloses_the_regions_it_matched(pool: PgP
                     artifact_filter: vec![],
                 }),
                 StageNode::Act(ActInvocation {
+                    order: None,
                     name: StageName::parse("hits").unwrap(),
                     act: ActName::FindExact,
                     intention: Some(Intention {
@@ -1273,4 +1284,367 @@ async fn an_intermediate_survey_stage_discloses_the_regions_it_matched(pool: PgP
         "the disclosure carries the score the stage matched at: {}",
         disclosure.region_score
     );
+}
+
+// ── list-resources-with ─────────────────────────────────────────────────────────────────────────
+
+mod list_resources_with {
+    use super::*;
+    use serde_json::{json, Value};
+    use temper_core::types::query::filter::{PropertyOp, PropertyPredicate};
+    use temper_core::types::query::{QueryResponse, StageResult};
+    use temper_core::types::resource::SortOrder;
+    use temper_substrate::events::EventContext;
+
+    /// A `task` homed in `home` carrying `properties`, its embedding deferred so no model is read.
+    async fn task(
+        pool: &PgPool,
+        home: ContextId,
+        owner: ProfileId,
+        emitter: EntityId,
+        title: &str,
+        properties: &[(String, Value)],
+    ) -> Uuid {
+        let origin = format!("test://list/{title}");
+        writes::create_resource_deferred_with(
+            pool,
+            writes::CreateParams {
+                idempotency_key: None,
+                sources: vec![],
+                title,
+                origin_uri: &origin,
+                body: "fixture body",
+                doc_type: "task",
+                home: AnchorRef::context(home),
+                owner,
+                originator: owner,
+                emitter,
+                properties,
+                chunks: None,
+            },
+            EventContext::default(),
+        )
+        .await
+        .unwrap()
+        .uuid()
+    }
+
+    async fn ready(
+        pool: &PgPool,
+        home: ContextId,
+        owner: ProfileId,
+        emitter: EntityId,
+        n: usize,
+    ) -> Vec<Uuid> {
+        let mut out = Vec::new();
+        for i in 0..n {
+            out.push(
+                task(
+                    pool,
+                    home,
+                    owner,
+                    emitter,
+                    &format!("ready-{i}"),
+                    &[("state".to_string(), json!("ready"))],
+                )
+                .await,
+            );
+        }
+        out
+    }
+
+    fn ready_filter() -> ResourceFilter {
+        ResourceFilter {
+            properties: vec![PropertyPredicate {
+                key: "state".to_string(),
+                op: PropertyOp::Contains {
+                    values: vec![json!("ready")],
+                },
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// One returned list stage named `rows`, anchored to `home`.
+    fn list(
+        home: ContextId,
+        filter: ResourceFilter,
+        terms: &[(BoundTerm, i64)],
+        order: Option<SortOrder>,
+        with: Vec<ResourceSection>,
+    ) -> ValidatedComposition {
+        let rows = StageName::parse("rows").unwrap();
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: rows.clone(),
+                    with,
+                }],
+            },
+            stages: vec![StageNode::Act(ActInvocation {
+                name: rows,
+                act: ActName::ListResourcesWith,
+                intention: None,
+                inputs: vec![StageInput::Caller {
+                    relation: StageRelation::Bound,
+                    ids: IdSet {
+                        kind: IdKind::Context,
+                        provenance: None,
+                        ids: vec![home.uuid()],
+                    },
+                }],
+                terms: terms.iter().cloned().collect(),
+                order,
+                resource_filter: Some(filter),
+                edge_filter: None,
+                properties: vec![],
+                artifact_filter: vec![],
+            })],
+        };
+        validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
+    }
+
+    fn rows(r: &QueryResponse) -> &StageResult {
+        &r.returned[&StageName::parse("rows").unwrap()]
+    }
+
+    fn ids(r: &QueryResponse) -> Vec<Uuid> {
+        match &rows(r).produced {
+            StageOutput::Resources { hits } => hits.iter().map(|h| h.resource.id.uuid()).collect(),
+            other => panic!("expected resources, got {other:?}"),
+        }
+    }
+
+    /// The ids in `created` order (`desc` newest first), ties by id ascending — read from the
+    /// table, never from the statement under test.
+    async fn by_created(pool: &PgPool, ids: &[Uuid], order: SortOrder) -> Vec<Uuid> {
+        let mut rows: Vec<(Uuid, chrono::DateTime<chrono::Utc>)> =
+            sqlx::query_as("SELECT id, created FROM kb_resources WHERE id = ANY($1)")
+                .bind(ids.to_vec())
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        rows.sort_by(|a, b| match order {
+            SortOrder::Desc => b.1.cmp(&a.1).then(a.0.cmp(&b.0)),
+            SortOrder::Asc => a.1.cmp(&b.1).then(a.0.cmp(&b.0)),
+        });
+        rows.into_iter().map(|(id, _)| id).collect()
+    }
+
+    /// **End to end**: the rows come back hydrated, scored `created_epoch`, with the act's
+    /// `orders_by` echoed; `open_meta` only when `with` asks for it; `extent: partial` on a full
+    /// page with more behind it.
+    #[sqlx::test(migrator = "temper_services::MIGRATOR")]
+    async fn a_list_stage_returns_its_rows_newest_first_with_their_open_meta_on_request(
+        pool: PgPool,
+    ) {
+        bootseed::seed_system(&pool).await.unwrap();
+        let (owner, emitter) = system_actor(&pool).await;
+        let home = ctx(&pool, owner, "listing").await;
+        let made = ready(&pool, home, owner, emitter, 3).await;
+        task(
+            &pool,
+            home,
+            owner,
+            emitter,
+            "done",
+            &[("state".to_string(), json!("done"))],
+        )
+        .await;
+
+        let r = run_composition(&pool, owner, &list(home, ready_filter(), &[], None, vec![]))
+            .await
+            .expect("runs");
+        let stage = rows(&r);
+        assert_eq!(stage.disposition, StageDisposition::Answered);
+        assert_eq!(
+            stage.orders_by.as_ref().map(|q| q.field.as_str()),
+            Some("created_epoch")
+        );
+        assert_eq!(ids(&r), by_created(&pool, &made, SortOrder::Desc).await);
+        assert_eq!(stage.extent, Extent::Complete, "every match is on the page");
+        match &stage.produced {
+            StageOutput::Resources { hits } => {
+                for h in hits {
+                    assert_eq!(h.scoring.score_kind.as_str(), "created_epoch");
+                    assert_eq!(h.scoring.score_present, Some(true));
+                    assert_eq!(h.resource.open_meta, None, "not requested is absent");
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let with = run_composition(
+            &pool,
+            owner,
+            &list(
+                home,
+                ready_filter(),
+                &[(BoundTerm::Limit, 2)],
+                None,
+                vec![ResourceSection::OpenMeta],
+            ),
+        )
+        .await
+        .expect("runs");
+        let stage = rows(&with);
+        assert_eq!(
+            stage.extent,
+            Extent::Partial,
+            "a full page with one more behind it"
+        );
+        match &stage.produced {
+            StageOutput::Resources { hits } => {
+                assert_eq!(hits.len(), 2);
+                for h in hits {
+                    assert_eq!(
+                        h.resource.open_meta.as_ref().and_then(|m| m.get("state")),
+                        Some(&json!("ready")),
+                        "the open tier carries the key discovery reads"
+                    );
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// **`order: asc` reaches the wire oldest first**, which only the assembler's direction-aware
+    /// re-sort delivers — `hits_for` alone sorts descending and would reverse the page. An omitted
+    /// order is newest first. Three rows share one `created`, and the tie comes back id ascending in
+    /// both directions: the SQL's order surviving two stable sorts.
+    #[sqlx::test(migrator = "temper_services::MIGRATOR")]
+    async fn the_callers_order_reaches_the_wire_and_ties_come_back_id_ascending(pool: PgPool) {
+        bootseed::seed_system(&pool).await.unwrap();
+        let (owner, emitter) = system_actor(&pool).await;
+        let home = ctx(&pool, owner, "ordered").await;
+        let made = ready(&pool, home, owner, emitter, 6).await;
+        // As rows written in one transaction share `occurred_at`, and so `created`.
+        sqlx::query(
+            "UPDATE kb_resources SET created = (SELECT max(created) FROM kb_resources \
+             WHERE id = ANY($1)) WHERE id = ANY($1)",
+        )
+        .bind(made[1..4].to_vec())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for (order, direction) in [
+            (None, SortOrder::Desc),
+            (Some(SortOrder::Desc), SortOrder::Desc),
+            (Some(SortOrder::Asc), SortOrder::Asc),
+        ] {
+            let r = run_composition(
+                &pool,
+                owner,
+                &list(home, ready_filter(), &[], order, vec![]),
+            )
+            .await
+            .expect("runs");
+            assert_eq!(
+                ids(&r),
+                by_created(&pool, &made, direction).await,
+                "{order:?}: the wire order"
+            );
+        }
+    }
+
+    /// **`total` is the unpaged match count on every page** — at `offset > 0`, past the end and at
+    /// `limit 0` — and **`0` when nothing matches**. **`extent` is exact from it**: `complete` when
+    /// exactly `limit` rows match and past the end, `partial` at `limit 0` only when something
+    /// matches, and `partial` while `offset + produced < total`. No other act's `total` moves.
+    #[sqlx::test(migrator = "temper_services::MIGRATOR")]
+    async fn every_page_carries_the_total_and_extent_reads_it(pool: PgPool) {
+        bootseed::seed_system(&pool).await.unwrap();
+        let (owner, emitter) = system_actor(&pool).await;
+        let home = ctx(&pool, owner, "counted").await;
+        ready(&pool, home, owner, emitter, 4).await;
+        task(
+            &pool,
+            home,
+            owner,
+            emitter,
+            "done",
+            &[("state".to_string(), json!("done"))],
+        )
+        .await;
+
+        for (terms, produced, extent) in [
+            (vec![(BoundTerm::Limit, 4)], 4, Extent::Complete),
+            (vec![(BoundTerm::Limit, 3)], 3, Extent::Partial),
+            (
+                vec![(BoundTerm::Limit, 2), (BoundTerm::Offset, 2)],
+                2,
+                Extent::Complete,
+            ),
+            (
+                vec![(BoundTerm::Limit, 2), (BoundTerm::Offset, 1)],
+                2,
+                Extent::Partial,
+            ),
+            (
+                vec![(BoundTerm::Limit, 2), (BoundTerm::Offset, 9)],
+                0,
+                Extent::Complete,
+            ),
+            (vec![(BoundTerm::Limit, 0)], 0, Extent::Partial),
+        ] {
+            let r = run_composition(
+                &pool,
+                owner,
+                &list(home, ready_filter(), &terms, None, vec![]),
+            )
+            .await
+            .expect("runs");
+            let stage = rows(&r);
+            assert_eq!(stage.total, Some(4), "{terms:?}: the unpaged count");
+            assert_eq!(ids(&r).len(), produced, "{terms:?}");
+            assert_eq!(stage.extent, extent, "{terms:?}");
+            let traced = r
+                .trace
+                .stages
+                .iter()
+                .find(|t| t.stage.as_str() == "rows")
+                .expect("traced");
+            assert_eq!(traced.extent, extent, "the pair rule: {terms:?}");
+        }
+
+        let nothing = ResourceFilter {
+            properties: vec![PropertyPredicate {
+                key: "no_such_key".to_string(),
+                op: PropertyOp::HasKey,
+            }],
+            ..Default::default()
+        };
+        for terms in [vec![], vec![(BoundTerm::Limit, 0)]] {
+            let r = run_composition(
+                &pool,
+                owner,
+                &list(home, nothing.clone(), &terms, None, vec![]),
+            )
+            .await
+            .expect("runs");
+            let stage = rows(&r);
+            assert_eq!(
+                stage.total,
+                Some(0),
+                "{terms:?}: zero matches is a count of zero"
+            );
+            assert_eq!(stage.disposition, StageDisposition::Empty);
+            assert_eq!(
+                stage.extent,
+                Extent::Complete,
+                "{terms:?}: nothing lies beyond"
+            );
+        }
+
+        // A find act's stage — empty here, which is enough: its `total` is absent either way.
+        let other = run_composition(&pool, owner, &one_find("composable", vec![], vec![]))
+            .await
+            .expect("runs");
+        assert_eq!(
+            other.returned[&StageName::parse("hits").unwrap()].total,
+            None,
+            "no other act's total moves"
+        );
+    }
 }

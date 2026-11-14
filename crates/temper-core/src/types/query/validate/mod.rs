@@ -102,6 +102,10 @@ use super::stage::{ProducedVariant, StageName};
 /// `[changed — 2026-11-07]` `query_follow_from`'s fragment is now `__temper_ungated_follow_from_homed`
 /// (`20261119000010`). It also takes the compiler's `$1`, as the anchor reader that decides
 /// whether a walked edge's home is readable. The 10-arity name it replaced admits no edge.
+///
+/// `[added — 2026-11-14]` `list-resources-with` joins as the sixth member. Its fragment calls the
+/// selection core unchanged and takes the same two authorization inputs in the same roles, plus a
+/// resource bound (`20261128000010`).
 const CALLABLE_FRAGMENTS: &[(&str, &str)] = &[
     ("query_find_exact", "__temper_ungated_find_exact"),
     (
@@ -110,6 +114,10 @@ const CALLABLE_FRAGMENTS: &[(&str, &str)] = &[
     ),
     ("query_find_wide", "__temper_ungated_find_wide"),
     ("query_follow_from", "__temper_ungated_follow_from_homed"),
+    (
+        "query_list_resources_with",
+        "__temper_ungated_list_resources_with",
+    ),
     ("query_survey", "__temper_ungated_survey"),
 ];
 
@@ -600,6 +608,7 @@ mod tests {
     fn act_with_inputs(name: &str, a: ActName, inputs: Vec<StageInput>) -> StageNode {
         let intention = natural_intention(&a);
         StageNode::Act(ActInvocation {
+            order: None,
             name: StageName::parse(name).unwrap(),
             act: a,
             intention,
@@ -708,6 +717,7 @@ mod tests {
         });
         let intention = natural_intention(&a);
         StageNode::Act(ActInvocation {
+            order: None,
             name: StageName::parse(name).unwrap(),
             act: a,
             intention,
@@ -873,6 +883,7 @@ mod tests {
     /// question's LENGTH. [`act`] supplies a one-character question, which cannot express these.
     fn act_asking(name: &str, a: ActName, query: &str) -> StageNode {
         StageNode::Act(ActInvocation {
+            order: None,
             name: StageName::parse(name).unwrap(),
             act: a,
             intention: Some(Intention {
@@ -4458,6 +4469,7 @@ mod tests {
     fn the_register_coverage_question_is_expressible_as_a_composition() {
         let selection = |name: &str, filter: ResourceFilter| {
             StageNode::Act(ActInvocation {
+                order: None,
                 name: StageName::parse(name).unwrap(),
                 act: ActName::FindResourcesWith,
                 intention: None,
@@ -4495,6 +4507,7 @@ mod tests {
                 // UNBOUNDED, per the falsification above: a bounded walk whose seed is outside the
                 // bound never starts.
                 StageNode::Act(ActInvocation {
+                    order: None,
                     name: StageName::parse("advancing").unwrap(),
                     act: ActName::FollowFrom,
                     intention: None,
@@ -4858,11 +4871,12 @@ mod tests {
 
     // ── The slot, and which acts admit it ───────────────────────────────────────────────────
 
-    /// Every act but `find-resources-with` refuses a non-empty `artifact_filter` with
+    /// Every act but the two selection-shaped acts refuses a non-empty `artifact_filter` with
     /// `filter_not_applicable` and the redirect a resource narrowing gets on those acts. Bites the
-    /// capability check: without it, nothing on these plans names the slot.
+    /// capability check: without it, nothing on these plans names the slot. The redirect names
+    /// both acts — the one that selects and the one that returns rows.
     #[test]
-    fn every_act_but_find_resources_with_refuses_an_artifact_filter() {
+    fn every_act_but_the_two_selection_shaped_acts_refuses_an_artifact_filter() {
         let shapes = loaded(vec![measurement(1)]);
         for a in [
             ActName::FindExact,
@@ -4878,6 +4892,7 @@ mod tests {
                             && r.stage.as_ref() == Some(&stage("s"))
                             && r.detail.contains("`artifact_filter`")
                             && r.detail.contains("find-resources-with")
+                            && r.detail.contains("list-resources-with")
                     })
                     .count()
             };
@@ -4900,21 +4915,35 @@ mod tests {
         }
     }
 
-    /// The first act admitting two slots: a resource filter and an artifact filter on one
-    /// selection are admitted together, and the ask is sealed.
+    /// The two acts admitting two slots: a resource filter and an artifact filter on one
+    /// selection-shaped stage are admitted together, and the ask is sealed. The selection is
+    /// piped into a find act; the list stage is returned itself.
     #[test]
-    fn find_resources_with_admits_a_resource_filter_and_an_artifact_filter_together() {
+    fn both_selection_shaped_acts_admit_a_resource_filter_and_an_artifact_filter_together() {
         let shapes = loaded(vec![measurement(1)]);
-        let mut sel = selecting("sel", vec![asking(1, "unit")], None);
-        if let StageNode::Act(inv) = &mut sel {
-            inv.resource_filter = Some(ResourceFilter {
-                doc_type: vec!["task".to_string()],
-                ..Default::default()
-            });
+        for a in [ActName::FindResourcesWith, ActName::ListResourcesWith] {
+            let mut sel = match act("sel", a.clone(), None) {
+                StageNode::Act(mut inv) => {
+                    inv.artifact_filter = vec![asking(1, "unit")];
+                    StageNode::Act(inv)
+                }
+                other => other,
+            };
+            if let StageNode::Act(inv) = &mut sel {
+                inv.resource_filter = Some(ResourceFilter {
+                    doc_type: vec!["task".to_string()],
+                    ..Default::default()
+                });
+            }
+            let c = if a == ActName::ListResourcesWith {
+                plan(vec![sel], vec!["sel"])
+            } else {
+                answered_by_find(vec![sel])
+            };
+            let v = super::validate(&c, &mut shapes.session())
+                .unwrap_or_else(|rs| panic!("{a:?}: both slots narrow one stage: {rs:?}"));
+            assert_eq!(v.asks(&stage("sel")).len(), 1, "{a:?}");
         }
-        let v = super::validate(&answered_by_find(vec![sel]), &mut shapes.session())
-            .expect("both slots narrow one selection's resources");
-        assert_eq!(v.asks(&stage("sel")).len(), 1);
     }
 
     /// An edge filter beside either resource slot is still refused: on the selection because it
@@ -5545,5 +5574,282 @@ mod tests {
             assert_eq!(seal.asks(&s).len(), 1);
             assert_eq!(gate.asks(&s), seal.asks(&s), "sealed alike at {s:?}");
         }
+    }
+
+    // ---- `list-resources-with` ----------------------------------------------------------------
+
+    /// A `list-resources-with` stage with `order` set, for the tests whose subject is the order.
+    fn list_stage(name: &str, input: Option<StageInput>) -> StageNode {
+        act(name, ActName::ListResourcesWith, input)
+    }
+
+    /// It is RETURNABLE — no `stage_not_returnable`, because it orders by `created_epoch` — and it
+    /// needs no intention, so a plan carrying none is legal rather than `missing_intention`.
+    #[test]
+    fn list_resources_with_is_returnable_and_asks_no_question() {
+        let node = list_stage("rows", None);
+        if let StageNode::Act(inv) = &node {
+            assert!(inv.intention.is_none(), "the fixture carries no question");
+        }
+        let v = validate(&plan(vec![node], vec!["rows"]))
+            .unwrap_or_else(|rs| panic!("a list stage is returnable as it stands: {rs:?}"));
+        assert_eq!(v.returns().len(), 1);
+    }
+
+    /// The resource filter is admitted in full on this act, as on the selection — every field.
+    #[test]
+    fn list_resources_with_admits_every_resource_filter_field() {
+        let mut node = list_stage("rows", None);
+        if let StageNode::Act(inv) = &mut node {
+            inv.resource_filter = Some(ResourceFilter {
+                doc_type: vec!["task".to_string()],
+                tags: vec!["coordination".to_string()],
+                stage: Some("backlog".to_string()),
+                status: Some("open".to_string()),
+                owner: Some("@me".to_string()),
+                title_contains: Some("claim".to_string()),
+                properties: vec![PropertyPredicate {
+                    key: "state".to_string(),
+                    op: PropertyOp::HasKey,
+                }],
+                ..Default::default()
+            });
+        }
+        validate(&plan(vec![node], vec!["rows"]))
+            .unwrap_or_else(|rs| panic!("every field narrows the list: {rs:?}"));
+    }
+
+    /// A resource bound — caller ids or an upstream SELECTION — is admitted, which is what makes a
+    /// combinator's output returnable. A seed is refused: this act narrows, it does not grow.
+    #[test]
+    fn list_resources_with_takes_a_resource_bound_and_refuses_a_seed() {
+        validate(&plan(
+            vec![list_stage("rows", Some(caller_ids(IdKind::Resource)))],
+            vec!["rows"],
+        ))
+        .unwrap_or_else(|rs| panic!("caller resource ids bound the list: {rs:?}"));
+
+        let ready = act("ready", ActName::FindResourcesWith, None);
+        let claimed = act("claimed", ActName::FindResourcesWith, None);
+        let open = StageNode::Combine(CombineNode {
+            name: stage("open"),
+            op: CombineOp::Difference,
+            inputs: vec![stage("ready"), stage("claimed")],
+        });
+        validate(&plan(
+            vec![ready, claimed, open, list_stage("rows", upstream("open"))],
+            vec!["rows"],
+        ))
+        .unwrap_or_else(|rs| panic!("a difference comes back as rows through a bound: {rs:?}"));
+
+        let seeded = act_with_relation(
+            "rows",
+            ActName::ListResourcesWith,
+            Some(caller_ids(IdKind::Resource)),
+            StageRelation::Seed,
+        );
+        let rs = validate(&plan(vec![seeded], vec!["rows"])).expect_err("a seed is refused");
+        assert!(
+            rs.iter()
+                .any(|r| r.reason == RefusalReason::UnsupportedSeedKind
+                    && r.stage.as_ref() == Some(&stage("rows"))),
+            "{rs:?}"
+        );
+    }
+
+    /// `order` is admitted on exactly the pinned population and refused `order_not_applicable` on
+    /// every other act. The loop runs over the family MINUS a literal list, never over the acts
+    /// whose flag says `false` — that filter would drop an act whose flag was flipped wrongly and
+    /// stay green.
+    #[test]
+    fn an_order_is_refused_on_every_act_but_list_resources_with() {
+        let accepting = [ActName::ListResourcesWith];
+        let mut counted = 0;
+        for d in crate::types::query::search_family() {
+            let mut c = a_legal_single_stage_plan_over(d.name.clone());
+            if let StageNode::Act(inv) = &mut c.stages[0] {
+                inv.order = Some(crate::types::resource::SortOrder::Asc);
+            }
+            let refused_for_order = |rs: &[PlanRefusal]| {
+                rs.iter().any(|r| {
+                    r.reason == RefusalReason::OrderNotApplicable
+                        && r.stage.as_ref() == Some(&stage("s"))
+                })
+            };
+            let rs = validate(&c).map_or_else(|rs| rs, |_| vec![]);
+            if accepting.contains(&d.name) {
+                assert!(
+                    !refused_for_order(&rs),
+                    "{:?} admits an order: {rs:?}",
+                    d.name
+                );
+            } else {
+                counted += 1;
+                assert!(
+                    refused_for_order(&rs),
+                    "{:?} must refuse an order: {rs:?}",
+                    d.name
+                );
+                assert!(
+                    rs.iter()
+                        .filter(|r| r.reason == RefusalReason::OrderNotApplicable)
+                        .all(|r| r.detail.contains("list-resources-with")),
+                    "the refusal names where a caller-chosen order lives: {rs:?}"
+                );
+            }
+        }
+        assert_eq!(counted, 8, "every act in the family but one was checked");
+        // Both directions run on the list act.
+        for order in [
+            crate::types::resource::SortOrder::Asc,
+            crate::types::resource::SortOrder::Desc,
+        ] {
+            let mut node = list_stage("rows", None);
+            if let StageNode::Act(inv) = &mut node {
+                inv.order = Some(order);
+            }
+            validate(&plan(vec![node], vec!["rows"]))
+                .unwrap_or_else(|rs| panic!("{order:?} is admitted: {rs:?}"));
+        }
+    }
+
+    /// **A list stage feeds nothing.** Named as any later stage's input — a find act's bound, a
+    /// walk's seed, another list's bound, and each operand of every combinator, the subtrahend
+    /// above all — it is refused `stage_not_pipeable` on the CONSUMING stage, with a redirect to
+    /// the selection.
+    #[test]
+    fn a_list_stage_is_refused_as_any_later_stages_input() {
+        let page = || list_stage("page", None);
+        let other = || act("other", ActName::FindResourcesWith, None);
+        let combine = |op: CombineOp, inputs: [&str; 2]| {
+            StageNode::Combine(CombineNode {
+                name: stage("uses"),
+                op,
+                inputs: inputs.iter().map(|n| stage(n)).collect(),
+            })
+        };
+        let seeded = act_with_relation(
+            "uses",
+            ActName::FollowFrom,
+            upstream("page"),
+            StageRelation::Seed,
+        );
+        let cases: Vec<(&str, Vec<StageNode>)> = vec![
+            (
+                "a find act's bound",
+                vec![page(), act("uses", ActName::FindExact, upstream("page"))],
+            ),
+            (
+                "find-about-within's bound",
+                vec![
+                    page(),
+                    act("uses", ActName::FindAboutWithin, upstream("page")),
+                ],
+            ),
+            ("a walk's seed", vec![page(), seeded]),
+            (
+                "another list's bound",
+                vec![page(), list_stage("uses", upstream("page"))],
+            ),
+            (
+                "a union operand",
+                vec![
+                    page(),
+                    other(),
+                    combine(CombineOp::Union, ["page", "other"]),
+                ],
+            ),
+            (
+                "an intersect operand",
+                vec![
+                    page(),
+                    other(),
+                    combine(CombineOp::Intersect, ["other", "page"]),
+                ],
+            ),
+            (
+                "a difference's subtrahend",
+                vec![
+                    page(),
+                    other(),
+                    combine(CombineOp::Difference, ["other", "page"]),
+                ],
+            ),
+            (
+                "a difference's minuend",
+                vec![
+                    page(),
+                    other(),
+                    combine(CombineOp::Difference, ["page", "other"]),
+                ],
+            ),
+        ];
+        for (position, stages) in cases {
+            let rs =
+                validate(&plan(stages, vec!["page"])).expect_err("a page piped onward is refused");
+            let pipeable: Vec<&PlanRefusal> = rs
+                .iter()
+                .filter(|r| r.reason == RefusalReason::StageNotPipeable)
+                .collect();
+            assert_eq!(pipeable.len(), 1, "{position}: one refusal: {rs:?}");
+            assert_eq!(
+                pipeable[0].stage.as_ref(),
+                Some(&stage("uses")),
+                "{position}: the consuming stage is refused"
+            );
+            assert!(
+                pipeable[0].detail.contains("find-resources-with")
+                    && pipeable[0].detail.contains("`page`"),
+                "{position}: the redirect names the selection and the page: {rs:?}"
+            );
+        }
+        // And returning the page beside a selection-fed plan is not refused for it.
+        validate(&plan(
+            vec![
+                page(),
+                other(),
+                act("hits", ActName::FindExact, upstream("other")),
+            ],
+            vec!["page", "hits"],
+        ))
+        .unwrap_or_else(|rs| panic!("a returned page that feeds nothing is legal: {rs:?}"));
+    }
+
+    /// The resource-filter refusal on every other act names both selection-shaped acts, so a
+    /// caller who wants the rows is not sent only to the act that cannot return them.
+    #[test]
+    fn the_resource_filter_redirect_names_both_acts_that_admit_it() {
+        let mut node = act("s", ActName::FindExact, Some(caller_ids(IdKind::Resource)));
+        if let StageNode::Act(inv) = &mut node {
+            inv.resource_filter = Some(ResourceFilter {
+                tags: vec!["x".to_string()],
+                ..Default::default()
+            });
+        }
+        let rs = validate(&plan(vec![node], vec!["s"])).expect_err("find-exact refuses it");
+        assert!(
+            rs.iter()
+                .any(|r| r.reason == RefusalReason::FilterNotApplicable
+                    && r.detail.contains("find-resources-with")
+                    && r.detail.contains("list-resources-with")),
+            "{rs:?}"
+        );
+    }
+
+    /// Returning a selection is still refused, and the refusal now names the act that returns its
+    /// rows, so it is not a dead end.
+    #[test]
+    fn returning_a_selection_is_refused_with_a_redirect_to_the_list() {
+        let rs = validate(&plan(
+            vec![act("sel", ActName::FindResourcesWith, None)],
+            vec!["sel"],
+        ))
+        .expect_err("a selection is not returnable");
+        assert!(
+            rs.iter()
+                .any(|r| r.reason == RefusalReason::StageNotReturnable
+                    && r.detail.contains("list-resources-with")),
+            "{rs:?}"
+        );
     }
 }

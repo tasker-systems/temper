@@ -126,6 +126,11 @@
           "type": "string"
         },
         {
+          "const": "created_epoch",
+          "description": "The resource's creation instant in Unix epoch seconds. UNBOUNDED, and an enumeration key\nrather than a relevance: higher is newer, never better. `list-resources-with`.",
+          "type": "string"
+        },
+        {
           "description": "A kind this consumer does not recognize — only ever produced by deserializing a producer\nnewer than this consumer.",
           "type": "string"
         }
@@ -154,7 +159,12 @@
             },
             {
               "const": "find-resources-with",
-              "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
+              "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`. The rows themselves come back through\n[`ActName::ListResourcesWith`].",
+              "type": "string"
+            },
+            {
+              "const": "list-resources-with",
+              "description": "*I can say what these things ARE, and I want them back as rows.*\n\n`find-resources-with`'s mechanic under a returning asker: the same filters and anchors, plus\na resource bound, ordered by `created` (newest first unless the stage's `order` says\notherwise) and paged. It **returns and feeds nothing**: its output is a page, and a page\npiped into a later stage would look like the set it is a sample of, so naming it as any\nstage's input is refused `stage_not_pipeable`.",
               "type": "string"
             },
             {

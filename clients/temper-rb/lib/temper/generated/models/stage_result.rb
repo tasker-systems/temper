@@ -46,7 +46,7 @@ module Temper::Generated
     # The APPLIED value of every admitted term, beside what was asked. Generalizes the `regions_effective` pattern the audit calls \"a model of an honest knob\" — which existed for exactly one term and was never extended to `limit` or `depth`.  There is no separate \"you were clamped\" flag, deliberately `[decided — 2026-08-03, Pete]`: ceilings are published per act, so the applied value is the whole story. Clamping to a ceiling nobody published would be the bug. This covers only terms the act ADMITS — one it does not is refused outright.
     attr_accessor :terms_applied
 
-    # Carried only by acts that can produce one WITHOUT a second query. Never by a composition.
+    # Carried only by acts that can produce one WITHOUT a second query. Never by a composition.  `list-resources-with` fills it on every page — `0` when nothing matches, and the full count past the end — from one count over the stage's unpaged match set, in the same statement as the rows. It counts only what the caller can see, and a refused stage carries none. It is counted in the statement, so it is not reduced when hydration drops a row that stopped being visible between the two statements: a page can carry `total: 12` with one row fewer than expected, which discloses nothing.
     attr_accessor :total
 
     class EnumAttributeValidator

@@ -3994,6 +3994,7 @@ export interface components {
             intention?: components["schemas"]["Intention"] | null;
             /** @description This node's name, referenced by downstream stages and by `returns`. */
             name: components["schemas"]["StageName"];
+            order?: components["schemas"]["SortOrder"] | null;
             /**
              * @description # A tombstone
              *
@@ -4040,7 +4041,7 @@ export interface components {
          *
          *     OPEN discriminator — adding an act is additive.
          */
-        ActName: "find-exact" | "find-about-anywhere" | "find-about-within" | "find-resources-with" | "follow-from" | "survey" | "substantiate" | "admit" | string;
+        ActName: "find-exact" | "find-about-anywhere" | "find-about-within" | "find-resources-with" | "list-resources-with" | "follow-from" | "survey" | "substantiate" | "admit" | string;
         /**
          * @description The quantity an act orders its answer by, named so that summing it with another act's reads as
          *     the category error it is.
@@ -9753,7 +9754,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "order_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "stage_not_pipeable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
         /**
          * @description What a refusal teaches, as data an agent reads without parsing English (spec §3.5).
          *
@@ -11226,7 +11227,7 @@ export interface components {
          *     [`super::envelope::StageResult::orders_by`] rather than per row — read it instead of assuming
          *     `[0,1]`, which is the live mistake in this family, not a hypothetical one.
          */
-        ScoreKind: "fts_norm" | "vec_norm" | "graph_score" | "region_score" | string;
+        ScoreKind: "fts_norm" | "vec_norm" | "graph_score" | "region_score" | "created_epoch" | string;
         /**
          * @description How one hit scored, and by what measure.
          *
@@ -11949,6 +11950,13 @@ export interface components {
             /**
              * Format: int64
              * @description Carried only by acts that can produce one WITHOUT a second query. Never by a composition.
+             *
+             *     `list-resources-with` fills it on every page — `0` when nothing matches, and the full count
+             *     past the end — from one count over the stage's unpaged match set, in the same statement as
+             *     the rows. It counts only what the caller can see, and a refused stage carries none.
+             *     It is counted in the statement, so it is not reduced when hydration drops a row that
+             *     stopped being visible between the two statements: a page can carry `total: 12` with one row
+             *     fewer than expected, which discloses nothing.
              */
             total?: number | null;
         };

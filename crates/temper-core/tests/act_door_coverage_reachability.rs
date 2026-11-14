@@ -98,6 +98,10 @@
 //! `Absent`; it does not check the shortfall lists inside a `Serves`, which for these acts rest on
 //! the route admitting the same terms, bounds and filters at every door.
 //!
+//! The acts reached through `/api/query` today are the three find acts, `find-resources-with`,
+//! `list-resources-with`, `follow-from` and `survey` — `list-resources-with` joined on 2026-11-14,
+//! and like `find-resources-with` it has no literal call site, only a `CALLABLE_FRAGMENTS` row.
+//!
 //! [`the_cells_tier_one_cannot_discriminate_are_exactly_these`] pins that uncovered set, so a new
 //! act or a new door lands in it and forces a deliberate restatement instead of quietly inheriting
 //! "we check door coverage."
@@ -671,6 +675,11 @@ fn the_cells_tier_one_cannot_discriminate_are_exactly_these() {
         // `CALLABLE_FRAGMENTS`. Survey serves all three doors (it is a knowledge subject, so
         // `subject-decides-the-door` requires it). Its three cells rest on review.
         ActName::Survey,
+        // `[joined — 2026-11-14]` Reachable through `/api/query` from birth: `query_list_resources_with`
+        // is in `CALLABLE_FRAGMENTS`. Its three cells are `find-resources-with`'s and rest on review
+        // the same way; its MCP cell is checked by
+        // `every_act_reached_through_the_query_route_is_served_at_mcp`.
+        ActName::ListResourcesWith,
         ActName::Substantiate,
     ]
     .into_iter()

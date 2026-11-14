@@ -22,7 +22,12 @@
         },
         {
           "const": "find-resources-with",
-          "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
+          "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`. The rows themselves come back through\n[`ActName::ListResourcesWith`].",
+          "type": "string"
+        },
+        {
+          "const": "list-resources-with",
+          "description": "*I can say what these things ARE, and I want them back as rows.*\n\n`find-resources-with`'s mechanic under a returning asker: the same filters and anchors, plus\na resource bound, ordered by `created` (newest first unless the stage's `order` says\notherwise) and paged. It **returns and feeds nothing**: its output is a page, and a page\npiped into a later stage would look like the set it is a sample of, so naming it as any\nstage's input is refused `stage_not_pipeable`.",
           "type": "string"
         },
         {
@@ -477,6 +482,18 @@
     "name": {
       "description": "This node's name, referenced by downstream stages and by `returns`.",
       "type": "string"
+    },
+    "order": {
+      "description": "The direction this act's ordering quantity runs in, for an act that lets the caller choose\nit. Only `list-resources-with` does (`ActDeclaration::accepts_order`), ordering by `created`:\n`desc` is newest first and is what runs when this is absent, `asc` is oldest first.\n\n**A field rather than a term**, because a term is a number of rows and has one meaning on\nevery read; a direction is neither. On any other act it is refused\n(`RefusalReason::OrderNotApplicable`), never ignored. The response does not echo it: it\ncannot be clamped, so what ran is the value sent, or `desc`.",
+      "enum": [
+        "desc",
+        "asc",
+        null
+      ],
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "properties": {
       "description": "Every predicate here is refused, and the refusal says where the capability went.\n\n**Keep this heading to one line** `[found in review — 2026-08-15]`. schemars takes the first\nheading LINE as the schema `title` and the remainder as `description`, so a heading that wraps\nships a truncated sentence as the title and an orphan word as the start of the description —\ninto `act_invocation.schema.json`, `openapi.json`, and every generated client. A mechanical\nconstraint of the generator, not a style preference.\n\n`[2026-08-15]` **Both halves now have containers** — [`super::filter::ResourceFilter`]'s\n`properties` and [`super::filter::EdgeFilter`]'s — so a property predicate has a\nhome that names its own subject, and this field has nothing left to mean. The subject tag it\ncarried (`PropertySubject`), that tag's open arm, the `UnknownFilterValue` refusal the open\narm existed to raise, and the subject-tagged predicate type are all **deleted**.\n\n**The field is not deleted with them, and that is the whole decision**\n`[decided — 2026-08-15, Pete]`. [`ActInvocation`] carries `deny_unknown_fields`, and serde\nshort-circuits before `validate` runs — so removing the field would turn a named\n`FilterNotApplicable` inside `ErrorBody` into a deserializer 400 **outside** that shape. A\nstale caller would go from being told where to move their predicate to being told their body\nis unparseable. Retyping to [`super::filter::PropertyPredicate`], which carries no\n`deny_unknown_fields`, keeps a stale `{\"subject\":…,\"key\":…,\"op\":…}` parsing: the tag is\nignored and the redirect still fires.\n\n**The residue:** with the tag gone the redirect cannot name *which* container, so it names\nboth and lets the caller pick. That is a real loss of fidelity in the refusal, accepted as\nthe price of deleting the type.",

@@ -34,17 +34,19 @@ class ActName(BaseModel):
     # data type: str
     oneof_schema_3_validator: Optional[StrictStr] = Field(default=None, description="*A concept, plus a set to search inside.*")
     # data type: str
-    oneof_schema_4_validator: Optional[StrictStr] = Field(default=None, description="*I can say what these things ARE; I have no question about what they mean.*  The only act with no intention — a pure selection. It narrows by what is known about a resource and orders nothing, so it SELECTS without SCORING, which is the distinction [`ActDeclaration::orders_by`] carries and which the registry's invariants had folded together under `produces.is_some()` until this act arrived.  Its output is a set to pipe, never rows to read: a stage running it cannot appear in `returns`, for the same reason a combinator cannot — rows with no ordering quantity have nothing to score them, and the assembler would drop every one while reporting `disposition: answered`.")
+    oneof_schema_4_validator: Optional[StrictStr] = Field(default=None, description="*I can say what these things ARE; I have no question about what they mean.*  The only act with no intention — a pure selection. It narrows by what is known about a resource and orders nothing, so it SELECTS without SCORING, which is the distinction [`ActDeclaration::orders_by`] carries and which the registry's invariants had folded together under `produces.is_some()` until this act arrived.  Its output is a set to pipe, never rows to read: a stage running it cannot appear in `returns`, for the same reason a combinator cannot — rows with no ordering quantity have nothing to score them, and the assembler would drop every one while reporting `disposition: answered`. The rows themselves come back through [`ActName::ListResourcesWith`].")
     # data type: str
-    oneof_schema_5_validator: Optional[StrictStr] = Field(default=None, description="*A found thing; I want its neighbours.*")
+    oneof_schema_5_validator: Optional[StrictStr] = Field(default=None, description="*I can say what these things ARE, and I want them back as rows.*  `find-resources-with`'s mechanic under a returning asker: the same filters and anchors, plus a resource bound, ordered by `created` (newest first unless the stage's `order` says otherwise) and paged. It **returns and feeds nothing**: its output is a page, and a page piped into a later stage would look like the set it is a sample of, so naming it as any stage's input is refused `stage_not_pipeable`.")
     # data type: str
-    oneof_schema_6_validator: Optional[StrictStr] = Field(default=None, description="*A question about what a scope knows.*")
+    oneof_schema_6_validator: Optional[StrictStr] = Field(default=None, description="*A found thing; I want its neighbours.*")
     # data type: str
-    oneof_schema_7_validator: Optional[StrictStr] = Field(default=None, description="*A claim; I want its defensibility.*")
+    oneof_schema_7_validator: Optional[StrictStr] = Field(default=None, description="*A question about what a scope knows.*")
     # data type: str
-    oneof_schema_8_validator: Optional[StrictStr] = Field(default=None, description="The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that promoting it to a real act requires DELETING an explicit refusal.")
+    oneof_schema_8_validator: Optional[StrictStr] = Field(default=None, description="*A claim; I want its defensibility.*")
     # data type: str
-    oneof_schema_9_validator: Optional[StrictStr] = None
+    oneof_schema_9_validator: Optional[StrictStr] = Field(default=None, description="The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that promoting it to a real act requires DELETING an explicit refusal.")
+    # data type: str
+    oneof_schema_10_validator: Optional[StrictStr] = None
     actual_instance: Optional[Union[str]] = None
     one_of_schemas: Set[str] = { "str" }
 
@@ -120,6 +122,12 @@ class ActName(BaseModel):
         # validate data type: str
         try:
             instance.oneof_schema_9_validator = v
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # validate data type: str
+        try:
+            instance.oneof_schema_10_validator = v
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
@@ -221,6 +229,15 @@ class ActName(BaseModel):
             instance.oneof_schema_9_validator = json.loads(json_str)
             # assign value to actual_instance
             instance.actual_instance = instance.oneof_schema_9_validator
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into str
+        try:
+            # validation
+            instance.oneof_schema_10_validator = json.loads(json_str)
+            # assign value to actual_instance
+            instance.actual_instance = instance.oneof_schema_10_validator
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))

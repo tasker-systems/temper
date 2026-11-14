@@ -947,6 +947,7 @@ fn compiled_plan(w: &World, asks: Vec<ArtifactAsk>) -> CompiledQuery {
         },
         stages: vec![
             StageNode::Act(ActInvocation {
+                order: None,
                 name: sel.clone(),
                 act: ActName::FindResourcesWith,
                 intention: None,
@@ -958,6 +959,7 @@ fn compiled_plan(w: &World, asks: Vec<ArtifactAsk>) -> CompiledQuery {
                 artifact_filter: asks,
             }),
             StageNode::Act(ActInvocation {
+                order: None,
                 name: hits,
                 act: ActName::FindExact,
                 intention: Some(Intention {
@@ -1889,7 +1891,7 @@ async fn an_unknown_row_class_fails_the_read_rather_than_reading_as_a_tally(pool
             "SELECT '{class}'::text AS row_class, 's'::text AS stage, NULL::uuid AS id, \
              NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
              NULL::uuid AS region, 0::bigint AS produced, 0::bigint AS unusable, \
-             NULL::bigint AS ask_position, NULL::uuid AS in_force_shape_id, \
+             NULL::bigint AS total, NULL::bigint AS ask_position, NULL::uuid AS in_force_shape_id, \
              NULL::int AS in_force_shape_version, NULL::bigint AS declared_satisfied, \
              NULL::bigint AS declared_not_satisfied, NULL::bigint AS declared_not_yet_checked, \
              NULL::bigint AS matched"

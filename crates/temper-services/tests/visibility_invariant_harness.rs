@@ -1465,13 +1465,134 @@ async fn search_slice(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Violation>> 
                  {leaked:?}"
             ));
         }
+
+        // the list door: the selection's set, returned — unfiltered and unbounded, the same set.
+        let listed: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT resource_id FROM query_list_resources_with($1, NULL::text[], NULL::text[], \
+             NULL::jsonb, NULL::text, NULL::text, NULL::uuid, NULL::text, NULL::text, \
+             NULL::jsonb, NULL::varchar, NULL::uuid, NULL::jsonb, NULL::uuid[]) ORDER BY 1",
+        )
+        .bind(profile)
+        .fetch_all(pool)
+        .await?;
+        let leaked: Vec<_> = listed.iter().filter(|id| !visible.contains(id)).collect();
+        if !leaked.is_empty() {
+            violations.push(format!(
+                "I3.search: query_list_resources_with[{who}] leaked unreadable resources \
+                 {leaked:?}"
+            ));
+        }
     }
 
     Ok(violations)
 }
 
+/// **A list stage's `total` counts only what the caller can see.** `total` is the one datum the
+/// list act adds that discloses something without carrying an id, so it is held here beside the
+/// rows: for every profile — each of whom has matching rows in the world it cannot read — the
+/// compiled statement's `total` must equal the number of ids an unpaged walk of the gated list
+/// returns, and the `produced_ids` a `find-resources-with` stage with the same arguments reports
+/// in the same trace. A count lifted above the core's `JOIN unnest(p_visible_ids)` — over the
+/// bound, or over an unfiltered set — reads the invisible rows and fails both.
+async fn list_total_slice(pool: &PgPool, w: &World) -> Vec<Violation> {
+    use temper_core::types::artifact_ask::ShapeContext;
+    use temper_core::types::query::{
+        validate, ActInvocation, ActName, BoundTerm, Composition, OutcomeDeclaration, ReturnSpec,
+        StageName, StageNode,
+    };
+
+    let stage = |name: &str, act: ActName| {
+        StageNode::Act(ActInvocation {
+            name: StageName::parse(name).unwrap(),
+            act,
+            intention: None,
+            inputs: vec![],
+            terms: if name == "rows" {
+                [(BoundTerm::Limit, 1)].into_iter().collect()
+            } else {
+                Default::default()
+            },
+            order: None,
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+            artifact_filter: vec![],
+        })
+    };
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: StageName::parse("rows").unwrap(),
+                with: vec![],
+            }],
+        },
+        stages: vec![
+            stage("rows", ActName::ListResourcesWith),
+            stage("sel", ActName::FindResourcesWith),
+        ],
+    };
+    let v = validate(&c, &mut ShapeContext::empty().session()).expect("the plan is valid");
+
+    let mut violations = Vec::new();
+    let mut hid_some = false;
+    for (p_idx, &profile) in w.profiles.iter().enumerate() {
+        let who = PROFILE_HANDLES[p_idx];
+        let walked: Vec<Uuid> = match sqlx::query_scalar(
+            "SELECT resource_id FROM query_list_resources_with($1, NULL::text[], NULL::text[], \
+             NULL::jsonb, NULL::text, NULL::text, NULL::uuid, NULL::text, NULL::text, \
+             NULL::jsonb, NULL::varchar, NULL::uuid, NULL::jsonb, NULL::uuid[])",
+        )
+        .bind(profile)
+        .fetch_all(pool)
+        .await
+        {
+            Ok(ids) => ids,
+            Err(e) => {
+                violations.push(format!("I3.total: the gated list failed for {who}: {e}"));
+                continue;
+            }
+        };
+        hid_some |= w.resources.iter().any(|r| !walked.contains(r));
+        let r = match temper_services::backend::query_read::run_composition(
+            pool,
+            temper_core::types::ids::ProfileId::from(profile),
+            &v,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                violations.push(format!("I3.total: the list plan failed for {who}: {e:?}"));
+                continue;
+            }
+        };
+        let total = r.returned[&StageName::parse("rows").unwrap()].total;
+        let selected = r
+            .trace
+            .stages
+            .iter()
+            .find(|t| t.stage.as_str() == "sel")
+            .map(|t| t.produced_ids);
+        if total != Some(walked.len() as i64) || total != selected {
+            violations.push(format!(
+                "I3.total: list total[{who}] = {total:?}, but an unpaged walk returns {} and the \
+                 selection produced {selected:?} — the count reads rows the caller cannot see",
+                walked.len()
+            ));
+        }
+    }
+    if !hid_some {
+        violations.push(
+            "I3.total: no profile had an invisible resource, so the count witness is vacuous"
+                .to_string(),
+        );
+    }
+    violations
+}
+
 async fn i3_deny_is_absence(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Violation>> {
     let mut violations = search_slice(pool, w).await?;
+    violations.extend(list_total_slice(pool, w).await);
 
     for (p_idx, &profile) in w.profiles.iter().enumerate() {
         let who = PROFILE_HANDLES[p_idx];
@@ -1983,6 +2104,9 @@ const ENROLLED: &[&str] = &[
     "query_follow_from",
     "query_survey",
     "query_find_resources_with",
+    // query_list_resources_with — the selection core's set returned, narrowed by a bound; driven by
+    // `search_slice` (deny-is-absence) and `list_total_slice` (its `total` counts only visible rows).
+    "query_list_resources_with",
     // composed surfaces
     "_visible_artifacts",
     "resources_readable_by",

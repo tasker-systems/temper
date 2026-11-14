@@ -131,7 +131,7 @@ fn vec_norm_quantity() -> ActQuantity {
     }
 }
 
-/// The seven declarations. Order is stable — the generated contract renders them in this order.
+/// The nine declarations. Order is stable — the generated contract renders them in this order.
 pub fn search_family() -> Vec<ActDeclaration> {
     vec![
         ActDeclaration {
@@ -159,6 +159,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
+            accepts_order: false,
             produces: Some(IdKind::Resource),
             // Location NO, and not merely undeclared: the exact arm's index is ONE tsvector per
             // RESOURCE, built by concatenating every chunk into a single blob, so the block
@@ -205,6 +206,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
+            accepts_order: false,
             produces: Some(IdKind::Resource),
             // `[ruled — 2026-08-10, Pete, ⟨4⟩/8e]` `MatchLocation` is undeclared until the wide
             // fragments carry the winning chunk's identity out — a declaration describes the
@@ -231,6 +233,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
+            accepts_order: false,
             produces: Some(IdKind::Resource),
             // The same wide arm as `find-about-anywhere`, so the same ruling: `MatchLocation` is
             // undeclared until the fragments carry the winning chunk out
@@ -274,6 +277,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // together. What a resource's artifacts hold is one more thing known about what it IS.
             accepts_filters: vec![FilterField::Resource, FilterField::Artifact],
             bound_ceilings: BTreeMap::new(),
+            accepts_order: false,
             produces: Some(IdKind::Resource),
             // Selects without scoring. `discloses` describes what a stage says about its own
             // output beyond the rows, and this stage has no rows — only ids.
@@ -346,6 +350,80 @@ pub fn search_family() -> Vec<ActDeclaration> {
             scoring_revision: 0,
         },
         ActDeclaration {
+            name: ActName::ListResourcesWith,
+            asker_holds: "I can say what these things ARE, and I want them back as rows"
+                .to_string(),
+            served_by: Some("query_list_resources_with".to_string()),
+            build_state: BuildState::Served,
+            // **A `Resource` bound, which `find-resources-with` refuses**, and that act's reason
+            // does not carry over. There, narrowing a SELECTION by a set is `CombineOp::Intersect`.
+            // This act RETURNS, and a combinator cannot be returned (`StageNotReturnable`), so a
+            // resource bound is the one way a union, intersect or difference comes back as rows.
+            // Applied BENEATH the ORDER BY/LIMIT, as `find-exact`'s is: the fragment narrows the
+            // unpaged match set by `p_bound_ids`, and the compiler pages what is left.
+            accepts_bounds: vec![IdKind::Resource, IdKind::Context, IdKind::Cogmap],
+            accepts_seeds: vec![],
+            // The find acts' term axis exactly. This is "the act that RETURNS rows, where the caller
+            // can see [the ceiling] disclosed" — the place `find-resources-with`'s own comment says
+            // a ceiling belongs. Pages are deterministic within one statement and not stable
+            // across two, the family's rule.
+            accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
+            accepts_filters: vec![FilterField::Resource, FilterField::Artifact],
+            bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
+            // The one act honouring `ActInvocation::order`: `created` in either direction, `desc`
+            // (newest first) when the stage sends none.
+            accepts_order: true,
+            produces: Some(IdKind::Resource),
+            discloses: vec![],
+            // `/api/query`'s three doors, for `find-resources-with`'s reason: a raw plan at the
+            // CLI, the `Composition` at the API, and `run_query` relaying it unread at MCP. The
+            // route's validator and compiler never learn which door a plan arrived on.
+            door_coverage: BTreeMap::from([
+                (
+                    Door::Cli,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
+                    },
+                ),
+                (
+                    Door::Api,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
+                    },
+                ),
+                (
+                    Door::Mcp,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
+                    },
+                ),
+            ]),
+            orders_by: Some(ActQuantity {
+                field: "created_epoch".to_string(),
+                means:
+                    "the resource's creation instant in Unix epoch seconds — an enumeration key, \
+                        not a relevance: higher is newer, never better. Rows arrive in the \
+                        direction the stage's `order` names (newest first by default); ties on the \
+                        instant break by id ascending in either direction. The stage's `total` \
+                        counts every visible match, unpaged"
+                        .to_string(),
+                scale: QuantityScale::Unbounded,
+            }),
+            // `created` is a column of the row alone — no window, no aggregate, no frame — so a
+            // different visible set cannot move any row's value. That is the field's literal
+            // question ("would the quantity change if a different set of rows were fed to it"),
+            // and it says nothing about WHICH rows come back: those pass the same two visibility
+            // gates every returned stage passes.
+            visibility_profile: Some(VisibilityProfile::PrincipalAgnostic),
+            scoring_revision: 1,
+        },
+        ActDeclaration {
             name: ActName::FollowFrom,
             // **A found SET, and the plural is the whole reason `via` exists**
             // `[rewritten — 2026-08-14, Pete]`. This said "a found thing", while the act declares
@@ -412,6 +490,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // caller who named no page"* (`applied_terms`' doc). A ceiling on the page NUMBER would
             // reinstate the very horizon this amendment removes.
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
+            accepts_order: false,
             produces: Some(IdKind::Resource),
             // No location: it returns nodes reached by walking, not chunks matched by a query, so
             // there is no match position for it to have.
@@ -508,6 +587,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             bound_ceilings: BTreeMap::from([(BoundTerm::Regions, 20)]),
             // `[amended — 2026-08-16]` was `Region`; the ratified ⟨3⟩ redesign produces the
             // member RESOURCES of matched regions, not the regions. Regions move to `discloses`.
+            accepts_order: false,
             produces: Some(IdKind::Resource),
             // The region each resource came from is trace disclosure, not the primary output.
             discloses: vec![Disclosure::Region],
@@ -589,6 +669,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // real statement about the act and not a placeholder — and it is why the frame's
             // `claims-carry-standing` clause has nowhere to land yet, since `ActResult.produced`
             // is a required `IdSet` and an annotating act has no result shape in v0.
+            accepts_order: false,
             produces: None,
             // Not composable, so it has no stage to disclose anything ABOUT. It annotates one
             // resource rather than selecting a set — `accepts_bounds: []` at the input end and
@@ -642,6 +723,7 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_bound_terms: vec![],
             accepts_filters: vec![],
             bound_ceilings: BTreeMap::new(),
+            accepts_order: false,
             produces: None,
             // The anti-act. It runs nothing, so there is nothing it could disclose.
             discloses: vec![],
@@ -746,15 +828,17 @@ mod tests {
     /// `follow-from`'s and `survey`'s case) a shape to walk. Worth naming rather than bumping the
     /// count past: a selection is a different KIND of member, not a seventh of the same kind.
     #[test]
-    fn the_search_family_declares_eight_acts_including_the_anti_act() {
+    fn the_search_family_declares_nine_acts_including_the_anti_act() {
+        // `[2026-11-14]` Nine: `list-resources-with` returns what `find-resources-with` selects.
         let acts = search_family();
-        assert_eq!(acts.len(), 8);
+        assert_eq!(acts.len(), 9);
         let names: Vec<&ActName> = acts.iter().map(|a| &a.name).collect();
         for expected in [
             ActName::FindExact,
             ActName::FindAboutAnywhere,
             ActName::FindAboutWithin,
             ActName::FindResourcesWith,
+            ActName::ListResourcesWith,
             ActName::FollowFrom,
             ActName::Survey,
             ActName::Substantiate,
@@ -765,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn the_served_set_is_the_five_query_acts_plus_substantiate() {
+    fn the_served_set_is_the_six_query_acts_plus_substantiate() {
         // WAS `substantiate_is_the_only_act_with_a_door_of_its_own`, and before that
         // `nothing_in_the_search_family_is_served`, whose comment read "every mechanic is reachable
         // only through unified_search". That sentence was FALSE about the deployed system while its
@@ -794,6 +878,9 @@ mod tests {
         // corrected from `Fused` to `Served` — its `door_coverage` was already `Serves` at CLI and
         // API since 2026-08-14, but `build_state` was left stale. Both are now `Served`.
         //
+        // `[moved — 2026-11-14]` `list-resources-with` joins, served by `query_list_resources_with`
+        // (migration `20261128000010`) and emitted through `CALLABLE_FRAGMENTS`, at `/api/query`.
+        //
         // Kept as an EXACT set: an act acquiring or losing a door must be a deliberate edit here,
         // and `build_state` moving is BREAKING under the semver table (design §6.2). Order follows
         // `search_family()`.
@@ -809,6 +896,7 @@ mod tests {
                 ActName::FindAboutAnywhere,
                 ActName::FindAboutWithin,
                 ActName::FindResourcesWith,
+                ActName::ListResourcesWith,
                 ActName::FollowFrom,
                 ActName::Survey,
                 ActName::Substantiate,
@@ -1001,6 +1089,32 @@ mod tests {
             a.door_coverage.get(&Door::Api),
             "MCP relays to the API's route; a difference between the two cells is a shortfall \
              and must be named"
+        );
+    }
+
+    /// `list-resources-with` is reached through `/api/query`, like `find-resources-with` and
+    /// `follow-from`: every door serves it, and the MCP cell is the API cell.
+    #[test]
+    fn list_resources_with_reaches_every_door_and_mcp_reaches_what_the_api_does() {
+        let a = declaration(&ActName::ListResourcesWith).unwrap();
+        for door in Door::ALL {
+            assert!(
+                matches!(a.door_coverage.get(&door), Some(DoorReach::Serves { .. })),
+                "{door:?} reaches `/api/query`, so it reaches this act"
+            );
+        }
+        assert_eq!(
+            a.door_coverage.get(&Door::Mcp),
+            a.door_coverage.get(&Door::Api),
+            "MCP relays to the API's route; a difference between the two cells is a shortfall \
+             and must be named"
+        );
+        assert_eq!(
+            a.door_coverage,
+            declaration(&ActName::FindResourcesWith)
+                .unwrap()
+                .door_coverage,
+            "the selection's doors are this act's doors: one route, one validator"
         );
     }
 
@@ -1358,6 +1472,34 @@ mod tests {
         assert_eq!(relative, vec![ActName::FollowFrom, ActName::Survey]);
     }
 
+    /// `list-resources-with` is the first act to declare `PrincipalAgnostic`: `created_epoch` is a
+    /// column of the row alone, so a different visible set cannot move any row's value
+    /// `[ruled — 2026-11-14, Pete]`. Pinned as an exact set for the reason the test above gives: a
+    /// later act joins the class only by an edit to this list.
+    #[test]
+    fn exactly_list_resources_with_is_principal_agnostic() {
+        let agnostic: Vec<ActName> = search_family()
+            .into_iter()
+            .filter(|a| a.visibility_profile == Some(VisibilityProfile::PrincipalAgnostic))
+            .map(|a| a.name)
+            .collect();
+        assert_eq!(agnostic, vec![ActName::ListResourcesWith]);
+    }
+
+    /// The acts that let a caller choose the direction of their order, pinned EXACTLY. A filter
+    /// on the flag itself would be tautological — setting `accepts_order: true` on `find-exact`
+    /// would drop it from a refusal loop and leave every assertion green — so the population is a
+    /// literal, and `validate`'s refusal loop runs over the family minus this list.
+    #[test]
+    fn exactly_list_resources_with_accepts_an_order() {
+        let accepting: Vec<ActName> = search_family()
+            .into_iter()
+            .filter(|a| a.accepts_order)
+            .map(|a| a.name)
+            .collect();
+        assert_eq!(accepting, vec![ActName::ListResourcesWith]);
+    }
+
     #[test]
     fn an_act_that_orders_nothing_classifies_no_ordering_fragment() {
         // `visibility_profile` is defined as a statement about "the fragment that produces this
@@ -1420,6 +1562,7 @@ mod tests {
         assert_eq!(
             distinct,
             vec![
+                "created_epoch".to_string(),
                 "fts_norm".to_string(),
                 "graph_score".to_string(),
                 "region_score".to_string(),
@@ -1428,8 +1571,8 @@ mod tests {
         );
         assert_eq!(
             seen.len(),
-            5,
-            "five acts order by something; four names do it"
+            6,
+            "six acts order by something; five names do it"
         );
     }
 
@@ -1675,6 +1818,39 @@ mod tests {
         assert_eq!(
             applied_terms(&BTreeMap::new(), &d).get(&BoundTerm::Offset),
             None
+        );
+    }
+
+    /// `list-resources-with` pages exactly as the find acts do: the same term axis, the same
+    /// published ceiling of 50, no ceiling on the page number, and an omitted limit defaulting to
+    /// the ceiling. It also takes the selection's filters, and a resource bound the selection
+    /// refuses.
+    #[test]
+    fn list_resources_with_pages_like_the_find_acts() {
+        let d = declaration(&ActName::ListResourcesWith).unwrap();
+        let find = declaration(&ActName::FindExact).unwrap();
+        assert_eq!(d.accepts_bound_terms, find.accepts_bound_terms);
+        assert_eq!(d.bound_ceilings, find.bound_ceilings);
+        assert!(!d.bound_ceilings.contains_key(&BoundTerm::Offset));
+        assert_eq!(
+            applied_terms(&BTreeMap::new(), &d).get(&BoundTerm::Limit),
+            Some(&50),
+            "an omitted limit defaults to the published ceiling"
+        );
+        assert_eq!(
+            applied_terms(&BTreeMap::from([(BoundTerm::Limit, 500)]), &d).get(&BoundTerm::Limit),
+            Some(&50),
+            "a limit above the ceiling is clamped to it"
+        );
+        let selection = declaration(&ActName::FindResourcesWith).unwrap();
+        assert_eq!(d.accepts_filters, selection.accepts_filters);
+        assert!(d.accepts_bounds.contains(&IdKind::Resource));
+        assert!(!selection.accepts_bounds.contains(&IdKind::Resource));
+        assert!(d.accepts_seeds.is_empty());
+        assert_eq!(d.produces, Some(IdKind::Resource));
+        assert_eq!(
+            d.orders_by.as_ref().map(|q| q.field.as_str()),
+            Some("created_epoch")
         );
     }
 

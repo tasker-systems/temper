@@ -408,6 +408,11 @@
           "type": "string"
         },
         {
+          "const": "order_not_applicable",
+          "description": "An `order` was supplied to an act that does not let the caller choose its direction\n(`ActDeclaration::accepts_order` is `false`). Declined, never ignored, by the rule\n`bound_term_not_applicable` follows: an act-level parameter the act does not admit.",
+          "type": "string"
+        },
+        {
           "const": "not_separably_reachable",
           "description": "The act is declared and built, but its mechanic is not reachable from THIS surface — the\ncompiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the\ndistinction `BuildState` cannot draw: existence versus reachability-from-this-surface.\n\nThe live instance before beat D was the three `find` acts: `BuildState::Served` with their\nown SQL functions (`search_exact` / `search_wide`), which the beat-C compiler did not emit.\n`NotImplemented` would have been false about them (they are served); this variant is the\nhonest one. Beat D deleted the refusal for them by giving the compiler their fragments.\n\nThe live instances are `substantiate` and `survey` — the first `Served`, the second\n`Fused`, both with mechanics the compiler emits no fragment for. **The rule keys on the\ncallable-fragment set and never on `build_state`, and `substantiate` is what holds that**:\nit is `Served` and unreachable, so a rule reading the discriminant would admit an act this\nsurface cannot emit.\n\n`[corrected — 2026-08-15, found while adding `SubtrahendRefused`]` This named a trio —\n*\"`substantiate`, `follow-from` and `survey` … all three with mechanics the compiler emits\nno fragment for\"* — and **`follow-from` had not belonged to it since 2026-08-14**, when\n`query_follow_from` entered `CALLABLE_FRAGMENTS` and `registry.rs` moved the act from\n`Absent` to `Serves` at CLI and API on exactly that condition. So one edit updated the\ndeclaration and left the doc describing the world before it.\n\nWorth correcting rather than tidying, because **this doc comment is a published schema\ndescription** (`tests/fixtures/query/refusal.schema.json`, and `RefusalReason` in\ntemper-ui's generated `query.ts`) — the same reason [`super::composition::Intention`]'s\nheader gives for repairing its own stale sentence in place. The `Fused`-half argument that\nhung off the trio is dropped with it: it observed that the discriminant *happened* to agree\nabout a pair, which was a coincidence of the corpus and is not one now.",
           "type": "string"
@@ -495,6 +500,11 @@
         {
           "const": "stage_not_returnable",
           "description": "A returned stage's rows have no single ordering quantity to score them.\n\n`[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a\ncombinator, whose rows come from two or more acts — when the rule is about the consequence,\nand a second cause arrived: `find-resources-with` selects a set and orders nothing, so a\nstage running it has no quantity either. Two reasons for one consequence would make a\nclient's handling depend on which route produced it, when the repair is the same: return\nsomething that ranks, and use this stage as its input.",
+          "type": "string"
+        },
+        {
+          "const": "stage_not_pipeable",
+          "description": "A stage whose output is a PAGE is named as another stage's input — a bound, a seed, or a\ncombinator operand. Today that is a `list-resources-with` stage.\n\nThe mirror of [`RefusalReason::StageNotReturnable`]. A page looks exactly like the set it\nis a sample of, so piping it on would bound a later stage to an arbitrary subset while\nlooking like a narrowing — and as a `difference` subtrahend it reports every match past the\npage as absent, under `extent: complete`. The repair is to select with\n`find-resources-with`, pipe that, and return `list-resources-with`.",
           "type": "string"
         },
         {
@@ -998,6 +1008,11 @@
           "type": "string"
         },
         {
+          "const": "created_epoch",
+          "description": "The resource's creation instant in Unix epoch seconds. UNBOUNDED, and an enumeration key\nrather than a relevance: higher is newer, never better. `list-resources-with`.",
+          "type": "string"
+        },
+        {
           "description": "A kind this consumer does not recognize — only ever produced by deserializing a producer\nnewer than this consumer.",
           "type": "string"
         }
@@ -1172,7 +1187,12 @@
         },
         {
           "const": "find-resources-with",
-          "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
+          "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`. The rows themselves come back through\n[`ActName::ListResourcesWith`].",
+          "type": "string"
+        },
+        {
+          "const": "list-resources-with",
+          "description": "*I can say what these things ARE, and I want them back as rows.*\n\n`find-resources-with`'s mechanic under a returning asker: the same filters and anchors, plus\na resource bound, ordered by `created` (newest first unless the stage's `order` says\notherwise) and paged. It **returns and feeds nothing**: its output is a page, and a page\npiped into a later stage would look like the set it is a sample of, so naming it as any\nstage's input is refused `stage_not_pipeable`.",
           "type": "string"
         },
         {
@@ -1267,7 +1287,7 @@
       "type": "object"
     },
     "total": {
-      "description": "Carried only by acts that can produce one WITHOUT a second query. Never by a composition.",
+      "description": "Carried only by acts that can produce one WITHOUT a second query. Never by a composition.\n\n`list-resources-with` fills it on every page — `0` when nothing matches, and the full count\npast the end — from one count over the stage's unpaged match set, in the same statement as\nthe rows. It counts only what the caller can see, and a refused stage carries none.\nIt is counted in the statement, so it is not reduced when hydration drops a row that\nstopped being visible between the two statements: a page can carry `total: 12` with one row\nfewer than expected, which discloses nothing.",
       "format": "int64",
       "type": [
         "integer",

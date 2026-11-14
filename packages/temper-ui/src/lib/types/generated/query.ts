@@ -7,6 +7,7 @@ import type { ShapeId } from "./ShapeId";
 import type { ArtifactAsk, RefusalTeaching, ShapeSuccessor } from "./artifact_ask";
 import type { CogmapRegionRow } from "./cognitive_maps";
 import type { EdgeKind, Polarity } from "./graph";
+import type { SortOrder } from "./resource";
 import type { ResourceView } from "./resource_view";
 import type { JsonValue } from "./serde_json/JsonValue";
 
@@ -41,7 +42,15 @@ accepts_filters: Array<FilterField>,
  * `terms_effective` and owes no separate warning; an UNPUBLISHED ceiling is the defect, not
  * the clamping. A term with no entry here has no ceiling.
  */
-bound_ceilings: { [key in BoundTerm]?: bigint }, produces: IdKind | null, 
+bound_ceilings: { [key in BoundTerm]?: bigint }, 
+/**
+ * Whether this act honours [`super::envelope::ActInvocation::order`], the caller-chosen
+ * direction of its ordering quantity. `false` on every act but `list-resources-with`, and an
+ * `order` sent to an act declaring `false` is refused `order_not_applicable` — declined, never
+ * ignored, by the rule `accepts_bound_terms` follows. Serde-defaulted to `false`, so a
+ * declaration from a producer that predates the field reads as declining it.
+ */
+accepts_order: boolean, produces: IdKind | null, 
 /**
  * Which optional per-stage disclosures this act's mechanic **can** produce.
  *
@@ -149,6 +158,17 @@ inputs?: Array<StageInput>,
  */
 terms?: { [key in BoundTerm]?: bigint }, 
 /**
+ * The direction this act's ordering quantity runs in, for an act that lets the caller choose
+ * it. Only `list-resources-with` does (`ActDeclaration::accepts_order`), ordering by `created`:
+ * `desc` is newest first and is what runs when this is absent, `asc` is oldest first.
+ *
+ * **A field rather than a term**, because a term is a number of rows and has one meaning on
+ * every read; a direction is neither. On any other act it is refused
+ * (`RefusalReason::OrderNotApplicable`), never ignored. The response does not echo it: it
+ * cannot be clamped, so what ran is the value sent, or `desc`.
+ */
+order?: SortOrder | null, 
+/**
  * Narrowing by what a thing IS. At most one slot applies per candidate population; a slot the
  * act does not admit is `RefusalReason::FilterNotApplicable`. `resource_filter` and
  * `artifact_filter` both narrow the resources a selection considers, and AND together;
@@ -202,7 +222,7 @@ properties?: Array<PropertyPredicate>, };
  *
  * OPEN discriminator — adding an act is additive.
  */
-export type ActName = "find-exact" | "find-about-anywhere" | "find-about-within" | "find-resources-with" | "follow-from" | "survey" | "substantiate" | "admit" | string;
+export type ActName = "find-exact" | "find-about-anywhere" | "find-about-within" | "find-resources-with" | "list-resources-with" | "follow-from" | "survey" | "substantiate" | "admit" | string;
 
 /**
  * The quantity an act orders its answer by, named so that summing it with another act's reads as
@@ -847,7 +867,7 @@ trace: CompositionTrace, };
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
+export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "order_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "stage_not_pipeable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
 
 /**
  * One region a `survey` stage matched, and the score it matched at.
@@ -1070,7 +1090,7 @@ with?: Array<ResourceSection>, };
  * [`super::envelope::StageResult::orders_by`] rather than per row — read it instead of assuming
  * `[0,1]`, which is the live mistake in this family, not a hypothetical one.
  */
-export type ScoreKind = "fts_norm" | "vec_norm" | "graph_score" | "region_score" | string;
+export type ScoreKind = "fts_norm" | "vec_norm" | "graph_score" | "region_score" | "created_epoch" | string;
 
 /**
  * How one hit scored, and by what measure.
@@ -1275,6 +1295,13 @@ produced: StageOutput,
 extent: Extent, 
 /**
  * Carried only by acts that can produce one WITHOUT a second query. Never by a composition.
+ *
+ * `list-resources-with` fills it on every page — `0` when nothing matches, and the full count
+ * past the end — from one count over the stage's unpaged match set, in the same statement as
+ * the rows. It counts only what the caller can see, and a refused stage carries none.
+ * It is counted in the statement, so it is not reduced when hydration drops a row that
+ * stopped being visible between the two statements: a page can carry `total: 12` with one row
+ * fewer than expected, which discloses nothing.
  */
 total?: bigint | null, 
 /**

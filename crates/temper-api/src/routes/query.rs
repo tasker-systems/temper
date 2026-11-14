@@ -130,10 +130,11 @@ mod tests {
     ///   a caller may add to any plan; they are padding, and the body limit answers padding.
     ///   Separators are not padding: Python's default `json.dumps` writes `", "` and `": "`, and
     ///   `worst_case_value_bytes` counts them at that width.
-    /// - **The maximum is over two pure shapes, not every mixture.** No single act admits every
-    ///   bounded field: the walk carries id sets and no `ResourceFilter`, the selection the reverse.
-    ///   Both are measured and the larger reported, which is the walk shape `[measured —
-    ///   2026-10-07]`.
+    /// - **The maximum is over three pure shapes, not every mixture.** The walk carries id sets and
+    ///   no `ResourceFilter`, the selection the reverse. `[2026-11-14]` The premise that *no single
+    ///   act admits every bounded field* stopped being true with `list-resources-with`, which takes
+    ///   a resource id set, a `ResourceFilter`, an `artifact_filter` and page terms together, so it
+    ///   is the third shape. All three are measured and the largest reported.
     /// - **The selection shape carries the artifact asks at their caps**: `MAX_ASKS_PER_REQUEST`
     ///   asks, one per selection stage, each at `MAX_ASK_PREDICATES` predicates and
     ///   `MAX_ASK_PROBES` values, every intent and shape state named. Their values count toward the
@@ -159,9 +160,13 @@ mod tests {
             MAX_STAGES,
             ActName::FindResourcesWith,
         )));
+        let list = at_the_text_budget(at_the_property_value_budget(plan_of(
+            MAX_STAGES,
+            ActName::ListResourcesWith,
+        )));
 
         let shapes = asked_shape();
-        for (what, c) in [("walk", &walk), ("selection", &select)] {
+        for (what, c) in [("walk", &walk), ("selection", &select), ("list", &list)] {
             // Legal FIRST. A byte count over a plan the validator refuses is a measurement of
             // nothing — and the first version of this test measured one carrying 128 refusals
             // while its own doc called it legal `[found in review — 2026-08-28]`.
@@ -172,23 +177,25 @@ mod tests {
                 validate(c, &mut shapes.session()).err()
             );
         }
-        let asks_carried: usize = select
-            .stages
-            .iter()
-            .map(|n| match n {
-                StageNode::Act(inv) => inv.artifact_filter.len(),
-                StageNode::Combine(_) => 0,
-            })
-            .sum();
-        assert_eq!(
-            asks_carried, MAX_ASKS_PER_REQUEST,
-            "the selection shape carries the asks at their cap"
-        );
+        for (what, c) in [("selection", &select), ("list", &list)] {
+            let asks_carried: usize = c
+                .stages
+                .iter()
+                .map(|n| match n {
+                    StageNode::Act(inv) => inv.artifact_filter.len(),
+                    StageNode::Combine(_) => 0,
+                })
+                .sum();
+            assert_eq!(
+                asks_carried, MAX_ASKS_PER_REQUEST,
+                "the {what} shape carries the asks at their cap"
+            );
+        }
 
         // Measured at the MOST EXPANSIVE per-character escaping encoder, not serde's: a client escaping every
         // non-ASCII character or `<>&` as `\uXXXX` sends the same legal plan in more bytes, and the
         // door must read it all the same. Serde's size is a lower bound beside it.
-        let sizes: Vec<(usize, usize)> = [&walk, &select]
+        let sizes: Vec<(usize, usize)> = [&walk, &select, &list]
             .iter()
             .map(|c| {
                 let value = serde_json::to_value(c).expect("a composition serializes");
@@ -198,19 +205,20 @@ mod tests {
                 )
             })
             .collect();
-        let bytes = sizes.iter().map(|s| s.1).max().expect("two shapes");
+        let bytes = sizes.iter().map(|s| s.1).max().expect("three shapes");
         // The tighter ceiling binds. On Vercel the platform refuses a body past its cap with a
         // bare 413 before the door's own limit is reached, so the plan is held under both.
         let ceiling = QUERY_MAX_BODY_BYTES.min(VERCEL_REQUEST_BODY_CAP_BYTES);
         assert!(
             bytes < ceiling,
             "the largest composition at every published cap encodes to {bytes} bytes at worst \
-             (walk {:?}, selection {:?}, as (serde, worst)), which a ceiling of {ceiling} (the \
-             door's {QUERY_MAX_BODY_BYTES}, the platform's {VERCEL_REQUEST_BODY_CAP_BYTES}) \
-             would refuse with a bare 413 — lower the budgets, but do not let the contract admit \
-             a plan the deployment cannot deliver",
+             (walk {:?}, selection {:?}, list {:?}, as (serde, worst)), which a ceiling of \
+             {ceiling} (the door's {QUERY_MAX_BODY_BYTES}, the platform's \
+             {VERCEL_REQUEST_BODY_CAP_BYTES}) would refuse with a bare 413 — lower the budgets, \
+             but do not let the contract admit a plan the deployment cannot deliver",
             sizes[0],
-            sizes[1]
+            sizes[1],
+            sizes[2]
         );
     }
 
@@ -221,12 +229,18 @@ mod tests {
     /// and is refused in `returns` (`StageNotReturnable`) while a composition that returns nothing
     /// is refused outright (`NoReturns`). So the pure shape is not legal at any size, and the
     /// largest selection-shaped plan is `n - 1` selections plus the walk that answers.
+    ///
+    /// **A list-shaped plan is all lists**, every one returned: the act is returnable, feeds
+    /// nothing, and admits a resource bound, both filter slots and page terms on the same stage.
     fn plan_of(n: usize, act: ActName) -> Composition {
         let all_walk = act == ActName::FollowFrom;
+        let all_list = act == ActName::ListResourcesWith;
         let stages: Vec<StageNode> = (0..n)
             .map(|i| {
-                let walk = all_walk || i == n - 1;
+                let walk = all_walk || (!all_list && i == n - 1);
                 StageNode::Act(ActInvocation {
+                    // The longer spelling, so the measure is the larger of the two.
+                    order: all_list.then_some(temper_core::types::resource::SortOrder::Desc),
                     // Stage names at their own ceiling, 63 bytes (`StageName::parse`), filled with
                     // `_`: the measure counts punctuation at six bytes, and a legal name may be
                     // mostly underscores, so this is the widest a name can be under that measure.
@@ -253,7 +267,12 @@ mod tests {
                         // aggregate budget then caps its question text at 64 KB.
                         embedding: Some(vec![-0.041_899_003; 768]),
                     }),
-                    inputs: if walk {
+                    inputs: if all_list {
+                        vec![StageInput::Caller {
+                            relation: StageRelation::Bound,
+                            ids: full_id_set(),
+                        }]
+                    } else if walk {
                         vec![
                             StageInput::Caller {
                                 relation: StageRelation::Seed,
@@ -270,7 +289,7 @@ mod tests {
                         // shape sets the maximum and a single id cannot change which shape does.
                         vec![]
                     },
-                    terms: if walk {
+                    terms: if walk || all_list {
                         BTreeMap::from([
                             (BoundTerm::Limit, i64::from(i32::MAX)),
                             (BoundTerm::Offset, i64::from(i32::MAX)),
@@ -298,7 +317,10 @@ mod tests {
                 // shape is the one that answers.
                 returns: stages
                     .iter()
-                    .filter(|n| matches!(n, StageNode::Act(i) if i.act == ActName::FollowFrom))
+                    .filter(|n| {
+                        matches!(n, StageNode::Act(i)
+                            if i.act == ActName::FollowFrom || i.act == ActName::ListResourcesWith)
+                    })
                     .map(|node| ReturnSpec {
                         stage: node.name().clone(),
                         with: vec![ResourceSection::OpenMeta],

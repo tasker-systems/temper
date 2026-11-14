@@ -40,9 +40,19 @@ pub enum ActName {
     /// Its output is a set to pipe, never rows to read: a stage running it cannot appear in
     /// `returns`, for the same reason a combinator cannot — rows with no ordering quantity have
     /// nothing to score them, and the assembler would drop every one while reporting
-    /// `disposition: answered`.
+    /// `disposition: answered`. The rows themselves come back through
+    /// [`ActName::ListResourcesWith`].
     #[serde(rename = "find-resources-with")]
     FindResourcesWith,
+    /// *I can say what these things ARE, and I want them back as rows.*
+    ///
+    /// `find-resources-with`'s mechanic under a returning asker: the same filters and anchors, plus
+    /// a resource bound, ordered by `created` (newest first unless the stage's `order` says
+    /// otherwise) and paged. It **returns and feeds nothing**: its output is a page, and a page
+    /// piped into a later stage would look like the set it is a sample of, so naming it as any
+    /// stage's input is refused `stage_not_pipeable`.
+    #[serde(rename = "list-resources-with")]
+    ListResourcesWith,
     /// *A found thing; I want its neighbours.*
     #[serde(rename = "follow-from")]
     FollowFrom,
@@ -358,6 +368,13 @@ pub struct ActDeclaration {
     /// `terms_effective` and owes no separate warning; an UNPUBLISHED ceiling is the defect, not
     /// the clamping. A term with no entry here has no ceiling.
     pub bound_ceilings: BTreeMap<BoundTerm, i64>,
+    /// Whether this act honours [`super::envelope::ActInvocation::order`], the caller-chosen
+    /// direction of its ordering quantity. `false` on every act but `list-resources-with`, and an
+    /// `order` sent to an act declaring `false` is refused `order_not_applicable` — declined, never
+    /// ignored, by the rule `accepts_bound_terms` follows. Serde-defaulted to `false`, so a
+    /// declaration from a producer that predates the field reads as declining it.
+    #[serde(default)]
+    pub accepts_order: bool,
     pub produces: Option<IdKind>,
     /// Which optional per-stage disclosures this act's mechanic **can** produce.
     ///
@@ -427,7 +444,7 @@ impl ActDeclaration {
     ///
     /// `None` for an act that orders nothing. The consequence worth knowing: renaming a scoring
     /// column without updating `orders_by.field` makes this return an unrecognized kind, and
-    /// `every_selecting_act_declares_a_known_score_kind` goes red. That is the intended direction —
+    /// `every_ordering_act_declares_a_known_score_kind` goes red. That is the intended direction —
     /// the declaration is supposed to describe the deployed system.
     pub fn score_kind(&self) -> Option<ScoreKind> {
         let field = &self.orders_by.as_ref()?.field;
@@ -436,6 +453,7 @@ impl ActDeclaration {
             "vec_norm" => ScoreKind::VecNorm,
             "graph_score" => ScoreKind::GraphScore,
             "region_score" => ScoreKind::RegionScore,
+            "created_epoch" => ScoreKind::CreatedEpoch,
             other => ScoreKind::Other(other.to_string()),
         })
     }
@@ -462,6 +480,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ActName::FindResourcesWith).unwrap(),
             "\"find-resources-with\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ActName::ListResourcesWith).unwrap(),
+            "\"list-resources-with\""
         );
         assert_eq!(
             serde_json::to_string(&ActName::FollowFrom).unwrap(),
@@ -513,6 +535,7 @@ mod tests {
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
             accepts_filters: vec![FilterField::Resource],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
+            accepts_order: false,
             produces: Some(IdKind::Resource),
             discloses: vec![],
             door_coverage: BTreeMap::from([

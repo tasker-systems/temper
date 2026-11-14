@@ -103,6 +103,16 @@ pub struct ActInvocation {
     /// (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub terms: BTreeMap<BoundTerm, i64>,
+    /// The direction this act's ordering quantity runs in, for an act that lets the caller choose
+    /// it. Only `list-resources-with` does (`ActDeclaration::accepts_order`), ordering by `created`:
+    /// `desc` is newest first and is what runs when this is absent, `asc` is oldest first.
+    ///
+    /// **A field rather than a term**, because a term is a number of rows and has one meaning on
+    /// every read; a direction is neither. On any other act it is refused
+    /// (`RefusalReason::OrderNotApplicable`), never ignored. The response does not echo it: it
+    /// cannot be clamped, so what ran is the value sent, or `desc`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<crate::types::resource::SortOrder>,
     /// Narrowing by what a thing IS. At most one slot applies per candidate population; a slot the
     /// act does not admit is `RefusalReason::FilterNotApplicable`. `resource_filter` and
     /// `artifact_filter` both narrow the resources a selection considers, and AND together;
@@ -246,6 +256,13 @@ pub struct StageResult {
     /// Complete / partial / indeterminate. NOT a total — see `Extent`.
     pub extent: Extent,
     /// Carried only by acts that can produce one WITHOUT a second query. Never by a composition.
+    ///
+    /// `list-resources-with` fills it on every page — `0` when nothing matches, and the full count
+    /// past the end — from one count over the stage's unpaged match set, in the same statement as
+    /// the rows. It counts only what the caller can see, and a refused stage carries none.
+    /// It is counted in the statement, so it is not reduced when hydration drops a row that
+    /// stopped being visible between the two statements: a page can carry `total: 12` with one row
+    /// fewer than expected, which discloses nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<i64>,
     /// The APPLIED value of every admitted term, beside what was asked. Generalizes the
@@ -439,6 +456,7 @@ mod tests {
     #[test]
     fn an_invocation_without_input_or_terms_omits_them() {
         let inv = ActInvocation {
+            order: None,
             name: StageName::parse("wide").unwrap(),
             act: ActName::FindAboutAnywhere,
             intention: None,

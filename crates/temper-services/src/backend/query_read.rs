@@ -25,6 +25,7 @@ use crate::backend::substrate_read::{embed_query_texts, QueryEmbedBatch};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::artifact_ask::{AskSession, ShapeContext, ShapeSuccessor, ValidatedAsk};
 use temper_core::types::ids::{ProfileId, ResourceId, ShapeId};
+use temper_core::types::query::ActDeclaration;
 use temper_core::types::query::{
     applied_terms, declaration, text_to_embed, texts_to_embed, validate, ActName, ActRefusal,
     CombineNode, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse, RegionDisclosure,
@@ -35,6 +36,7 @@ use temper_core::types::query::{
     ArtifactAskPopulation, ArtifactAskTrace, BoundTerm, CompositionTrace, InputSource,
     StageInputTrace,
 };
+use temper_core::types::resource::SortOrder;
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
 use temper_substrate::readback;
 use temper_substrate::readback::query_exec::{
@@ -572,6 +574,8 @@ struct StageNumbers {
     /// struct is where the asymmetry is already resolved — both carriers reach it through the one
     /// function, exactly as they do for the input numbers and the refusal.
     terms_applied: std::collections::BTreeMap<BoundTerm, i64>,
+    /// The count of the stage's unpaged match set (`StageResult.total`), read off its tally.
+    total: Option<i64>,
     /// Complete / partial / indeterminate, from the one [`extent_of`] DEFINITION, for the same reason as
     /// [`Self::terms_applied`] beside it: a walk-then-narrow composition truncates at an
     /// INTERMEDIATE stage, and a `Partial` a reader cannot see is a truncation that reaches the
@@ -659,6 +663,9 @@ fn stage_numbers(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<StageNumb
         StageNode::Combine(_) => Default::default(),
     };
     let extent = extent_of(node, rows, tally, &terms_applied);
+    // The stage's unpaged match count, as the tally carried it — `None` for every act that does
+    // not page a match set, and for a refused stage, whose tally the compiler emitted without one.
+    let total = tally.total;
 
     Ok(StageNumbers {
         // **A refusal outranks the row count, and that ordering is the whole point.** A refused
@@ -681,6 +688,7 @@ fn stage_numbers(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<StageNumb
         inputs,
         terms_applied,
         extent,
+        total,
     })
 }
 
@@ -705,8 +713,21 @@ fn stage_result(
     let act = act_of(node);
     let decl = declaration(&act);
 
-    let hits: Vec<ResourceHit> = rows
-        .hits_for(name)
+    let mut ordered = rows.hits_for(name);
+    // **A caller-chosen `asc` is restored here, for this stage only.** `hits_for` sorts every
+    // stage by its quantity descending, which is the family's higher-first rule, so an `asc` page
+    // would come back reversed. Re-sorted ascending by the same quantity, and STABLY: the SQL's
+    // `id ASC` tie order survived the first sort as arrival order and survives this one too.
+    // `hits_for` itself is untouched, so no other act's order moves. Read only for an act that
+    // declares `accepts_order`; validation refuses an `order` everywhere else.
+    if applied_order(node, decl.as_ref()) == SortOrder::Asc {
+        ordered.sort_by(|a, b| {
+            a.quantity
+                .unwrap_or(f64::NEG_INFINITY)
+                .total_cmp(&b.quantity.unwrap_or(f64::NEG_INFINITY))
+        });
+    }
+    let hits: Vec<ResourceHit> = ordered
         .into_iter()
         // An id absent from the batch stopped being visible between the two statements — a dropped
         // row, not a fault. Same convention as every other set read in this crate.
@@ -774,15 +795,27 @@ fn stage_result(
         orders_by: decl.as_ref().and_then(|d| d.orders_by.clone()),
         produced,
         extent: n.extent,
-        // Carried only by acts that can produce one WITHOUT a second query, and none can: the
-        // fragments return a page, not a count. Absent rather than guessed from the page size.
-        total: None,
+        // Carried only by acts that can produce one WITHOUT a second query: `list-resources-with`,
+        // whose tally counts the unpaged match set in the same statement. Every other act returns
+        // a page with no count, and its `total` stays absent rather than guessed from the page.
+        total: n.total,
         terms_applied: n.terms_applied,
         narrowed_by: narrowed_by(node, asks, rows)?,
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
         disclosed_regions: disclosed_regions_for(node.name().as_str(), rows),
     })
+}
+
+/// The direction a stage's rows run in: the caller's `order` on an act that admits one, `desc`
+/// (higher first) otherwise and when none was sent.
+fn applied_order(node: &StageNode, decl: Option<&ActDeclaration>) -> SortOrder {
+    match node {
+        StageNode::Act(inv) if decl.is_some_and(|d| d.accepts_order) => {
+            inv.order.unwrap_or_default()
+        }
+        _ => SortOrder::Desc,
+    }
 }
 
 /// The output variant the act DECLARES, so the response cannot contradict `ValidationOutcome`'s
@@ -1001,6 +1034,20 @@ fn extent_of(
     // count, the unusable count and this extent, so there is no second place to default a missing
     // row into a number.
     let produced = tally.produced;
+    // **Exact where the stage counted its match set.** `[added — 2026-11-14]` The rule below reads
+    // a full page as `partial`, which is false when exactly `limit` rows match and reads `limit 0`
+    // as `partial` over nothing — and beside a `total` on the same stage the response would
+    // contradict itself (`total: 50`, 50 rows, `partial`). So a stage carrying a total answers from
+    // it: something lies beyond this page iff `offset + produced < total`. Only
+    // `list-resources-with` fills `total`, so no other act's extent moves.
+    if let Some(total) = tally.total {
+        let offset = terms.get(&BoundTerm::Offset).copied().unwrap_or(0);
+        return if offset.saturating_add(produced) < total {
+            Extent::Partial
+        } else {
+            Extent::Complete
+        };
+    }
     match terms.get(&BoundTerm::Limit) {
         Some(limit) if produced >= *limit => Extent::Partial,
         _ => Extent::Complete,
@@ -1317,6 +1364,7 @@ mod tests {
 
     fn act_node(n: &str, act: ActName, input: Option<StageInput>) -> StageNode {
         StageNode::Act(ActInvocation {
+            order: None,
             name: name(n),
             act,
             intention: Some(Intention {
@@ -1504,6 +1552,7 @@ mod tests {
             stage: stage.to_string(),
             produced,
             unusable,
+            total: None,
         }
     }
 
@@ -2883,6 +2932,7 @@ mod tests {
         let stages: Vec<StageNode> = (0..MANY_QUESTIONS)
             .map(|i| {
                 StageNode::Act(ActInvocation {
+                    order: None,
                     name: name(&format!("s{i}")),
                     act: ActName::FindAboutAnywhere,
                     // DISTINCT text per stage — the point of the count. Identical questions
@@ -2938,6 +2988,7 @@ mod tests {
         let stages: Vec<StageNode> = (0..over)
             .map(|i| {
                 StageNode::Act(ActInvocation {
+                    order: None,
                     name: name(&format!("s{i}")),
                     act: ActName::FindAboutAnywhere,
                     intention: Some(Intention {

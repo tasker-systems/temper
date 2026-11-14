@@ -723,6 +723,7 @@ mod tests {
 
         fn asking(name: &str, query: &str, embedding: Option<Vec<f32>>) -> StageNode {
             StageNode::Act(ActInvocation {
+                order: None,
                 name: StageName::parse(name).unwrap(),
                 act: ActName::FindAboutAnywhere,
                 intention: Some(Intention {
@@ -875,6 +876,7 @@ mod tests {
     /// A minimal root act node named `s`, carrying no question.
     fn stage(act: ActName) -> StageNode {
         StageNode::Act(ActInvocation {
+            order: None,
             name: StageName::parse("s").unwrap(),
             act,
             intention: None,
@@ -1119,6 +1121,7 @@ mod tests {
     #[test]
     fn an_act_node_reports_its_single_upstream_and_a_caller_fed_one_reports_none() {
         let seeded = StageNode::Act(ActInvocation {
+            order: None,
             name: StageName::parse("near").unwrap(),
             intention: None,
             inputs: vec![StageInput::Upstream {
@@ -1135,6 +1138,7 @@ mod tests {
         assert_eq!(seeded.upstream_names().len(), 1);
 
         let rooted = StageNode::Act(ActInvocation {
+            order: None,
             name: StageName::parse("hits").unwrap(),
             intention: None,
             inputs: vec![],

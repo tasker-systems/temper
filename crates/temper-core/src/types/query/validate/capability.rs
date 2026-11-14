@@ -393,13 +393,17 @@ fn section_advice(section: ResourceSection) -> &'static str {
     }
 }
 
-/// The redirect every act but `find-resources-with` answers a resource narrowing with: the
+/// The redirect every act but the two that admit them answers a resource narrowing with: the
 /// narrowing has an act, and a modifier saying the same thing elsewhere would be a second spelling.
+///
+/// **It names both acts.** A caller who wants the rows, sent only to `find-resources-with`, would
+/// reach an act that cannot return them — the dead end a redirect exists to avoid.
 fn narrow_by_selecting(field: &str) -> String {
     format!(
         "this act does not narrow by `{field}`; narrowing by what a resource IS is the \
-         `find-resources-with` act — select with it and pipe the result in as a bound. Applying it \
-         here would answer a different question than the one asked"
+         `find-resources-with` act — select with it and pipe the result in as a bound — or, to \
+         get the matching resources back as rows, return `list-resources-with`. Applying it here \
+         would answer a different question than the one asked"
     )
 }
 
@@ -563,8 +567,12 @@ fn check_act(
     // Sequencing was part of the work: this fires in the same change that gives the act its
     // mechanic, never before it.
     if let Some(f) = &inv.resource_filter {
-        if matches!(inv.act, ActName::FindResourcesWith) {
-            // The act whose parameter this is. Its fragment has a slot for every field, `doc_type`
+        if matches!(
+            inv.act,
+            ActName::FindResourcesWith | ActName::ListResourcesWith
+        ) {
+            // The two acts whose parameter this is — the selection, and the act that returns its
+            // rows over the same fragment. Its fragment has a slot for every field, `doc_type`
             // takes a set rather than one value, and there is nothing here to refuse — except the
             // one field whose LENGTH is a cost multiplier rather than a narrowing.
             //
@@ -733,6 +741,22 @@ fn check_act(
                 ),
             ));
         }
+    }
+
+    // **A caller-chosen direction, declined where the act has none to choose.** The sibling of the
+    // bound-term check above: an act-level parameter the act does not admit is refused, never
+    // ignored — an ignored `order` would hand back rows in the opposite order from the one asked.
+    if inv.order.is_some() && !decl.accepts_order {
+        errs.push(refusal(
+            Some(name),
+            RefusalReason::OrderNotApplicable,
+            format!(
+                "act `{}` does not let the caller choose its order; it ranks by its own quantity. \
+                 A caller-chosen direction belongs to `list-resources-with`, which orders by \
+                 `created`",
+                act_wire_name(&inv.act)
+            ),
+        ));
     }
 
     // Filters — declined, never silently ignored.
