@@ -1,0 +1,37 @@
+title    = "Every MCP tool refuses an argument it does not declare, as a tool error naming the key, and every published inputSchema carries additionalProperties: false"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["mcp"]
+status   = "signal-only"
+body = '''
+What changed: a tool call whose arguments carry a top-level key the tool's published inputSchema
+does not declare is refused before the tool runs, so nothing is read or written. Before, serde
+dropped the key without a word (most input structs flatten the shared act fields, and serde cannot
+deny unknown fields across a flatten): `"expects"` for `"expect"` on update_resource_meta or
+update_resource disarmed the guard, and the write landed unconditionally and answered success.
+
+The refusal is a tool-execution error result (isError: true), never a JSON-RPC error, which rmcp
+logs at warn with its data. Its one text part names the unknown keys (at most 8, each cut to 64
+characters and escaped) and the keys the tool takes, and carries no argument value:
+"update_resource_meta: unknown argument `expects`; nothing was done. update_resource_meta takes:
+...". It carries no structuredContent.
+
+The rule holds for every tool, read and write alike. Each tool's inputSchema in tools/list gains
+top-level additionalProperties: false, so a client that validates arguments against the schema
+refuses the same call before sending it. The declared keys are unchanged.
+
+Who observes it: an MCP caller that sends an argument the tool does not declare. That call was
+answered as if the key were absent; it is now refused. Every first-party caller's arguments are
+declared (the skill text's examples, the MCP e2e suites).
+
+Why behavioral, not shape-breaking: no declared key, type or answer changed. The meaning of an
+undeclared key changed, from ignored to refused. Raw HTTP and the CLI are untouched (clap already
+refuses unknown flags).
+
+Witnesses: crates/temper-mcp/tests/dispatch_witness_test.rs (every tool refuses an undeclared key
+before its body runs; every declared key passes; the misspelled expect never reaches the write);
+tests/e2e/tests/meta_precondition_doors_test.rs (over the deployed transport, a misspelled expect
+on both meta writes changes nothing, records no event and logs no value at warn);
+crates/temper-mcp/src/declarations/tools_list.json (the published schemas). Release relevance:
+signal-only.
+'''
