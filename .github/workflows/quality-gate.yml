@@ -214,6 +214,15 @@ jobs:
       - name: Dependency sources, licenses and bans
         run: cargo deny check sources licenses bans
 
+      # BLOCKING: Vercel builds temper-cloud with the rustc it ships (temper-cloud's rust-version
+      # in the root Cargo.toml), not with this job's stable. A dependency bump whose new version
+      # declares a higher rust-version passes every stable job and then breaks the production
+      # build, as html-to-markdown-rs 3.22.0 did. This reads the lock's normal/build closure of
+      # temper-cloud through `cargo metadata` and compiles nothing. A crate that declares no
+      # rust-version is not caught; the script's header says what else is not.
+      - name: Dependency rust-versions fit temper-cloud's (Vercel's rustc)
+        run: python3 .github/scripts/check-deploy-msrv.py
+
   # The guards' own tests. Every script above is a bash tripwire whose entire value is that it
   # FAILS when the thing it protects is broken — and nothing about a passing tripwire distinguishes
   # "the invariant holds" from "this script can no longer fail". These harnesses feed each guard a
@@ -377,6 +386,9 @@ jobs:
 
       - name: Guard test — check-production-features (no test feature in a shipped graph)
         run: bash .github/scripts/test-check-production-features.sh
+
+      - name: Guard test — check-deploy-msrv (no dependency needs a newer rustc than Vercel's)
+        run: python3 .github/scripts/test-check-deploy-msrv.py
 
       - name: Guard test — audit-mcp-route-auth (router freeze + block-level wiring)
         run: bash .github/scripts/test-audit-mcp-route-auth.sh
