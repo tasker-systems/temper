@@ -209,17 +209,22 @@ async fn setup_act(
         .await
         .expect("read the context"),
     );
-    let owner = json!({
-        context["kb_owner_table"].as_str().expect("owner table"):
-            context["kb_owner_id"].as_str().expect("owner id")
-    });
+    let (owner_table, owner_id) = (
+        context["kb_owner_table"].as_str().expect("owner table"),
+        context["kb_owner_id"].as_str().expect("owner id"),
+    );
+    let owner = json!({ owner_table: owner_id });
+    // A family is its owner and its kind together.
+    let is_family = |s: &&Value, family: &Family| {
+        s["artifact_kind"] == family.kind.as_str()
+            && s["kind_owner_table"] == owner_table
+            && s["kind_owner_id"] == owner_id
+    };
 
     let live = live_shapes(svc, parts, ctx).await;
     let mut declared = Vec::new();
     for family in families {
-        let current = live
-            .iter()
-            .find(|s| s["artifact_kind"] == family.kind.as_str());
+        let current = live.iter().find(|s| is_family(s, family));
         let matches = current.is_some_and(|s| {
             s["schema"]["$id"] == family.schema["$id"] && s["enforcement"] == family.enforcement
         });
@@ -254,7 +259,7 @@ async fn setup_act(
     for family in families {
         let shape = after
             .iter()
-            .find(|s| s["artifact_kind"] == family.kind.as_str())
+            .find(|s| is_family(s, family))
             .unwrap_or_else(|| panic!("{} is live after setup", family.kind));
         assert_eq!(shape["schema"]["$id"], family.schema["$id"], "{shape}");
         assert_eq!(shape["enforcement"], family.enforcement.as_str(), "{shape}");

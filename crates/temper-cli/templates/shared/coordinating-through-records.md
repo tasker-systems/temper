@@ -13,7 +13,7 @@ safely. It holds no opinion on how strict your workflow should be.
 
 | Your workflow's idea | In Temper |
 |---|---|
-| A participant (agent) | The principal that makes each write: the feed's `actor`. Optionally, a resource that carries a `coordination-agent` artifact |
+| A participant (agent) | The principal that makes each write. The feed names its emitting entity as `actor`, one per principal and surface (CLI, MCP). Optionally, a resource that carries a `coordination-agent` artifact |
 | A role | The `persona` authorship field (not a team role, which is an authorization rank) |
 | A work item (step) | **Any resource.** Temper's only contract on it is the claim keys below |
 | A claim | A guarded `open_meta` write on the work item, plus a `coordination-claim` record |
@@ -32,16 +32,17 @@ A shape governs only its home, so every context that runs a coordinated workflow
 families there itself. Nothing is declared centrally. Run this with authoring authority over the
 context.
 
-1. **List what is live:** {% if surface == "cli" %}`temper data-artifact schema list --context <ctx> --format json`{% else %}`list_data_artifact_shapes {"home_type": "context", "home_id": "<ctx>"}`{% endif %}.
-2. **For each family you set up, compare two things** between the live shape (matched on
-   `artifact_kind`) and the one below:
+1. **List what is live:** {% if surface == "cli" %}`temper data-artifact schema list --context <ctx> --format json`{% else %}`list_data_artifact_shapes {"home_type": "context", "home_id": "<ctx id>"}`{% endif %}.
+2. **For each family you set up, compare two things** between the live shape and the one below:
    - the schema's root `$id`;
    - its `enforcement`.
 
-   The families are `coordination-claim` and `coordination-outcome`, plus `coordination-agent` if
+   Match a live shape on `artifact_kind` and on its owner (`kind_owner_table`, `kind_owner_id`):
+   a family is the owner and the kind together. The families are `coordination-claim` and `coordination-outcome`, plus `coordination-agent` if
    you opt in.
 3. **If both match, declare nothing.** If the family is missing, or either differs, declare it:
-   {% if surface == "cli" %}`temper data-artifact schema declare <ctx> --kind <kind> --enforcement <mode> --content @<schema.json>`{% else %}`declare_data_artifact_shape {"home_type": "context", "home_id": "<ctx>", "kind": "<kind>", "schema": {…}, "enforcement": "<mode>"}`{% endif %}.
+   {% if surface == "cli" %}`temper data-artifact schema declare <ctx> --kind <kind> --enforcement <mode> --content @<schema.json>`{% else %}`declare_data_artifact_shape {"home_type": "context", "home_id": "<ctx id>", "kind": "<kind>", "schema": {…}, "enforcement": "<mode>"}`{% endif %}.{% if surface == "cli" %}
+   The file holds only the `schema` member of a block below, not the whole block.{% endif %}
 4. **List again** and confirm that each family's `$id` and enforcement are live.
 
 **Why compare first: declaring is not idempotent.** Every declare, even of an identical schema,
@@ -51,24 +52,25 @@ does three things:
   until the re-check reaches them;
 - it breaks any ask that named the old `shape_id` (`shape_superseded`).
 
-Two people running setup at once may both declare. That leaves a duplicate version, which does no
-harm.
+Two setups running at once can both declare: one declare may then fail, or a duplicate version may
+land. Either way, re-run the setup act; it finds the family live and declares nothing.
 
-**Enforcement is your choice, per family.** The defaults are `enforcing` for claim and outcome, and
-`advisory` for agent. Choose `advisory` anywhere you would rather record a non-conforming commit
+**Enforcement is your choice, per family.** This convention suggests `enforcing` for claim and
+outcome, and `advisory` for agent (a declare's own default is `advisory`). Choose `advisory` anywhere you would rather record a non-conforming commit
 than refuse it.
 
 **A context with no resources in it needs {% if surface == "cli" %}`--kind-owner`{% else %}`kind_owner`{% endif %}.**
 A family name is qualified by an owner, which is defaulted from a resource already in the home. In
 an empty context the declare is refused ("name kind_owner explicitly"). Name the context's owner:
-read it from {% if surface == "cli" %}`temper context show <ctx>`{% else %}`context_read {"view": "get", "id": "<ctx>"}`{% endif %}
+read it from {% if surface == "cli" %}`temper context show <ctx>`{% else %}`context_read {"view": "get", "id": "<ctx id>"}`{% endif %}
 (`kb_owner_table`, `kb_owner_id`) and pass {% if surface == "cli" %}`--kind-owner kb_teams:<id>` (or `kb_profiles:<id>`){% else %}`"kind_owner": {"kb_teams": "<id>"}` (or `{"kb_profiles": "<id>"}`){% endif %}.
 That is the same owner a commit in that context defaults to, so commits find the shape.
 
 **Upgrading.** A compatible change ships a new `$id` (`…/v2`) whose schema only adds optional
 fields. Declaring it folds the old version, older agents' commits still pass, and existing
 artifacts are re-checked in the background. A breaking change, such as a new required field or a
-narrowed type, gets a new family name (`coordination-claim-2`), never a new version.
+narrowed type, is better given a new family name (`coordination-claim-2`) than a new version:
+Temper does not stop you, but an enforcing new version would refuse older agents' commits.
 
 ## The three shapes
 
@@ -121,7 +123,7 @@ UUIDs. Integers stay within 2^53 − 1.
   "required": ["principal"],
   "properties": {
     "principal":    {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-                     "description": "The principal id the change feed names as this agent's actor."},
+                     "description": "The id the change feed names as this agent's actor: its emitting entity, one per principal and surface."},
     "runtime":      {"type": "string", "maxLength": 64},
     "model":        {"type": "string", "maxLength": 256},
     "capabilities": {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 64}}
@@ -137,15 +139,18 @@ UUIDs. Integers stay within 2^53 − 1.
 
 ### Wake from the change feed
 
-- **Read from your saved position:** {% if surface == "cli" %}`temper context changes <ctx> --after <through> --kind property_set --kind resource_created --kind data_artifact_committed`{% else %}`context_read {"view": "changes", "context": "<ctx>", "after": "<through>", "kinds": ["property_set", "resource_created", "data_artifact_committed"]}`{% endif %}.
-  Start with no `after`: you get no entries and a `through` at the present.
+- **Read from your saved position:** {% if surface == "cli" %}`temper context changes <ctx> --after <through> --kind property_set --kind property_unset --kind resource_created --kind resource_departed --kind data_artifact_committed`{% else %}`context_read {"view": "changes", "context": "<ctx>", "after": "<through>", "kinds": ["property_set", "property_unset", "resource_created", "resource_departed", "data_artifact_committed"]}`{% endif %}.
+  Start with no `after`: you get no entries and a `through` at the present. Keep `property_unset`:
+  clearing a key (a reclaim, a repair) fires it, not `property_set`, and that is what makes an item
+  claimable again.
 - **Keep paging while `has_more`.** One read scans a bounded slice of the ledger, so a short page,
   even an empty one, with `has_more: true` is not the end.
 - **Save the `through` of each page you have handled.** It is the answer's own `through`, never a
   position read after you looked at the subjects. Handling is at-least-once, and every pattern
   below is safe to repeat.
-- **An entry is a pointer, never content.** It carries kind, subject, actor, time and `act`. On a
-  relevant entry, re-read the subject.
+- **An entry is a pointer, never content.** It carries its position, kind, subject (and `block` for
+  a content-block change), actor, time and `act`, and never authorship. On a relevant entry,
+  re-read the subject.
 - **Re-query on a timer as well.** The feed is a change hint, not a guarantee, and it never
   announces an admin act. So periodically re-read the work items you hold, and drop any your read
   now refuses. Re-read your candidate work even when nothing woke you.
@@ -155,8 +160,10 @@ UUIDs. Integers stay within 2^53 − 1.
 
 ### Find claimable work
 
-No query returns resources by an arbitrary `open_meta` value, and none can select "no claim yet".
-So **your workflow keeps a positive marker in `tags`**, such as `claimable`, and agents list by it:
+`list_resources` filters by `tags`, not by other `open_meta` keys. `run_query` can *select*
+resources by any key, but it cannot return a selection's rows: that stage is refused as not
+returnable, and every act that returns rows needs a text question. So **your workflow keeps a
+positive marker in `tags`**, such as `claimable`, and agents list by it:
 {% if surface == "cli" %}`temper resource list --context <ctx> --tag claimable --with open-meta`{% else %}`list_resources {"context_ref": "<ctx>", "tags": ["claimable"]}`{% endif %}.
 Several tags narrow the list (AND), and the rows carry `open_meta`, so you can see `claim_id`.
 
@@ -164,6 +171,8 @@ Several tags narrow the list (AND), and the rows carry `open_meta`, so you can s
   {% if surface == "cli" %}`temper resource update <work-item> --open-meta-add '{"tags": ["claimable"]}'`{% else %}`update_resource {"id": "<work item>", "open_meta_add": {"tags": ["claimable"]}}`{% endif %},
   which unions it with the tags already there. To remove it, restate the whole `tags` list in
   `open_meta`. That write replaces every tag, so in a workflow context keep `tags` to your markers.
+  It can also drop a tag added at the same moment. Guarding it on the claim
+  (`expect: {"open": {"claim_id": "<C>"}}`) at least ties the removal to the holder.
 - **Tags are full-text indexed.** A marker makes work items rank in searches, which is one more
   reason to keep the workflow in its own context.
 - **A stale hit is harmless.** A listed item may already be claimed. The guarded claim decides, so
@@ -238,12 +247,14 @@ hold. `message` names keys only, never values. Branch on `structuredContent`, ne
 | `current` for `claim_id` | Meaning | Do |
 |---|---|---|
 | Your own `C` | **You won.** An earlier attempt of yours landed and its answer was lost, so this is the retry meeting your own write | Continue as the holder |
-| Any other value | You lost | Write nothing more for this item |
+| Any other value | You do not hold the claim | Whatever your workflow does for a lost claim |
 
-**This check is mandatory.** The MCP relay retries a write once on a server error or a network
-failure. So a write that committed can come back refused, with your own value as `current`. A
-caller who cannot read the work item never gets this refusal at all: it gets the same not-found
-answer a read would give.
+**This check is mandatory.** {% if surface == "cli" %}A write you retry yourself after a lost answer
+(a timeout, a dropped connection){% else %}The MCP relay retries a write once on a server error or a
+network failure, so a write{% endif %} can come back refused with your own value as `current`, because
+its first attempt committed. A caller who cannot read the work item never gets this refusal or any
+value: it is refused before any expectation is judged, as forbidden or as the not-found a read
+gives.
 
 The refusal carries only the value stored under each guarded key. It never says who wrote it or
 when.
@@ -275,7 +286,8 @@ values. So:
   After a reclaim, the old holder's guarded writes are refused.
 - **Before writing an outcome**, a holder can confirm it still holds the claim with one more guarded
   write, such as a final heartbeat. A guarded write must write something: an `expect` on a write
-  that sets nothing is refused as malformed. What happens to an outcome written after losing the
+  that sets nothing is refused as malformed. This narrows the window but does not make the commit
+  conditional: a commit takes no `expect`. What happens to an outcome written after losing the
   claim is your workflow's rule.
 - **The same retry rule applies to all of these.** A retried heartbeat or reclaim can come back
   refused, showing the state its own first attempt produced. Compare `current` with what you meant
@@ -297,8 +309,8 @@ values. So:
   Then the work item's state and any refusal tell a reader only that the item is claimed.
 - **Never describe a refusal as telling the loser who holds the claim.** It returns the stored
   value, and nothing about who wrote it.
-- **The feed still discloses the claimant.** Every reader of the context sees each write's `actor`
-  and time, and the authorship fields ride the same writes. An opaque value keeps identity out of
+- **The feed still discloses the claimant.** Every reader of the context sees each write's `actor`,
+  time and `act`. An opaque value keeps identity out of
   the item's state and out of refusals. It does **not** hide who claimed from anyone who can read
   the context.
 - **If you store an identity anyway**, such as an agent resource in the claim record's `agent` or a
@@ -311,7 +323,8 @@ Temper stores no flow state beyond these records, so recovery needs no extra mec
 - **Repair** is an ordinary guarded write by someone who can modify the work item. To free a stuck
   claim, write `claim_id: null, claimed_at: null`, expecting `claim_id` to equal the stuck value.
   If it is refused, the flow moved while you looked: re-read and decide again. Send a
-  `correlation_id` and a `persona` such as `operator`, so the repair reads as one in the feed.
+  `correlation_id`, so the repair's writes share one `act` in the feed, and a `persona` such as
+  `operator`, which the ledger records with the write (the feed does not show it).
 - **Audit** with what already exists:
   - the context's change feed gives the order, actor and act of every write to the work item;
   - {% if surface == "cli" %}`temper data-artifact list <work-item>`{% else %}`list_data_artifacts`{% endif %} on the work item gives every claim and outcome record, including those of reclaimed attempts.
