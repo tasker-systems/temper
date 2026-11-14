@@ -1042,6 +1042,12 @@ async fn a_scrubbed_value_never_surfaces(pool: PgPool) {
             json!("hush-hush"),
             "the scrubbed value never comes back"
         );
+        if guess != "hush-hush" {
+            assert!(
+                !serde_json::to_string(&f).unwrap().contains("hush-hush"),
+                "nothing the act removed appears anywhere in the refusal"
+            );
+        }
     }
     // And the guard on what the read shows holds.
     be.update_resource(patch_open(
