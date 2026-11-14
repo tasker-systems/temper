@@ -27,7 +27,7 @@
     "@xmldom/xmldom": "^0.9.10",
     "docx": "^9.15.3",
     "pdf-lib": "^1.17.1",
-    "postgres": "^4.1.0",
+    "postgres": "^4.1.1",
     "typescript": "^5.8",
     "vitest": "^4.1.12",
     "xml-crypto": "^6.4.0"
