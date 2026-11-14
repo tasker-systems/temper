@@ -2054,3 +2054,85 @@ async fn the_counts_inherit_the_floor_and_the_home_check_from_the_counted_set(po
         "the bite: without the counted set's home check the outsider counts under the shape"
     );
 }
+
+// ── list-resources-with asks the same asks ──────────────────────────────────────────────────────
+
+/// The compiled statement for one returned `list-resources-with` stage `rows` asking `asks` of the
+/// world's shape, validated and compiled as [`compiled_plan`] does its selection.
+fn compiled_list_plan(w: &World, asks: Vec<ArtifactAsk>) -> CompiledQuery {
+    let loaded = LoadedShape {
+        shape_id: ShapeId::from(w.shape),
+        shape_version: 1,
+        home_anchor_table: "kb_contexts".to_string(),
+        home_anchor_id: w.home.id,
+        kind_owner_table: "kb_profiles".to_string(),
+        kind_owner_id: w.owner.uuid(),
+        artifact_kind: w.family.1.to_string(),
+        schema: shape_schema(),
+    };
+    let shapes: ShapeContext = [(loaded.shape_id, ShapeLoad::Loaded(loaded))]
+        .into_iter()
+        .collect();
+    let rows = StageName::parse("rows").unwrap();
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: rows.clone(),
+                with: vec![],
+            }],
+        },
+        stages: vec![StageNode::Act(ActInvocation {
+            order: None,
+            name: rows,
+            act: ActName::ListResourcesWith,
+            intention: None,
+            inputs: vec![],
+            terms: Default::default(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+            artifact_filter: asks,
+        })],
+    };
+    let v = validate(&c, &mut shapes.session()).expect("the ask lies inside its shape");
+    compile(&v, w.owner).expect("the plan compiles")
+}
+
+/// **A list stage's asks run against Postgres as the selection's do**: it returns exactly the
+/// resources the selection selects for the same ask, counts them in `total`, and its population
+/// row — the trace's `artifact_asks` — equals the selection's for the same ask, figure for figure.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_list_stage_asking_artifacts_answers_and_counts_as_the_selection_does(pool: PgPool) {
+    let w = world(&pool).await;
+    let r1 = resource(&pool, &w, "r1-matches").await;
+    let r2 = resource(&pool, &w, "r2-does-not").await;
+    resource(&pool, &w, "r3-has-none").await;
+    commit(&pool, &w, r1, json!({ "unit": "ms", "count": 20 })).await;
+    commit(&pool, &w, r2, json!({ "unit": "s", "count": 5 })).await;
+    let ask = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
+
+    let listed = execute(&pool, &compiled_list_plan(&w, vec![ask.clone()]))
+        .await
+        .expect("the list statement runs");
+    let selected = executed(&pool, &w, vec![ask]).await;
+
+    let hits: BTreeSet<Uuid> = listed.hits_for("rows").into_iter().map(|h| h.id).collect();
+    assert_eq!(hits, ids(&[r1]), "the list returns what the ask selects");
+    let tally = listed.tally("rows").expect("the list stage is tallied");
+    assert_eq!((tally.produced, tally.total), (1, Some(1)));
+    assert_eq!(produced(&selected, "sel"), 1, "and so does the selection");
+
+    assert_eq!(
+        listed.populations.len(),
+        1,
+        "one population row for the one ask"
+    );
+    assert_eq!(selected.populations.len(), 1);
+    let (l, s) = (&listed.populations[0], &selected.populations[0]);
+    assert_eq!((l.stage.as_str(), l.position), ("rows", 0));
+    assert_eq!(population_by_state(l), population_by_state(s));
+    assert_eq!(
+        (l.in_force_shape_id, l.in_force_shape_version),
+        (s.in_force_shape_id, s.in_force_shape_version)
+    );
+}

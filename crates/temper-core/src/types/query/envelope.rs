@@ -263,6 +263,10 @@ pub struct StageResult {
     /// It is counted in the statement, so it is not reduced when hydration drops a row that
     /// stopped being visible between the two statements: a page can carry `total: 12` with one row
     /// fewer than expected, which discloses nothing.
+    ///
+    /// **`disposition` describes the PAGE and `total` the match set.** A page past the end, or at
+    /// `limit: 0`, is `empty` beside a `total` above zero: nothing came back on this page, and that
+    /// many matched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<i64>,
     /// The APPLIED value of every admitted term, beside what was asked. Generalizes the

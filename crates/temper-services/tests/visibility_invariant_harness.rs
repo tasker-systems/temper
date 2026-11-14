@@ -1501,6 +1501,8 @@ async fn list_total_slice(pool: &PgPool, w: &World) -> Vec<Violation> {
         StageName, StageNode,
     };
 
+    use temper_core::types::query::{IdKind, IdSet, StageInput, StageRelation};
+
     let stage = |name: &str, act: ActName| {
         StageNode::Act(ActInvocation {
             name: StageName::parse(name).unwrap(),
@@ -1580,6 +1582,107 @@ async fn list_total_slice(pool: &PgPool, w: &World) -> Vec<Violation> {
                 walked.len()
             ));
         }
+    }
+
+    // **Through a caller's BOUND, which is where an existence oracle would live.** A list bounded
+    // by every resource in the world — readable or not — must count exactly the readable ones, and
+    // report the rest as `input_unusable`. And a bound of ONE unreadable id must answer exactly as a
+    // bound of one id that names nothing: `total: 0`, one unusable. A count taken over the bound
+    // rather than over the core's verdict would answer 1 for the first and 0 for the second.
+    let bounded = |ids: Vec<Uuid>| {
+        let rows = StageName::parse("rows").unwrap();
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: rows.clone(),
+                    with: vec![],
+                }],
+            },
+            stages: vec![StageNode::Act(ActInvocation {
+                name: rows,
+                act: ActName::ListResourcesWith,
+                intention: None,
+                inputs: vec![StageInput::Caller {
+                    relation: StageRelation::Bound,
+                    ids: IdSet {
+                        kind: IdKind::Resource,
+                        provenance: None,
+                        ids,
+                    },
+                }],
+                terms: [(BoundTerm::Limit, 1)].into_iter().collect(),
+                order: None,
+                resource_filter: None,
+                edge_filter: None,
+                properties: vec![],
+                artifact_filter: vec![],
+            })],
+        };
+        validate(&c, &mut ShapeContext::empty().session()).expect("the plan is valid")
+    };
+    let mut probed_unreadable = false;
+    for (p_idx, &profile) in w.profiles.iter().enumerate() {
+        let who = PROFILE_HANDLES[p_idx];
+        let principal = temper_core::types::ids::ProfileId::from(profile);
+        let visible: Vec<Uuid> = match sqlx::query_scalar(
+            "SELECT resource_id FROM query_list_resources_with($1, NULL::text[], NULL::text[], \
+             NULL::jsonb, NULL::text, NULL::text, NULL::uuid, NULL::text, NULL::text, \
+             NULL::jsonb, NULL::varchar, NULL::uuid, NULL::jsonb, NULL::uuid[])",
+        )
+        .bind(profile)
+        .fetch_all(pool)
+        .await
+        {
+            Ok(ids) => ids,
+            Err(e) => {
+                violations.push(format!("I3.total: the gated list failed for {who}: {e}"));
+                continue;
+            }
+        };
+        let answer = |ids: Vec<Uuid>| {
+            let v = bounded(ids);
+            async move {
+                let r = temper_services::backend::query_read::run_composition(pool, principal, &v)
+                    .await
+                    .map_err(|e| format!("{e:?}"))?;
+                let s = &r.returned[&StageName::parse("rows").unwrap()];
+                Ok::<_, String>((s.total, s.input_unusable))
+            }
+        };
+        let readable = w.resources.iter().filter(|r| visible.contains(r)).count() as i64;
+        let unreadable: Vec<Uuid> = w
+            .resources
+            .iter()
+            .filter(|r| !visible.contains(r))
+            .copied()
+            .collect();
+        match answer(w.resources.clone()).await {
+            Ok(got) if got == (Some(readable), unreadable.len() as i64) => {}
+            Ok(got) => violations.push(format!(
+                "I3.total: list bounded by the whole world[{who}] answered (total, unusable) = \
+                 {got:?}; the readable count is {readable} and {} are unreadable",
+                unreadable.len()
+            )),
+            Err(e) => violations.push(format!("I3.total: bounded list failed for {who}: {e}")),
+        }
+        if let Some(&hidden) = unreadable.first() {
+            probed_unreadable = true;
+            let hidden_answer = answer(vec![hidden]).await;
+            let absent_answer = answer(vec![Uuid::now_v7()]).await;
+            if hidden_answer != absent_answer || hidden_answer != Ok((Some(0), 1)) {
+                violations.push(format!(
+                    "I3.total: a bound of one unreadable id[{who}] answered {hidden_answer:?} and \
+                     one naming nothing answered {absent_answer:?} — an existence oracle"
+                ));
+            }
+        }
+    }
+    if !probed_unreadable {
+        violations.push(
+            "I3.total: no profile had an unreadable resource to bound by, so the oracle probe is \
+             vacuous"
+                .to_string(),
+        );
     }
     if !hid_some {
         violations.push(

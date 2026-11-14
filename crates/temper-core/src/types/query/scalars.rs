@@ -27,6 +27,11 @@ use serde::{Deserialize, Serialize};
 /// **So `Complete` means "ask no further", not "you hold the whole set".** The two coincide exactly
 /// when no offset was applied, which is the common case and the reason the loose reading survived
 /// this long.
+///
+/// `[2026-11-14]` **The one exception is an act that counts its match set in the same statement**,
+/// `list-resources-with`, whose stage carries `total`. There the extent is exact from it:
+/// `Partial` iff `offset + produced < total`. No second query is paid, so the reason above for not
+/// folding the offset in does not apply.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

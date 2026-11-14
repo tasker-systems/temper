@@ -32,7 +32,8 @@ pub enum ActName {
     FindAboutWithin,
     /// *I can say what these things ARE; I have no question about what they mean.*
     ///
-    /// The only act with no intention — a pure selection. It narrows by what is known about a
+    /// An act with no intention — a pure selection (`list-resources-with`, which returns its rows,
+    /// asks none either). It narrows by what is known about a
     /// resource and orders nothing, so it SELECTS without SCORING, which is the distinction
     /// [`ActDeclaration::orders_by`] carries and which the registry's invariants had folded
     /// together under `produces.is_some()` until this act arrived.

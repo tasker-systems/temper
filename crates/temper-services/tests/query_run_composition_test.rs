@@ -1546,6 +1546,45 @@ mod list_resources_with {
                 "{order:?}: the wire order"
             );
         }
+        // A page SMALLER than the match set: `asc` must return the oldest rows, which only the SQL
+        // direction can deliver — the assembler's re-sort alone would reverse the newest two.
+        let oldest = by_created(&pool, &made, SortOrder::Asc).await;
+        let r = run_composition(
+            &pool,
+            owner,
+            &list(
+                home,
+                ready_filter(),
+                &[(BoundTerm::Limit, 2)],
+                Some(SortOrder::Asc),
+                vec![],
+            ),
+        )
+        .await
+        .expect("runs");
+        assert_eq!(
+            ids(&r),
+            oldest[..2].to_vec(),
+            "asc pages from the oldest end"
+        );
+        let r = run_composition(
+            &pool,
+            owner,
+            &list(
+                home,
+                ready_filter(),
+                &[(BoundTerm::Limit, 2), (BoundTerm::Offset, 2)],
+                Some(SortOrder::Asc),
+                vec![],
+            ),
+        )
+        .await
+        .expect("runs");
+        assert_eq!(
+            ids(&r),
+            oldest[2..4].to_vec(),
+            "and walks toward the newest"
+        );
     }
 
     /// **`total` is the unpaged match count on every page** — at `offset > 0`, past the end and at
@@ -1599,6 +1638,14 @@ mod list_resources_with {
             assert_eq!(stage.total, Some(4), "{terms:?}: the unpaged count");
             assert_eq!(ids(&r).len(), produced, "{terms:?}");
             assert_eq!(stage.extent, extent, "{terms:?}");
+            // `disposition` describes the page: an empty page beside a positive `total` is
+            // `empty`, and the `total` says how many matched.
+            let page = if produced > 0 {
+                StageDisposition::Answered
+            } else {
+                StageDisposition::Empty
+            };
+            assert_eq!(stage.disposition, page, "{terms:?}");
             let traced = r
                 .trace
                 .stages

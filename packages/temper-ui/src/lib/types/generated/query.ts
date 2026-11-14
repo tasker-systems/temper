@@ -550,6 +550,11 @@ properties?: Array<PropertyPredicate>, };
  * **So `Complete` means "ask no further", not "you hold the whole set".** The two coincide exactly
  * when no offset was applied, which is the common case and the reason the loose reading survived
  * this long.
+ *
+ * `[2026-11-14]` **The one exception is an act that counts its match set in the same statement**,
+ * `list-resources-with`, whose stage carries `total`. There the extent is exact from it:
+ * `Partial` iff `offset + produced < total`. No second query is paid, so the reason above for not
+ * folding the offset in does not apply.
  */
 export type Extent = { "extent": "complete" } | { "extent": "partial" } | { "extent": "indeterminate", reason: string, };
 
@@ -1302,6 +1307,10 @@ extent: Extent,
  * It is counted in the statement, so it is not reduced when hydration drops a row that
  * stopped being visible between the two statements: a page can carry `total: 12` with one row
  * fewer than expected, which discloses nothing.
+ *
+ * **`disposition` describes the PAGE and `total` the match set.** A page past the end, or at
+ * `limit: 0`, is `empty` beside a `total` above zero: nothing came back on this page, and that
+ * many matched.
  */
 total?: bigint | null, 
 /**

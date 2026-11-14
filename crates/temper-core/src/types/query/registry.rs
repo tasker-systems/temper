@@ -411,7 +411,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
                         not a relevance: higher is newer, never better. Rows arrive in the \
                         direction the stage's `order` names (newest first by default); ties on the \
                         instant break by id ascending in either direction. The stage's `total` \
-                        counts every visible match, unpaged"
+                        counts every visible match, unpaged. The row's legacy `score` is this \
+                        value rendered as f32, about two minutes coarse at today's epoch, so it \
+                        is the order and never the instant: read `resource.created` for that"
                         .to_string(),
                 scale: QuantityScale::Unbounded,
             }),
