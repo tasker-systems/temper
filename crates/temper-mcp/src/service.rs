@@ -1202,10 +1202,12 @@ fn advertise_blob_tools(tools: Vec<rmcp::model::Tool>, blob_ready: bool) -> Vec<
 /// surface's cache policy (see `cache_policy`) — MCP 2026-07-28 clients reject a list
 /// result without `ttlMs` and `cacheScope`.
 pub(crate) fn list_tools_result(blob_ready: bool) -> ListToolsResult {
-    ListToolsResult::with_all_items(advertise_blob_tools(
-        TemperMcpService::tool_router().list_all(),
-        blob_ready,
-    ))
+    ListToolsResult::with_all_items(
+        advertise_blob_tools(TemperMcpService::tool_router().list_all(), blob_ready)
+            .into_iter()
+            .map(crate::arguments::close_schema)
+            .collect(),
+    )
     .with_ttl_ms(crate::cache_policy::DEPLOYMENT_SURFACE_TTL_MS)
     .with_cache_scope(crate::cache_policy::DEPLOYMENT_SURFACE_SCOPE)
 }
@@ -1241,6 +1243,19 @@ fn fill_correlation_id(request: &mut rmcp::model::CallToolRequestParams, id: uui
     }
 }
 
+/// The refusal for a call carrying an argument its tool does not declare, or `None` when every
+/// argument is declared. An unknown tool is left to the router, which answers "tool not found".
+fn refuse_undeclared_arguments(
+    request: &rmcp::model::CallToolRequestParams,
+) -> Option<rmcp::model::CallToolResult> {
+    let arguments = request.arguments.as_ref()?;
+    let router = TemperMcpService::tool_router();
+    let tool = router.get(request.name.as_ref())?;
+    let unknown = crate::arguments::undeclared(&tool.input_schema, arguments);
+    (!unknown.is_empty())
+        .then(|| crate::arguments::refusal(request.name.as_ref(), &tool.input_schema, &unknown))
+}
+
 #[tool_handler]
 impl rmcp::ServerHandler for TemperMcpService {
     fn get_info(&self) -> ServerConfig {
@@ -1272,7 +1287,9 @@ impl rmcp::ServerHandler for TemperMcpService {
     /// - the identity is resolved ONCE here and carried to `relay_client` in the parts, so a
     ///   seam that would answer differently on a second consultation cannot split one call;
     /// - the identity's `correlation_id`, if any, fills the call's `correlation_id` argument
-    ///   when the tool declares one and the agent sent none (`fill_correlation_id`).
+    ///   when the tool declares one and the agent sent none (`fill_correlation_id`);
+    /// - an argument the tool does not declare refuses the call before dispatch, as a tool error
+    ///   naming the key (`refuse_undeclared_arguments`; the rule is the `arguments` module).
     async fn call_tool(
         &self,
         mut request: rmcp::model::CallToolRequestParams,
@@ -1290,6 +1307,9 @@ impl rmcp::ServerHandler for TemperMcpService {
         // The tools read the parts from the context: replace them with the resolved ones (or
         // supply empty ones when the transport carried none).
         context.extensions.insert(parts);
+        if let Some(refused) = refuse_undeclared_arguments(&request) {
+            return Ok(refused.into());
+        }
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         Self::tool_router().call(tcc).await
     }

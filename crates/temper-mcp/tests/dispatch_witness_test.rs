@@ -128,3 +128,158 @@ async fn a_known_tool_is_dispatched_to_its_wrapper_not_the_default_handler() {
          dispatch stopped before the wrapper (do not weaken this to a code-only check)",
     );
 }
+
+// ── Undeclared arguments ────────────────────────────────────────────────────────────────────────
+
+/// Dispatch `name` with `arguments` through `ServerHandler::call_tool` and return the answer.
+async fn dispatch(
+    service: TemperMcpService,
+    name: String,
+    arguments: serde_json::Value,
+) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+    let (server_io, _client_io) = tokio::io::duplex(4096);
+    let running = serve_directly(service.clone(), server_io, None);
+    let ctx = RequestContext::new(RequestId::Number(1), running.peer().clone());
+    let request = CallToolRequestParams::new(name)
+        .with_arguments(arguments.as_object().expect("object arguments").clone());
+    ServerHandler::call_tool(&service, request, ctx).await
+}
+
+/// Every tool the service declares, by name: the shipped fixture, held equal to the router by
+/// `declarations_test`.
+fn advertised_tools() -> Vec<String> {
+    let list: serde_json::Value =
+        serde_json::from_str(temper_mcp::declarations::TOOLS_LIST).expect("the fixture parses");
+    list["tools"]
+        .as_array()
+        .expect("a tool array")
+        .iter()
+        .map(|t| t["name"].as_str().expect("a name").to_string())
+        .collect()
+}
+
+/// The text of a tool-execution error result, after asserting it is one.
+fn refusal_text(
+    name: &str,
+    answer: Result<rmcp::model::CallToolResponse, rmcp::ErrorData>,
+) -> String {
+    let result = match answer {
+        Ok(rmcp::model::CallToolResponse::Complete(result)) => result,
+        other => panic!("`{name}`: an undeclared argument must answer a tool result: {other:?}"),
+    };
+    assert_eq!(result.is_error, Some(true), "`{name}`: an error result");
+    result.content[0]
+        .as_text()
+        .expect("a text part")
+        .text
+        .clone()
+}
+
+/// **Every tool refuses an argument it does not declare, before its body runs.** The refusal is a
+/// tool-execution error result (never a JSON-RPC error, which rmcp logs at `warn`) naming the key,
+/// and the dark door's sentence never appears: the tool body was not reached, so nothing can have
+/// been written.
+///
+/// FAILS IF the shared gate in `call_tool` is removed, or a tool's schema stops being the set the
+/// gate reads.
+#[tokio::test]
+async fn every_tool_refuses_an_undeclared_argument_before_its_body_runs() {
+    let tools = advertised_tools();
+    assert!(tools.len() >= 40, "found only {} tools", tools.len());
+    for name in tools {
+        let answer = dispatch(
+            service_for_dispatch_witness(),
+            name.clone(),
+            serde_json::json!({"zz_undeclared_argument": "a-value-never-echoed"}),
+        )
+        .await;
+        let text = refusal_text(&name, answer);
+        assert!(
+            text.contains("unknown argument `zz_undeclared_argument`"),
+            "`{name}`: the refusal names the key: {text}"
+        );
+        assert!(
+            !text.contains("a-value-never-echoed"),
+            "`{name}`: no value: {text}"
+        );
+        assert_ne!(text, UNAVAILABLE, "`{name}`: the body never ran");
+    }
+}
+
+/// **Every declared argument passes the gate.** Each tool is called with every key its published
+/// schema declares (each `null`): the call reaches the tool (its body's sentence, or serde's own
+/// refusal of a value), never the undeclared-argument refusal.
+#[tokio::test]
+async fn every_declared_argument_reaches_its_tool() {
+    let list: serde_json::Value =
+        serde_json::from_str(temper_mcp::declarations::TOOLS_LIST).expect("the fixture parses");
+    for tool in list["tools"].as_array().expect("a tool array") {
+        let name = tool["name"].as_str().expect("a name").to_string();
+        let declared: serde_json::Map<String, serde_json::Value> = tool["inputSchema"]
+            ["properties"]
+            .as_object()
+            .expect("properties")
+            .keys()
+            .map(|k| (k.clone(), serde_json::Value::Null))
+            .collect();
+        assert!(!declared.is_empty(), "`{name}` declares arguments");
+        let answer = dispatch(
+            service_for_dispatch_witness(),
+            name.clone(),
+            serde_json::Value::Object(declared),
+        )
+        .await;
+        if let Ok(rmcp::model::CallToolResponse::Complete(result)) = &answer {
+            let text = result.content[0]
+                .as_text()
+                .map(|t| t.text.as_str())
+                .unwrap_or("");
+            assert!(
+                !text.contains("unknown argument"),
+                "`{name}`: no declared argument is refused: {text}"
+            );
+        }
+    }
+}
+
+/// **The claim case.** `update_resource_meta` with `expects` (for `expect`) is refused and never
+/// reaches the write; the same call spelled right reaches it.
+#[tokio::test]
+async fn a_misspelled_expect_is_refused_and_the_write_never_runs() {
+    let call = serde_json::json!({
+        "id": "00000000-0000-0000-0000-000000000000",
+        "managed_meta": {},
+        "open_meta": {"claim_id": "mine"},
+    });
+    let mut misspelled = call.clone();
+    misspelled["expects"] = serde_json::json!({"open": {"claim_id": null}});
+    let text = refusal_text(
+        "update_resource_meta",
+        dispatch(
+            service_for_dispatch_witness(),
+            "update_resource_meta".to_string(),
+            misspelled,
+        )
+        .await,
+    );
+    assert!(text.contains("unknown argument `expects`"), "{text}");
+    assert!(
+        text.contains("`expect`"),
+        "the refusal lists the declared spelling: {text}"
+    );
+    assert!(!text.contains("mine"), "no value: {text}");
+
+    let mut spelled_right = call;
+    spelled_right["expect"] = serde_json::json!({"open": {"claim_id": null}});
+    let err = dispatch(
+        service_for_dispatch_witness(),
+        "update_resource_meta".to_string(),
+        spelled_right,
+    )
+    .await
+    .expect_err("the dark door answers its sentence");
+    assert_eq!(
+        err.message, UNAVAILABLE,
+        "the declared call reached the write"
+    );
+}

@@ -61,6 +61,14 @@ transport.
 `TemperMcpService::unavailable(blob_door, refusal)` builds a service with no relay. Its relayed
 tools answer the host's own refusal sentence, which suits a host that is not configured yet.
 
+## Arguments a tool does not declare
+
+A tool call may carry only the arguments its published `inputSchema` declares, and every schema says
+so with `additionalProperties: false`. A call with any other top-level argument is refused before
+the tool runs, so nothing is read or written. The refusal is a tool error result (`isError: true`)
+whose text names the unknown keys and the keys the tool takes, never an argument's value. The rule
+holds for every tool.
+
 ## Declarations are fixtures
 
 The crate ships its `tools/list` answer as a fixture, `temper_mcp::declarations::TOOLS_LIST`. Each
