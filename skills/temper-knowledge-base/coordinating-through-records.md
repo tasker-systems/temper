@@ -212,8 +212,9 @@ write's own transaction, so only one write can find `claim_id` absent. A guard c
 history. A value that changed and changed back would pass, but a fresh `C` per attempt means that
 cannot happen on `claim_id`.
 
-**Spell `expect` exactly.** A misspelled top-level argument (`expects`) is currently ignored
-without an error, and the write lands unguarded.
+**A misspelled argument is refused, never ignored.** A call carrying an argument its tool does not
+declare (`expects` for `expect`) is an error result (`isError: true`) that names the unknown key
+and lists the ones the tool takes. Nothing is written, so correct the spelling and send it again.
 
 **Spell the guarded key exactly too.** A misspelled key inside the expectation reads as absent, so
 an absence guard on it always holds.
