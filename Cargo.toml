@@ -1,5 +1,8 @@
 [workspace]
-resolver = "2"
+# Resolver 3 is resolver 2 plus MSRV-aware resolution: `cargo update` prefers dependency versions
+# whose `rust-version` the workspace's members can build with. It keys off the `rust-version`
+# declared on `temper-cloud` below.
+resolver = "3"
 members = ["crates/*", "tests/e2e"]
 
 # Shared package metadata. `version` is the workspace's lockstep version: every
@@ -36,6 +39,11 @@ temperkb-workflow = { path = "crates/temper-workflow", version = "0.6.4" }
 name = "temper-cloud"
 version.workspace = true
 edition.workspace = true
+# Vercel's `@vercel/rust` builder compiles this package with the rustc it ships (1.92.0, at
+# /rust/bin; see scripts/vercel-build.sh), not the toolchain CI and local builds use. Declaring
+# it here makes the resolver (see `resolver` above) avoid dependency versions that need a newer
+# rustc. Raise it only once Vercel's builder ships the newer rustc.
+rust-version = "1.92"
 description = "Vercel deployment adapter for temper-api"
 publish = false
 
