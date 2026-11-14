@@ -153,6 +153,23 @@ UUIDs. Integers stay within 2^53 − 1.
   transaction anywhere delays wakes. The delay never skips an entry, and the timed re-query
   bounds it.
 
+### Find claimable work
+
+No query returns resources by an arbitrary `open_meta` value, and none can select "no claim yet".
+So **your workflow keeps a positive marker in `tags`**, such as `claimable`, and agents list by it:
+`list_resources {"context_ref": "<ctx>", "tags": ["claimable"]}`.
+Several tags narrow the list (AND), and the rows carry `open_meta`, so you can see `claim_id`.
+
+- **The marker is your workflow's to maintain, not Temper's.** Add it with
+  `update_resource {"id": "<work item>", "open_meta_add": {"tags": ["claimable"]}}`,
+  which unions it with the tags already there. To remove it, restate the whole `tags` list in
+  `open_meta`. That write replaces every tag, so in a workflow context keep `tags` to your markers.
+- **Tags are full-text indexed.** A marker makes work items rank in searches, which is one more
+  reason to keep the workflow in its own context.
+- **A stale hit is harmless.** A listed item may already be claimed. The guarded claim decides, so
+  a claimant that loses simply moves on.
+- **Re-read your candidates periodically** anyway, as the feed section says.
+
 ### Claim with `expect`
 
 **The convention's default claim keys** are two `open_meta` keys on the work item: `claim_id`

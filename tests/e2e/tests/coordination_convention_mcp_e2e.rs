@@ -818,3 +818,59 @@ async fn a_guarded_reclaim_makes_the_old_holders_heartbeat_fail(pool: PgPool) {
         Verdict::Held
     );
 }
+
+// ── discovery ────────────────────────────────────────────────────────────────────────────────────
+
+/// **A workflow-maintained tag finds claimable work, and each row shows its claim.** The workflow
+/// adds a `claimable` marker with `open_meta_add`; `list_resources` by context and tag returns the
+/// marked item and not an unmarked one, and the row's `open_meta` carries `claim_id` once claimed.
+/// A claimed item can still be listed (a stale hit): the guarded claim decides, so a second
+/// claimant loses.
+///
+/// FAILS IF the tag filter or the row's `open_meta` stops serving the pattern the skill teaches.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_workflow_tag_lists_claimable_work_with_its_claim(pool: PgPool) {
+    let (app, svc, parts) = harness(pool).await;
+    let ctx = default_context_id(&app.pool).await;
+    let marked = work_item(&svc, &parts, ctx).await;
+    let unmarked = work_item(&svc, &parts, ctx).await;
+    one_text(
+        &temper_mcp::tools::resources::update_resource(
+            &svc,
+            &parts,
+            input(json!({"id": marked, "open_meta_add": {"tags": ["claimable"]}})),
+        )
+        .await
+        .expect("mark the item"),
+    );
+    let c = mint();
+    assert_eq!(
+        verdict(&claim(&svc, &parts, &marked, &c).await, &c),
+        Verdict::Held
+    );
+
+    let listed = one_text(
+        &temper_mcp::tools::resources::list_resources(
+            &svc,
+            &parts,
+            input(json!({"context_ref": ctx.to_string(), "tags": ["claimable"]})),
+        )
+        .await
+        .expect("list by tag"),
+    );
+    let rows = listed["rows"].as_array().expect("rows");
+    let ids: Vec<&str> = rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(
+        ids,
+        [marked.as_str()],
+        "only the marked item, never {unmarked}: {listed}"
+    );
+    assert_eq!(rows[0]["open_meta"]["claim_id"], json!(c), "{listed}");
+
+    let late = mint();
+    assert_eq!(
+        verdict(&claim(&svc, &parts, &marked, &late).await, &late),
+        Verdict::Lost(json!(c)),
+        "a stale hit loses to the claim already there"
+    );
+}
