@@ -79,6 +79,7 @@ entry for this project: offer `/temper init` (see `project-setup.md`).
 | `session-lifecycle.md` | Starting, checkpointing or ending a session, or handing off to a successor |
 | `implementation-grounding.md` | Writing a plan, writing code from one, briefing a subagent, or deciding what review a change owes before its PR |
 | `data-artifacts.md` | Storing structured data (JSON, measurements, query plans) a later session must get back whole |
+| `coordinating-through-records.md` | Agents sharing work through records: claims, heartbeats, outcomes, wakes |
 | `querying.md` | Asking the knowledge base a question — `search` vs `query`, compositions, reading a trace |
 | `cognitive-maps.md` | Reading or authoring a cognitive map |
 | `teams.md` | Creating, inviting to, joining or leaving a team |

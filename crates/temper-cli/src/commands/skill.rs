@@ -10,8 +10,8 @@ use crate::config::{self, Config};
 use crate::error::{Result, TemperError};
 use crate::output;
 use crate::templates::{
-    CommandWrapperTemplate, DataArtifactsTemplate, OutcomeRegistersTemplate,
-    SessionLifecycleTemplate, SkillTemplate, WorkingAGoalTemplate,
+    CommandWrapperTemplate, CoordinatingThroughRecordsTemplate, DataArtifactsTemplate,
+    OutcomeRegistersTemplate, SessionLifecycleTemplate, SkillTemplate, WorkingAGoalTemplate,
 };
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
@@ -58,6 +58,10 @@ fn render_data_artifacts(surface: &str) -> Result<String> {
 
 fn render_working_a_goal(surface: &str) -> Result<String> {
     render_md(&WorkingAGoalTemplate { surface })
+}
+
+fn render_coordinating_through_records(surface: &str) -> Result<String> {
+    render_md(&CoordinatingThroughRecordsTemplate { surface })
 }
 
 // ── Static content (compiled into the binary) ────────────────────────────────
@@ -667,6 +671,10 @@ pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
         "working-a-goal.md".to_string(),
         render_working_a_goal(SURFACE_MCP)?,
     );
+    files.insert(
+        "coordinating-through-records.md".to_string(),
+        render_coordinating_through_records(SURFACE_MCP)?,
+    );
     files.insert("memories.md".to_string(), MEMORIES_MCP_MD.to_string());
     // Names no command on either surface, so both trees carry the same bytes.
     files.insert(
@@ -1181,6 +1189,7 @@ fn check_expected_files(skill_dir: &Path) {
         "outcome-registers.md",
         "working-a-goal.md",
         "data-artifacts.md",
+        "coordinating-through-records.md",
         "session-lifecycle.md",
         "memories.md",
         "cognitive-maps.md",
@@ -1336,6 +1345,10 @@ pub fn generate_skill_files_with_hash(
         "working-a-goal.md".to_string(),
         render_working_a_goal(SURFACE_CLI)?,
     );
+    files.insert(
+        "coordinating-through-records.md".to_string(),
+        render_coordinating_through_records(SURFACE_CLI)?,
+    );
     files.insert("memories.md".to_string(), MEMORIES_CLI_MD.to_string());
     files.insert(
         "cognitive-maps.md".to_string(),
@@ -1475,6 +1488,7 @@ mod tests {
         assert!(files.contains_key("implementation-grounding.md"));
         assert!(files.contains_key("outcome-registers.md"));
         assert!(files.contains_key("data-artifacts.md"));
+        assert!(files.contains_key("coordinating-through-records.md"));
         assert!(files.contains_key("session-lifecycle.md"));
         assert!(files.contains_key("working-a-goal.md"));
         assert!(files.contains_key("memories.md"));
@@ -1565,6 +1579,7 @@ mod tests {
             keys,
             [
                 "SKILL.md",
+                "coordinating-through-records.md",
                 "data-artifacts.md",
                 "implementation-grounding.md",
                 "memories.md",
@@ -2240,9 +2255,11 @@ mod tests {
         let cli = generate_skill_files_with_hash(&test_config(), "testhash", false).unwrap();
         let cli_skill_md = cli.get("SKILL.md").expect("SKILL.md").len();
         // A router that models read only the top of: ~4.9KB at the 2026-11 slimming (from ~17KB).
+        // 6,144 → 6,400, deliberately: one Read-when row for `coordinating-through-records.md`,
+        // a reference file with no other way in (the router is its only pointer).
         assert!(
-            cli_skill_md <= 6_144,
-            "the CLI SKILL.md render is {cli_skill_md} bytes; the budget is 6,144. Grow it \
+            cli_skill_md <= 6_400,
+            "the CLI SKILL.md render is {cli_skill_md} bytes; the budget is 6,400. Grow it \
              deliberately, with a reason, never by accretion."
         );
 

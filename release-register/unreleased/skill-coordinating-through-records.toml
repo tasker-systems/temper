@@ -1,0 +1,33 @@
+# A release-register entry. Scaffold one with:
+#   python3 tools/manifest/manifest.py register new <id>
+# which copies this file to release-register/unreleased/<id>.toml. The id is the file name:
+# lowercase kebab-case, at most 64 characters, never renamed once merged (corrections.json
+# cites entries by id). Every key below is required, and the empty values fail validation
+# until you fill them in. The vocabulary is release-register/vocabulary.toml; what each
+# token means is release-register/README.md.
+
+title = "The temper skill teaches agents to coordinate through records: a setup act, claim and outcome shapes, and guarded claims"
+pr = "self"
+classes = ["additive"]
+surfaces = ["cli-stdout"]
+status = "signal-only"
+
+body = '''
+The skill `temper skill install` writes, and the MCP projection under
+skills/temper-knowledge-base/, ship a new reference file, coordinating-through-records.md, with a
+Read-when row in each SKILL.md router. It teaches agents that share work through Temper records to
+use existing tools only: a setup act over list_data_artifact_shapes and declare_data_artifact_shape
+that compares a live shape's $id and enforcement before declaring; three shapes the skill carries
+(coordination-claim and coordination-outcome, enforcing by default, and an opt-in advisory
+coordination-agent); guarded claims on a work item's claim_id and claimed_at open_meta keys with
+`expect`; reading a refusal, including a retried write that meets its own value; heartbeats and
+reclaims guarded on the claim value; outcomes written with correlation_id and authorship; waking
+from the context change feed; privacy; and repairing a stuck flow.
+
+Nothing is declared centrally and no server surface changes. The CLI SKILL.md size budget moves
+from 6,144 to 6,400 bytes for the one new row.
+
+Witnessed over MCP by tests/e2e/tests/coordination_convention_mcp_e2e.rs, which reads the shapes
+out of the skill template itself. Observed by anyone who installs the skill or the MCP skill
+bundle. Release relevance: content only; no HTTP, MCP-tool or schema change.
+'''

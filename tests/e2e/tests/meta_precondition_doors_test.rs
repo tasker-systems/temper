@@ -1005,6 +1005,141 @@ async fn no_warn_line_carries_a_refusals_value(pool: PgPool) {
     );
 }
 
+/// **A misspelled guard is refused, never dropped**, over the deployed MCP transport. Before the
+/// door's argument rule, serde dropped `"expects"` (for `"expect"`) without a word: the write
+/// landed unconditionally and answered success, the claim race the guard exists to stop. Now the
+/// call is a tool error result naming the key, the resource is unchanged and no event is
+/// recorded, on both meta writes; no WARN-or-louder line carries a value; and the same call
+/// spelled right still meets the guard.
+///
+/// FAILS IF the shared gate in `call_tool` is removed (the misspelled claim lands), or the refusal
+/// travels as a JSON-RPC error.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_misspelled_expect_is_refused_and_nothing_is_written(pool: PgPool) {
+    use rmcp::model::{CallToolRequestParams, ClientConfig};
+    use rmcp::service::ServiceExt;
+    use rmcp::transport::streamable_http_client::{
+        StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
+    };
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let (layer, events) = common::tracing_layer::TestTracingLayer::new();
+    let _guard = tracing_subscriber::registry().with(layer).set_default();
+
+    let (app, svc, parts) = harness(pool).await;
+    let id = create_task(&svc, &parts, &app.pool).await;
+    assert!(landed(&claim(&svc, &parts, &id, "claim-a").await));
+
+    let mcp = spawn_mcp_router(&app.base_url()).await;
+    let transport = StreamableHttpClientTransport::with_client(
+        reqwest13::Client::new(),
+        StreamableHttpClientTransportConfig::with_uri(format!("http://{mcp}/mcp"))
+            .auth_header(app.token.clone()),
+    );
+    let service = ClientConfig::default()
+        .serve(transport)
+        .await
+        .expect("the initialize handshake");
+    let peer = service.peer().clone();
+    let call = |tool: &str, args: Value| {
+        CallToolRequestParams::new(tool.to_owned())
+            .with_arguments(args.as_object().expect("object args").to_owned())
+    };
+
+    let before = event_count(&app.pool).await;
+    let meta = peer
+        .call_tool(call(
+            "update_resource_meta",
+            json!({
+                "id": id,
+                "managed_meta": {},
+                "open_meta": {"claim_id": "claim-of-the-caller"},
+                "expects": {"open": {"claim_id": null}},
+            }),
+        ))
+        .await
+        .expect("an undeclared argument is a tool result over the transport");
+    let update = peer
+        .call_tool(call(
+            "update_resource",
+            json!({
+                "id": id,
+                "title": "Renamed-by-the-caller",
+                "open_meta": {"claim_id": "claim-of-the-caller"},
+                "expects": {"open": {"claim_id": null}},
+            }),
+        ))
+        .await
+        .expect("an undeclared argument is a tool result over the transport");
+    for (tool, refused) in [
+        ("update_resource_meta", &meta),
+        ("update_resource", &update),
+    ] {
+        assert_eq!(refused.is_error, Some(true), "{tool}: {refused:?}");
+        let text = refused.content[0]
+            .as_text()
+            .expect("a text part")
+            .text
+            .as_str();
+        assert!(
+            text.contains("unknown argument `expects`"),
+            "{tool}: {text}"
+        );
+        assert!(
+            !text.contains("claim-of-the-caller"),
+            "{tool}: no value: {text}"
+        );
+        assert!(refused.structured_content.is_none(), "{tool}: {refused:?}");
+    }
+    assert_eq!(stored_claim(&app.pool, &id).await, json!("claim-a"));
+    let title: String = sqlx::query_scalar("SELECT title FROM kb_resources WHERE id = $1::uuid")
+        .bind(&id)
+        .fetch_one(&app.pool)
+        .await
+        .expect("the title");
+    assert_ne!(title, "Renamed-by-the-caller", "nothing was written");
+    assert_eq!(
+        event_count(&app.pool).await,
+        before,
+        "no event was recorded"
+    );
+
+    // The same claim spelled right reaches the guard, which refuses it on its own terms.
+    let guarded = peer
+        .call_tool(call(
+            "update_resource_meta",
+            json!({
+                "id": id,
+                "managed_meta": {},
+                "open_meta": {"claim_id": "claim-of-the-caller"},
+                "expect": {"open": {"claim_id": null}},
+            }),
+        ))
+        .await
+        .expect("a guard refusal is a tool result");
+    assert_eq!(
+        guarded
+            .structured_content
+            .as_ref()
+            .expect("the precondition")["code"],
+        "PRECONDITION_FAILED"
+    );
+    service.cancel().await.ok();
+
+    let captured = events.lock().unwrap().clone();
+    for event in captured.iter().filter(|e| e.level <= tracing::Level::WARN) {
+        for value in event.fields.values().chain(event.span_fields.values()) {
+            assert!(
+                !value.contains("claim-of-the-caller"),
+                "a {} line carries the refused call: {event:#?}",
+                event.level
+            );
+        }
+    }
+    assert_eq!(stored_claim(&app.pool, &id).await, json!("claim-a"));
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────────────────────────────
 
 async fn cli(app: &E2eTestApp, args: &[&str]) -> std::process::Output {

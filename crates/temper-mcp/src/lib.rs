@@ -6,6 +6,7 @@
 //! per request, the identity the relay acts as, through its [`IdentitySeam`] ([`seam`]). The
 //! deployed host is `temper-mcp-server`; any other host serves the same tools the same way.
 
+pub(crate) mod arguments;
 pub(crate) mod cache_policy;
 pub mod declarations;
 pub mod host;
