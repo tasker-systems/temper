@@ -235,6 +235,7 @@ temper/generated/models/facet_ack.py
 temper/generated/models/facet_predicate.py
 temper/generated/models/facet_retract_ack.py
 temper/generated/models/facet_set_request.py
+temper/generated/models/failed_expectation.py
 temper/generated/models/field_scrub_clearing_event.py
 temper/generated/models/field_scrub_execute_response.py
 temper/generated/models/field_scrub_execute_response_one_of.py
@@ -308,6 +309,7 @@ temper/generated/models/materialize_ack.py
 temper/generated/models/materialize_delta.py
 temper/generated/models/materialize_request.py
 temper/generated/models/merge_policy.py
+temper/generated/models/meta_expect.py
 temper/generated/models/meta_update_payload.py
 temper/generated/models/narrowed_by.py
 temper/generated/models/no_prior_standing.py
@@ -326,6 +328,8 @@ temper/generated/models/pending_invitation_counts.py
 temper/generated/models/plan_refusal.py
 temper/generated/models/plan_refusal_details.py
 temper/generated/models/polarity.py
+temper/generated/models/precondition_failure.py
+temper/generated/models/precondition_tier.py
 temper/generated/models/profile.py
 temper/generated/models/profile_auth_link.py
 temper/generated/models/profile_update_request.py

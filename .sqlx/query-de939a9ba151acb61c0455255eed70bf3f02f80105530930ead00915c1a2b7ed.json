@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH vis AS (\n             SELECT EXISTS (\n               SELECT 1 FROM resources_visible_to($4) v WHERE v.resource_id = $1\n             ) AS visible\n           ), exp AS (\n             SELECT 'open'::text AS tier, key, value FROM jsonb_each($2::jsonb)\n             UNION ALL\n             SELECT 'managed'::text, key, value FROM jsonb_each($3::jsonb)\n           ), live AS (\n             SELECT DISTINCT ON (property_key) property_key, property_value\n               FROM kb_properties\n              WHERE owner_table = 'kb_resources' AND owner_id = $1 AND NOT is_folded\n                AND property_key IN (SELECT key FROM exp)\n                AND (SELECT visible FROM vis)\n              ORDER BY property_key, created DESC, id DESC\n           )\n           SELECT (SELECT visible FROM vis) AS \"visible!\",\n                  e.tier AS \"tier!\",\n                  e.key AS \"key!\",\n                  e.value AS \"expected!\",\n                  NULLIF(l.property_value, 'null'::jsonb) AS current,\n                  CASE WHEN e.value = 'null'::jsonb\n                       THEN NULLIF(l.property_value, 'null'::jsonb) IS NULL\n                       ELSE NULLIF(l.property_value, 'null'::jsonb) IS NOT NULL\n                            AND _property_value_normalized(l.property_key, l.property_value)\n                                = _property_value_normalized(e.key, e.value)\n                  END AS \"holds!\"\n             FROM exp e\n             LEFT JOIN live l ON l.property_key = e.key\n            ORDER BY e.tier = 'managed', e.key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "visible!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "tier!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "key!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "expected!",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "current",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "holds!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "de939a9ba151acb61c0455255eed70bf3f02f80105530930ead00915c1a2b7ed"
+}

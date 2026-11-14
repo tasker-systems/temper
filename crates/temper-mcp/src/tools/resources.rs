@@ -1072,6 +1072,7 @@ pub async fn update_resource(
     };
 
     let request = temper_workflow::types::resource::ResourceUpdateRequest {
+        expect: None,
         title: input.title.clone(),
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
@@ -1198,6 +1199,7 @@ pub async fn update_resource_meta(
     // the id from the path and the backend dropped caller-supplied hashes (recomputed
     // server-side, Phase 5) — so they carry named placeholders, not claims.
     let payload = temper_core::types::managed_meta::MetaUpdatePayload {
+        expect: None,
         resource_id: ResourceId::from(input.id),
         managed_meta: input.managed_meta,
         open_meta: input.open_meta,

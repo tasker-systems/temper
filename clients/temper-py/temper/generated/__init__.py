@@ -257,6 +257,7 @@ __all__ = [
     "FacetPredicate",
     "FacetRetractAck",
     "FacetSetRequest",
+    "FailedExpectation",
     "FieldScrubClearingEvent",
     "FieldScrubExecuteResponse",
     "FieldScrubExecuteResponseOneOf",
@@ -330,6 +331,7 @@ __all__ = [
     "MaterializeDelta",
     "MaterializeRequest",
     "MergePolicy",
+    "MetaExpect",
     "MetaUpdatePayload",
     "NarrowedBy",
     "NoPriorStanding",
@@ -348,6 +350,8 @@ __all__ = [
     "PlanRefusal",
     "PlanRefusalDetails",
     "Polarity",
+    "PreconditionFailure",
+    "PreconditionTier",
     "Profile",
     "ProfileAuthLink",
     "ProfileUpdateRequest",
@@ -804,6 +808,7 @@ from temper.generated.models.facet_ack import FacetAck as FacetAck
 from temper.generated.models.facet_predicate import FacetPredicate as FacetPredicate
 from temper.generated.models.facet_retract_ack import FacetRetractAck as FacetRetractAck
 from temper.generated.models.facet_set_request import FacetSetRequest as FacetSetRequest
+from temper.generated.models.failed_expectation import FailedExpectation as FailedExpectation
 from temper.generated.models.field_scrub_clearing_event import FieldScrubClearingEvent as FieldScrubClearingEvent
 from temper.generated.models.field_scrub_execute_response import FieldScrubExecuteResponse as FieldScrubExecuteResponse
 from temper.generated.models.field_scrub_execute_response_one_of import FieldScrubExecuteResponseOneOf as FieldScrubExecuteResponseOneOf
@@ -877,6 +882,7 @@ from temper.generated.models.materialize_ack import MaterializeAck as Materializ
 from temper.generated.models.materialize_delta import MaterializeDelta as MaterializeDelta
 from temper.generated.models.materialize_request import MaterializeRequest as MaterializeRequest
 from temper.generated.models.merge_policy import MergePolicy as MergePolicy
+from temper.generated.models.meta_expect import MetaExpect as MetaExpect
 from temper.generated.models.meta_update_payload import MetaUpdatePayload as MetaUpdatePayload
 from temper.generated.models.narrowed_by import NarrowedBy as NarrowedBy
 from temper.generated.models.no_prior_standing import NoPriorStanding as NoPriorStanding
@@ -895,6 +901,8 @@ from temper.generated.models.pending_invitation_counts import PendingInvitationC
 from temper.generated.models.plan_refusal import PlanRefusal as PlanRefusal
 from temper.generated.models.plan_refusal_details import PlanRefusalDetails as PlanRefusalDetails
 from temper.generated.models.polarity import Polarity as Polarity
+from temper.generated.models.precondition_failure import PreconditionFailure as PreconditionFailure
+from temper.generated.models.precondition_tier import PreconditionTier as PreconditionTier
 from temper.generated.models.profile import Profile as Profile
 from temper.generated.models.profile_auth_link import ProfileAuthLink as ProfileAuthLink
 from temper.generated.models.profile_update_request import ProfileUpdateRequest as ProfileUpdateRequest

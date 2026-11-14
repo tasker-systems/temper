@@ -115,6 +115,7 @@ async fn put_body(
 ) {
     backend
         .update_resource(UpdateResource {
+            expect: None,
             resource: ResourceId::from(resource),
             title: None,
             slug: None,

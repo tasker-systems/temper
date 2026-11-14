@@ -1092,6 +1092,7 @@ mod tests {
     #[test]
     fn validate_update_accepts_uuid_ref() {
         let cmd = UpdateResource {
+            expect: None,
             open_meta_add: None,
             resource: ResourceId(Uuid::nil()),
             title: None,

@@ -75,6 +75,7 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
     });
 
     let meta_payload = MetaUpdatePayload {
+        expect: None,
         resource_id: resource.id,
         managed_meta,
         open_meta,
@@ -210,6 +211,7 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
 
     // PUT new meta (Property-only) with some open_meta.
     let meta_payload = MetaUpdatePayload {
+        expect: None,
         resource_id: resource.id,
         managed_meta: ManagedMeta {
             stage: Some("done".to_string()),
@@ -347,6 +349,7 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
     // --- (1) Second-user forbidden ---
     let second_token = common::generate_second_user_jwt();
     let valid_payload = MetaUpdatePayload {
+        expect: None,
         resource_id: resource.id,
         managed_meta: ManagedMeta::default(),
         open_meta: serde_json::json!({}),
@@ -371,6 +374,7 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
     // --- (2) Unknown resource id → 404 ---
     let ghost_id = uuid::Uuid::now_v7();
     let ghost_payload = MetaUpdatePayload {
+        expect: None,
         resource_id: temper_core::types::ResourceId::from(ghost_id),
         managed_meta: ManagedMeta::default(),
         open_meta: serde_json::json!({}),

@@ -17,17 +17,21 @@ module Temper::Generated
   class ErrorDetail < ApiModelBase
     attr_accessor :code
 
-    # Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every other error.
+    # Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every other error. A `PRECONDITION_FAILED` refusal carries its payload in `precondition`, not here.
     attr_accessor :details
 
     attr_accessor :message
+
+    # Present on `PRECONDITION_FAILED` only: every expectation of the refused write that did not hold, each with what is there now. Absent on every other error.
+    attr_accessor :precondition
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
         :'code' => :'code',
         :'details' => :'details',
-        :'message' => :'message'
+        :'message' => :'message',
+        :'precondition' => :'precondition'
       }
     end
 
@@ -46,7 +50,8 @@ module Temper::Generated
       {
         :'code' => :'String',
         :'details' => :'ErrorDetails',
-        :'message' => :'String'
+        :'message' => :'String',
+        :'precondition' => :'PreconditionFailure'
       }
     end
 
@@ -54,6 +59,7 @@ module Temper::Generated
     def self.openapi_nullable
       Set.new([
         :'details',
+        :'precondition'
       ])
     end
 
@@ -87,6 +93,10 @@ module Temper::Generated
         self.message = attributes[:'message']
       else
         self.message = nil
+      end
+
+      if attributes.key?(:'precondition')
+        self.precondition = attributes[:'precondition']
       end
     end
 
@@ -142,7 +152,8 @@ module Temper::Generated
       self.class == o.class &&
           code == o.code &&
           details == o.details &&
-          message == o.message
+          message == o.message &&
+          precondition == o.precondition
     end
 
     # @see the `==` method
@@ -154,7 +165,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [code, details, message].hash
+      [code, details, message, precondition].hash
     end
 
     # Builds the object from hash

@@ -316,6 +316,7 @@ async fn the_goal_filter_counts_only_edges_the_caller_sees(pool: PgPool) {
 
 fn update_goal(resource: ResourceId, goal: Option<GoalPatch>) -> UpdateResource {
     UpdateResource {
+        expect: None,
         open_meta_add: None,
         resource,
         title: None,

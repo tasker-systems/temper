@@ -2672,6 +2672,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     // it server-side); type_to goes through MoveSpec and travels first-class on
     // the wire (type is no longer a managed_meta key).
     let cmd = UpdateResource {
+        expect: None,
         resource: id,
         title: params.title.map(String::from),
         // CLI update has no --slug flag; the server derives the slug from an
@@ -2780,6 +2781,7 @@ pub fn meta_set(params: MetaSetParams<'_>) -> Result<()> {
     }
 
     let payload = MetaUpdatePayload {
+        expect: None,
         resource_id: uuid::Uuid::from(id).into(),
         managed_meta,
         open_meta,

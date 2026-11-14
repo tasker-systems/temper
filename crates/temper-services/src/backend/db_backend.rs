@@ -12,6 +12,7 @@ use crate::authz::{
     authorize, citation_subject, require_machine_principal, AuditAuthority, AuditorJobAuthority,
     Principal,
 };
+use crate::backend::precondition;
 use crate::backend::region_clocks;
 use crate::backend::write_floor;
 use async_trait::async_trait;
@@ -921,6 +922,46 @@ impl DbBackend {
         match write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await {
             Ok(()) => Ok(tx),
             Err(refusal) => Err(write_floor::rollback_with(tx, refusal).await),
+        }
+    }
+
+    /// Judge an update's meta expectations on its own transaction, under R's writer lock: take the
+    /// lock, ask GET's read predicate again, then run the one comparison statement. `Err` is the
+    /// refusal to roll back with: GET's `404` for a caller who cannot read R, or
+    /// [`TemperError::PreconditionFailed`] listing every expectation that did not hold.
+    ///
+    /// **The lock comes first, and it must be this one.** The floor's `FOR KEY SHARE`, taken by
+    /// `begin_floored`, does not serialize writers of R: two claimants both hold it at once. A
+    /// check placed after `begin_floored` alone therefore looks atomic and is not; both claimants
+    /// read "absent" and both write. `lock_resource_for_write` (`FOR NO KEY UPDATE`) is the lock
+    /// every writer of R takes, so the second claimant waits here until the first commits, and
+    /// then, under READ COMMITTED, the next statement sees what it wrote. The substrate takes the
+    /// same lock again at the head of the update; it is re-entrant, and the lock order (goal rows,
+    /// then R) is unchanged.
+    async fn judge_meta_precondition(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        resource: ResourceId,
+        expect: &temper_core::types::precondition::MetaExpect,
+    ) -> Result<(), TemperError> {
+        writes::lock_resource_for_write(&mut *conn, resource)
+            .await
+            .map_err(api_err)?;
+        readback::ensure_visible(&mut *conn, self.profile_id, resource)
+            .await
+            .map_err(map_readback_err)?;
+        match precondition::judge(&mut *conn, self.profile_id, resource, expect)
+            .await
+            .map_err(api_err)?
+        {
+            precondition::Judgment::Holds => Ok(()),
+            precondition::Judgment::Fails(failure) => Err(TemperError::PreconditionFailed(failure)),
+            precondition::Judgment::NotVisible => {
+                Err(map_readback_err(readback::ReadbackError::NotVisible {
+                    resource_id: resource,
+                    principal: self.profile_id,
+                }))
+            }
         }
     }
 
@@ -2911,6 +2952,11 @@ impl Backend for DbBackend {
         // of the transaction below.
         self.modify_floor_fast_fail(ResourceId::from(new_id))
             .await?;
+        // A precondition's own shape is refused next, before anything is read: every rule in
+        // `refuse_malformed` is a function of the request alone.
+        if let Some(expect) = cmd.expect.as_ref() {
+            precondition::refuse_malformed(expect, cmd.open_meta_add.as_ref())?;
+        }
         // F-2, re-home arm. The gate above authorizes the resource being MOVED; it says nothing about
         // where it is moved TO. A context-move destination arrives resolved through the surfaces'
         // READ-gated `resolve_context_ref`, so without this a caller who may modify R and may merely
@@ -3075,6 +3121,25 @@ impl Backend for DbBackend {
             }
         }
 
+        // A conditional write must write something, judged on the assembled write; then the
+        // caller's read standing, on the pool, before any lock is taken. A non-reader (one who may
+        // modify a resource it cannot read) gets GET's 404 here and takes no lock, so no
+        // expectation is ever judged for it. The `open_meta_add` union and the managed `current`
+        // above were read before the transaction; neither is what the precondition is judged on.
+        if cmd.expect.is_some() {
+            precondition::refuse_without_a_write(
+                !properties.is_empty()
+                    || !open_unsets.is_empty()
+                    || body.is_some()
+                    || title.is_some()
+                    || rehome_to.is_some()
+                    || cmd.goal.is_some(),
+            )?;
+            readback::ensure_visible(&self.pool, self.profile_id, ResourceId::from(new_id))
+                .await
+                .map_err(map_readback_err)?;
+        }
+
         // ActContext → EventContext: every sub-event of the update fan-out is correlated + authored.
         let act_ctx = act_context(&cmd.act);
         // Defer embedding (issue #299) only when this revise re-blocks the body server-side: a
@@ -3120,6 +3185,14 @@ impl Backend for DbBackend {
         // before any child row, so two updates of this resource serialize there.
         if let Some(patch) = &cmd.goal {
             if let Err(refusal) = self.lock_goal_rows(&mut tx, new_id, patch).await {
+                return Err(write_floor::rollback_with(tx, refusal).await);
+            }
+        }
+        if let Some(expect) = cmd.expect.as_ref() {
+            if let Err(refusal) = self
+                .judge_meta_precondition(&mut tx, ResourceId::from(new_id), expect)
+                .await
+            {
                 return Err(write_floor::rollback_with(tx, refusal).await);
             }
         }

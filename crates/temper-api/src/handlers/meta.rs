@@ -51,10 +51,12 @@ pub async fn get_meta(
     request_body = MetaUpdatePayload,
     responses(
         (status = 200, description = "Updated resource", body = ResourceView),
+        (status = 400, description = "Bad request, including a malformed `expect` (code BAD_REQUEST) or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
+        (status = 412, description = "An `expect` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed key with its current value", body = ErrorBody),
     )
 )]
 pub async fn update_meta(
@@ -66,6 +68,7 @@ pub async fn update_meta(
 ) -> ApiResult<Json<ResourceView>> {
     let act = payload.act.into_act_context().map_err(ApiError::from)?;
     let cmd = UpdateResource {
+        expect: payload.expect,
         resource: ResourceId::from(resource_id),
         // Meta-only path is Property-only (Fork 2): identity changes go through
         // the full update path, never the /meta endpoint.
@@ -74,8 +77,9 @@ pub async fn update_meta(
         body: None,
         managed_meta: Some(payload.managed_meta),
         open_meta: Some(payload.open_meta),
-        // PUT /meta states the meta tiers in full — that is what distinguishes it from the
-        // PATCH surface, which is where the additive channel belongs.
+        // PUT /meta writes only the keys it names, in either tier (an open key set to `null`
+        // unsets it); it never replaces a tier wholesale. What distinguishes it from PATCH is
+        // that it carries meta and nothing else, so the additive channel belongs on PATCH.
         open_meta_add: None,
         // Meta-only path is Property-only (Fork 2); the goal edge (relationship-fated) is not a
         // property and travels via the full update path, never the /meta endpoint.

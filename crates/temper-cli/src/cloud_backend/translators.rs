@@ -275,6 +275,9 @@ pub(crate) fn cmd_to_resource_update_request(
     };
 
     Ok(temper_workflow::types::ResourceUpdateRequest {
+        // The command's meta expectations travel verbatim; dropping them here would turn a
+        // conditional write into an unconditional one with no error.
+        expect: cmd.expect.clone(),
         title: cmd.title.clone(),
         managed_meta: managed_meta_opt,
         open_meta,
@@ -543,6 +546,7 @@ mod tests {
 
     fn sample_update() -> UpdateResource {
         UpdateResource {
+            expect: None,
             resource: temper_core::types::ids::ResourceId(uuid::Uuid::nil()),
             title: None,
             slug: None,

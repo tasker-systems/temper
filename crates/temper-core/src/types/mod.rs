@@ -50,6 +50,7 @@ pub mod managed_meta;
 pub mod materialize;
 pub mod merge;
 pub mod ownership;
+pub mod precondition;
 pub mod profile;
 pub mod property_owner;
 pub mod provenance;

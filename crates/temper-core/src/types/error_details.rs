@@ -66,6 +66,7 @@ impl ErrorBody {
                 code: code.to_string(),
                 message,
                 details: None,
+                precondition: None,
             },
         }
     }
@@ -78,7 +79,8 @@ pub struct ErrorDetail {
     pub message: String,
     /// Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on
     /// `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every
-    /// other error.
+    /// other error. A `PRECONDITION_FAILED` refusal carries its payload in `precondition`, not
+    /// here.
     // Held as a `Value` because `IntoResponse` erases the variant before serializing, but declared
     // to the generators as what it actually is: an untyped `details` described nothing while
     // costing the SDKs their typed refusal.
@@ -92,6 +94,12 @@ pub struct ErrorDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "web-api", schema(value_type = Option<ErrorDetails>))]
     pub details: Option<serde_json::Value>,
+    /// Present on `PRECONDITION_FAILED` only: every expectation of the refused write that did not
+    /// hold, each with what is there now. Absent on every other error.
+    // A sibling of `details`, not a third `ErrorDetails` arm: the union is untagged and pinned,
+    // and a new arm moves its published shape where a new optional property only grows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precondition: Option<crate::types::precondition::PreconditionFailure>,
 }
 
 #[cfg(test)]

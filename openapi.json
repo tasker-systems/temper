@@ -12038,7 +12038,7 @@
             }
           },
           "400": {
-            "description": "Bad request (e.g. unknown open_meta key, or content sent without server-side pipeline)",
+            "description": "Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, or a malformed `expect`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12079,6 +12079,16 @@
           },
           "410": {
             "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "An `expect` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed key with its current value",
             "content": {
               "application/json": {
                 "schema": {
@@ -13742,6 +13752,16 @@
               }
             }
           },
+          "400": {
+            "description": "Bad request, including a malformed `expect` (code BAD_REQUEST) or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Unauthorized",
             "content": {
@@ -13774,6 +13794,16 @@
           },
           "410": {
             "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "An `expect` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed key with its current value",
             "content": {
               "application/json": {
                 "schema": {
@@ -21607,7 +21637,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ErrorDetails",
-                "description": "Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on\n`PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every\nother error."
+                "description": "Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on\n`PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every\nother error. A `PRECONDITION_FAILED` refusal carries its payload in `precondition`, not\nhere."
               },
               {
                 "type": "null"
@@ -21616,6 +21646,17 @@
           },
           "message": {
             "type": "string"
+          },
+          "precondition": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PreconditionFailure",
+                "description": "Present on `PRECONDITION_FAILED` only: every expectation of the refused write that did not\nhold, each with what is there now. Absent on every other error."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -21979,6 +22020,33 @@
           }
         ],
         "description": "Request body for `POST /api/facets`."
+      },
+      "FailedExpectation": {
+        "type": "object",
+        "description": "One expectation that did not hold.\n\n`current` is the value the caller could read now; `null` means the key is absent now. Nothing\nelse is ever added: no actor, time, event, position, revision or count.",
+        "required": [
+          "tier",
+          "expected",
+          "current"
+        ],
+        "properties": {
+          "current": {
+            "description": "What is there now (`null`: absent)."
+          },
+          "expected": {
+            "description": "What the caller expected, as it sent it (`null`: absent)."
+          },
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The key the expectation named. Present on every `open` and `managed` entry."
+          },
+          "tier": {
+            "$ref": "#/components/schemas/PreconditionTier"
+          }
+        }
       },
       "FieldScrubClearingEvent": {
         "type": "object",
@@ -24122,6 +24190,21 @@
           "auto"
         ]
       },
+      "MetaExpect": {
+        "type": "object",
+        "description": "Per-key expected values for a meta write, by tier.\n\n- **A top-level `null` means absent**: the key has no live value, which is also how a key whose\n  newest stored value is a top-level `null` reads. A nested `null` is a value.\n- **Values are compared as stored**: after the server's write-time normalization (a bare-string\n  `tags` value is stored as a one-element array) and by JSON value equality, so `1` equals\n  `1.0`. Echo back the values you read rather than reformatting them, and guard on strings or\n  on integers within ±2^53.\n- **A key need not be one the write writes.** Every named key is judged, written or not.\n- **`open`** names open-tier keys: never `facet`, `doc_type`, a managed key, or an identity key\n  (`temper-title`, `temper-slug`, `temper-id`, `temper-context`, `temper-goal`,\n  `temper-type`). **`managed`** names managed workflow and provenance keys only\n  (`temper-stage`, `temper-status`, …). Anything else is a `400`.\n- **A key named here may not also be in `open_meta_add`** (`400`): the union is computed\n  from a read taken before the guard is judged.\n- **An `expect` on a request that writes nothing is a `400`**: a check without a write is a\n  read.\n\nUnknown members are refused (`422`), so a misspelled tier is never silently dropped.\n\n- **A retried write can meet its own success.** If a guarded write landed but its answer was\n  lost, the same request sent again is refused with a `412` whose `current` is the value it\n  wrote. Make guarded values unique to the writer (a claim id, a lease token) so that refusal\n  reads as \"my earlier attempt landed\".\n- **Only the named keys are guarded.** Other keys the same write sets land as they would without\n  an `expect`; an `open_meta_add` on an unguarded key unions over a read taken before the lock.",
+        "properties": {
+          "managed": {
+            "type": "object",
+            "description": "Managed-tier keys and the value each is expected to hold now (`null`: absent)."
+          },
+          "open": {
+            "type": "object",
+            "description": "Open-tier keys and the value each is expected to hold now (`null`: absent)."
+          }
+        },
+        "additionalProperties": false
+      },
       "MetaUpdatePayload": {
         "allOf": [
           {
@@ -24138,6 +24221,17 @@
               "open_hash"
             ],
             "properties": {
+              "expect": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MetaExpect",
+                    "description": "What this write expects the resource's meta to hold now, per key (`null`: absent). If any\nexpectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED`\nwith each failed key and its current value. Judged under the resource's writer lock, in\nthe write's own transaction. Absent: the write is unconditional, exactly as before. See\n[`MetaExpect`](crate::types::precondition::MetaExpect) for the rules. A meta write never\ntakes a body expectation."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "managed_hash": {
                 "type": "string",
                 "description": "SHA-256 hash of the managed_meta JSON (computed over canonical form)"
@@ -24497,6 +24591,29 @@
         "enum": [
           "forward",
           "inverse"
+        ]
+      },
+      "PreconditionFailure": {
+        "type": "object",
+        "description": "Every expectation of a refused write that did not hold. The payload of a\n`412 PRECONDITION_FAILED`, carried as `error.precondition`.",
+        "required": [
+          "failed"
+        ],
+        "properties": {
+          "failed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FailedExpectation"
+            }
+          }
+        }
+      },
+      "PreconditionTier": {
+        "type": "string",
+        "description": "Which tier a failed expectation named.",
+        "enum": [
+          "open",
+          "managed"
         ]
       },
       "Profile": {
@@ -27904,6 +28021,17 @@
                   "null"
                 ],
                 "description": "Context move ref: a bare UUID or `@owner/slug` decorated form.\nBare names (no `@`/`+` prefix, not a UUID) are rejected 400 by the\nserver (Decision 1). When present the server resolves the ref to a\n`ContextId` (visibility-gated to the principal) and re-homes the\nresource. Forwarded verbatim from the CLI `--context-to` flag."
+              },
+              "expect": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MetaExpect",
+                    "description": "What this update expects the resource's meta to hold now, per key (`null`: absent). If any\nexpectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED`\nwith each failed key and its current value. Judged under the resource's writer lock, in\nthe update's own transaction. Absent: the update is unconditional, exactly as before. See\n[`MetaExpect`](crate::types::precondition::MetaExpect) for the rules.\n\n`ts(skip)`-ped like `sources` and `content_block`: a conditional write is a CLI/agent path\nthe SvelteKit UI does not send."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "goal": {
                 "type": [

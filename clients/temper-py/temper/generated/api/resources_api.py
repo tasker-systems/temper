@@ -5872,6 +5872,7 @@ class ResourcesApi:
             '403': "ErrorBody",
             '404': "ErrorBody",
             '410': "ErrorBody",
+            '412': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -5951,6 +5952,7 @@ class ResourcesApi:
             '403': "ErrorBody",
             '404': "ErrorBody",
             '410': "ErrorBody",
+            '412': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -6030,6 +6032,7 @@ class ResourcesApi:
             '403': "ErrorBody",
             '404': "ErrorBody",
             '410': "ErrorBody",
+            '412': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

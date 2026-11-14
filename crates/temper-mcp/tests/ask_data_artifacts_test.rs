@@ -192,6 +192,7 @@ fn refused_body(refusals: Vec<PlanRefusal>) -> Value {
                 serde_json::to_value(ErrorDetails::PlanRefusals(PlanRefusalDetails { refusals }))
                     .expect("details serialize"),
             ),
+            precondition: None,
         },
     })
     .expect("the body serializes")

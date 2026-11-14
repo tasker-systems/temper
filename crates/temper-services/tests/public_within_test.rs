@@ -1496,6 +1496,7 @@ async fn a_person_references_t_from_their_own_home(pool: PgPool) {
         // A goal link (advances) to a T resource.
         let goal = backend
             .update_resource(temper_workflow::operations::UpdateResource {
+                expect: None,
                 resource: ResourceId::from(source),
                 title: None,
                 slug: None,

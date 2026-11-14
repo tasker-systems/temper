@@ -360,11 +360,12 @@ pub async fn create(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Updated resource", body = ResourceView),
-        (status = 400, description = "Bad request (e.g. unknown open_meta key, or content sent without server-side pipeline)", body = ErrorBody),
+        (status = 400, description = "Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, or a malformed `expect`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
+        (status = 412, description = "An `expect` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed key with its current value", body = ErrorBody),
     )
 )]
 pub async fn update(
@@ -432,6 +433,7 @@ pub async fn update(
     };
 
     let cmd = UpdateResource {
+        expect: req.expect,
         resource: ResourceId::from(resource_id),
         title: title_top,
         slug: None,

@@ -119,6 +119,12 @@ pub enum ApiError {
     /// failing, so it logs at info like a `429`, never as an internal error.
     #[error("{}", temper_core::error::TemperError::ResourceBusy)]
     ResourceBusy,
+    /// A conditional write whose expectations did not all hold, refused with nothing applied.
+    /// `412` under [`temper_core::error::PRECONDITION_FAILED_CODE`], with the failed expectations
+    /// in `error.precondition`. Produced only after the caller's read standing on the resource
+    /// was established, so the current values it carries are values the caller may read.
+    #[error("{}", .0.message())]
+    PreconditionFailed(temper_core::types::precondition::PreconditionFailure),
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -253,6 +259,10 @@ impl IntoResponse for ApiError {
                 (*status, temper_core::error::UNREADABLE_PLAN_CODE)
             }
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
+            ApiError::PreconditionFailed(_) => (
+                StatusCode::PRECONDITION_FAILED,
+                temper_core::error::PRECONDITION_FAILED_CODE,
+            ),
             ApiError::IngestEnded(_) => {
                 (StatusCode::CONFLICT, temper_core::error::INGEST_ENDED_CODE)
             }
@@ -292,6 +302,12 @@ impl IntoResponse for ApiError {
             }
             ApiError::ContentIntegrity(_) => {
                 tracing::warn!(status_code, error_code = code, message = %bounded(&message), "content integrity");
+            }
+            // The code and the failed KEY NAMES only, never a value: an expected or current value
+            // is the caller's or the workflow's content. The message is keys-only by construction
+            // (`PreconditionFailure::message`), so it is the same thing said once.
+            ApiError::PreconditionFailed(_) => {
+                tracing::info!(status_code, error_code = code, message = %bounded(&message), "precondition failed");
             }
             // Info, not warn: a 429 is the system working as configured — pressure the
             // operator chose to bound — not an instance fault. The retry value is the
@@ -394,11 +410,17 @@ impl IntoResponse for ApiError {
             _ => None,
         };
 
+        let precondition = match &self {
+            ApiError::PreconditionFailed(failure) => Some(failure.clone()),
+            _ => None,
+        };
+
         let body = ErrorBody {
             error: ErrorDetail {
                 code: code.to_string(),
                 message,
                 details: details_json,
+                precondition,
             },
         };
         let mut response = (status, axum::Json(body)).into_response();
@@ -496,6 +518,7 @@ impl From<ApiError> for temper_core::error::TemperError {
             ApiError::ContentIntegrity(s) => TemperError::ContentIntegrity(s),
             ApiError::DataArtifactRefusal(s) => TemperError::DataArtifactRefusal(s),
             ApiError::ResourceBusy => TemperError::ResourceBusy,
+            ApiError::PreconditionFailed(f) => TemperError::PreconditionFailed(f),
             // Degrades to BadRequest text rather than earning a `TemperError` arm of its
             // own — the CLI renders errors as text, has no status to preserve, and the
             // retry value is exactly what the caller needs next, so it rides along. Same
@@ -538,6 +561,7 @@ impl From<temper_core::error::TemperError> for ApiError {
             TemperError::DataArtifactRefusal(s) => ApiError::DataArtifactRefusal(s),
             TemperError::PlanRefused { refusals, .. } => ApiError::PlanRefused { refusals },
             TemperError::ResourceBusy => ApiError::ResourceBusy,
+            TemperError::PreconditionFailed(f) => ApiError::PreconditionFailed(f),
             TemperError::Api(s) => ApiError::Internal(s),
             TemperError::SystemAccessRequired(details) => {
                 ApiError::SystemAccessRequired {

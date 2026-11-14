@@ -132,6 +132,14 @@ pub struct MetaUpdatePayload {
     pub managed_hash: String,
     /// SHA-256 hash of the open_meta JSON (computed over canonical form)
     pub open_hash: String,
+    /// What this write expects the resource's meta to hold now, per key (`null`: absent). If any
+    /// expectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED`
+    /// with each failed key and its current value. Judged under the resource's writer lock, in
+    /// the write's own transaction. Absent: the write is unconditional, exactly as before. See
+    /// [`MetaExpect`](crate::types::precondition::MetaExpect) for the rules. A meta write never
+    /// takes a body expectation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<crate::types::precondition::MetaExpect>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level keys;
     /// all optional. `confidence` required when any other authorship field is supplied. Parity with the
     /// MCP `update_resource_meta` tool — a frontmatter-only update under a run is correlated like any
@@ -212,6 +220,7 @@ mod tests {
     #[test]
     fn meta_update_payload_serde() {
         let payload = MetaUpdatePayload {
+            expect: None,
             resource_id: ResourceId::from(Uuid::nil()),
             managed_meta: ManagedMeta {
                 stage: Some("in-progress".to_string()),
