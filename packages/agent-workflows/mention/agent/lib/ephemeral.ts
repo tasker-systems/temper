@@ -119,12 +119,10 @@ export interface AuthContextLike {
  *    `eve/dist/src/public/channels/slack/slackChannel.js`). So state can be
  *    STALE — it holds whoever last authenticated via the webhook.
  *
- * Hence: prefer (1), fall back to (2). The fallback is not redundant —
- * `session.failed` handlers are invoked with only two arguments and never
- * receive a `SessionContext` at all:
- *
- *   e===`session.failed`?t(r,a):t(r,a,buildCallbackContext())
- *   -- eve/dist/src/public/definitions/defineChannel.js, buildAdapter
+ * Hence: prefer (1), fall back to (2). The fallback is not redundant — a
+ * session can end (`session.ended`) with no current auth to address, and
+ * state is then its only recipient source. `events.ts` confines the fallback
+ * to that one handler, whose text is a fixed literal.
  *
  * Returns `null` when neither source yields a usable id. There is deliberately
  * no "post publicly instead" fallback: an undeliverable private reply is

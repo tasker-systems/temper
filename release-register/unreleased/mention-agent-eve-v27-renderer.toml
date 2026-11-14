@@ -1,0 +1,16 @@
+title    = "The Slack mention agent runs on eve 0.91's session events, with every reply still private"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+The mention agent (and the steward) move from eve 0.81 to 0.91, which replaces eve's v26 session
+events with v27 facts. The mention agent's ephemeral Slack renderer is rebuilt on the new events:
+the answer, a failed turn or session, and any approval or question prompt still go only to the
+person who mentioned it, and the public thread status still shows only constant text. Who observes:
+Slack users of a deployment. Visible differences: the status no longer switches to
+`Writing a reply...` while a long answer streams, and it is now cleared when a turn fails as well as
+when it completes. Release relevance: per eve's upgrade guide, a session whose deployment ran an
+earlier eve moves to the new deployment on its next idle message, and eve compacts that session's
+earlier conversation, so a thread continued across the deploy carries on from a summary.
+'''

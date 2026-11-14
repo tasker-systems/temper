@@ -32,7 +32,7 @@ export default slackChannel({
    * mentioning human's full temper reach, so the answer, every failure message
    * that can quote it, and every reasoning/tool status derived from it belong
    * to that human alone. See `events.ts`, including the documented residual gap
-   * on `authorization.required`.
+   * on a sign-in's public status line.
    *
    * **The invariant is ONE `thread.post` in this agent, not zero**, and it is
    * `ephemeralFailureNotice` in `lib/ephemeral.ts` — posted only when
@@ -67,7 +67,7 @@ export default slackChannel({
    * — it DISPATCHES UNCONDITIONALLY: no `decideIdentity`, no
    * `principalType === "user"` gate, no link-state, no mint pre-flight. An
    * unlinked human DMing would get a turn that dies into the generic
-   * `turn.failed` line with no path to a link URL, and a bot would get a turn
+   * failed-turn line with no path to a link URL, and a bot would get a turn
    * at all. Leaving this key absent means inheriting that.
    *
    * It is currently unreachable — `message.im` is commented out in
@@ -157,7 +157,7 @@ export default slackChannel({
 
       // PRE-FLIGHT THE MINT, before dispatching. The connection's `getToken` would mint too,
       // but a failure there is a FAILED TURN, and a failed turn is routed to the
-      // `turn.failed` handler, which says one deliberately detail-free sentence
+      // `turn.settled` handler, which says one deliberately detail-free sentence
       // (`events.ts` — it must not quote model or tool output). That is exactly the generic
       // error each of these three states must NOT collapse into: "you were never vaulted"
       // and "your access was revoked" need different sentences and a remedy, and neither is
