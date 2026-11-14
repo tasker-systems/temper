@@ -13,9 +13,12 @@ first-party door.
   Server { status: 412 } naming the contract disagreement. Its Display is the key-only sentence
   ("1 precondition failed: open.claim_id"), never a value. It is never retried.
 - MCP: update_resource_meta and update_resource gain an optional `expect` input
-  ({open?, managed?}, the HTTP type). A failed guard is an invalid_params tool error, never
-  internal_error, whose message names keys only and whose data is the HTTP door's error object:
+  ({open?, managed?}, the HTTP type). A failed guard is a tool-execution error result
+  (isError: true), never a JSON-RPC error: its one text part names keys only, and its
+  structuredContent is the HTTP door's error object:
   {code: "PRECONDITION_FAILED", message, precondition: {failed: [{tier, key, expected, current}]}}.
+  A tool result, not a JSON-RPC error, because rmcp logs every JSON-RPC error at warn with its data,
+  which would put the current values in the host's logs.
   update_resource_meta answers {updated, id, view}, where view is the PUT /meta answer itself (was
   {updated, id}).
 - CLI: resource meta set and resource update gain --expect '<json>' (the same object) and the
@@ -23,7 +26,7 @@ first-party door.
   an unknown member, or a key expected both absent and present is refused client-side as
   bad-request. A failed guard exits 1; with --format json, stdout is an ErrorPayload whose code is
   "PRECONDITION_FAILED", whose message names keys only, and whose details is
-  {failed: [{tier, key, expected, current}]} (the HTTP door's error.precondition). Without it,
+  {failed: [{tier, key, expected, current}]} (the HTTP door's error.precondition). With --format toon,
   stderr prints the sentence and one line per key: "open.claim_id: expected absent, now "x"".
   ErrorPayload.details is now an untagged union of the refused plan's list and that payload
   (diagnostics.ts gains PayloadDetails; precondition.ts is new).
@@ -38,6 +41,10 @@ guarded write may now be refused where the same write without the guard lands.
 Exit code and stdout code: exit 1, code PRECONDITION_FAILED.
 
 Witnesses: tests/e2e/tests/meta_precondition_doors_test.rs (both MCP tools and both CLI commands
-end to end, the two-claimant race through MCP, and a relay retry after commit meeting its own
-value); the client, MCP and CLI unit tests beside each change. Release relevance: signal-only.
+end to end; the two-claimant race through MCP; a relay retry after commit meeting its own value;
+read standing, all-or-nothing, an ordinary landing and no admin-act disclosure through MCP; and no
+warn-or-louder log line carrying a refusal's value over the deployed transport);
+crates/temper-services/tests/meta_precondition_test.rs (a guarded goal clear on a goal-less
+resource, and the unguarded write's event list and answer shape pinned); the client, MCP and CLI
+unit tests beside each change. Release relevance: signal-only.
 '''

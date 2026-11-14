@@ -68,8 +68,9 @@ details?: PayloadDetails | null, };
 /**
  * What an [`ErrorPayload`]'s `details` carries.
  *
- * Untagged, and unambiguous by required field: a refused plan's list requires `refusals`, a
- * failed conditional write requires `failed`.
+ * Untagged, and unambiguous by required field: `ErrorDetails`' arms require `refusal` (system
+ * access) or `refusals` (a refused plan), and a failed conditional write requires `failed`.
+ * Asserted by `each_payload_details_arm_round_trips_to_its_own_variant`.
  *
  * - **`Refusal`**: what the HTTP door puts in `error.details`, the refused plan's list, each
  *   entry with its `reason` and `teaches`.

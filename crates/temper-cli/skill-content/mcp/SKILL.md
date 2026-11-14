@@ -37,7 +37,8 @@ tool call against a Temper server, which is authoritative — there is no local 
 - **Two writers to one meta key overwrite each other unless the write says what it expects.**
   `update_resource_meta` and `update_resource` take `expect`, e.g.
   `{"open": {"claim_id": null}}` (a top-level `null` is "absent"). If any expectation fails, nothing
-  is written and the error's `data.precondition.failed` lists each key with its `current` value.
+  is written and the tool answers an error result (`isError: true`) whose
+  `structuredContent.precondition.failed` lists each key with its `current` value.
   Guard on a value unique to you: a `current` equal to your own value means your earlier attempt
   landed.
 - **A task's stage, mode and effort are `managed_meta` keys:** `temper-stage` (`backlog`,

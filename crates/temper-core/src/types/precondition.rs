@@ -44,6 +44,8 @@ use serde_json::Value;
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+// Inlined, as `ManagedMeta` is: an MCP tool's declared input schema must be self-contained.
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct MetaExpect {
     /// Open-tier keys and the value each is expected to hold now (`null`: absent).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
