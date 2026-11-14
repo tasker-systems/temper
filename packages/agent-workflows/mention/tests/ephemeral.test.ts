@@ -130,9 +130,9 @@ describe("resolveEphemeralRecipient", () => {
   });
 
   it("falls back to session state when no auth context is supplied", () => {
-    // FAILS IF: the fallback is removed. `session.failed` is invoked with only
-    // two arguments (no SessionContext at all), so state is its ONLY source —
-    // dropping the fallback silences that handler entirely.
+    // FAILS IF: the fallback is removed. A session can end (`session.ended`)
+    // with no current auth, so state is then its ONLY source — dropping the
+    // fallback silences that handler entirely.
     expect(resolveEphemeralRecipient(undefined, "U_STATE")).toBe("U_STATE");
     expect(resolveEphemeralRecipient(null, "U_STATE")).toBe("U_STATE");
   });

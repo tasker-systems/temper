@@ -103,9 +103,9 @@ export const TEMPER_READ_TOOLS = [
  *
  * Every `refused` arm throws `ConnectionAuthorizationFailedError` with
  * `retryable: false`, not `ConnectionAuthorizationRequiredError`. `Required` tells eve an
- * authorization flow should be run — it emits `authorization.required`, whose default handler
- * posts a framework-owned PUBLIC status line an override cannot reach (CLAUDE.md, known
- * constraint 1). There is no interactive flow to run: re-linking happens out of band through
+ * authorization flow should be run — it opens a sign-in (`interaction.opened`, kind
+ * `sign-in`), whose default handler posts a framework-owned PUBLIC status line (CLAUDE.md,
+ * known constraint 1). There is no interactive flow to run: re-linking happens out of band through
  * the Slack link route, so eve would be prompting for a door that does not exist, in public.
  * Every refusal is terminal until someone acts out of band — the human re-links, or an admin
  * approves them — which is precisely what `retryable:false` means, and it is the same shape the

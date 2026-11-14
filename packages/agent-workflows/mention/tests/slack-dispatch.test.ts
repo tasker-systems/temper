@@ -99,12 +99,12 @@ describe("onAppMention — the mint pre-flight", () => {
 
     expect(result).toEqual({ auth: humanAuth() });
     // No ephemeral on the happy path: the model's answer is the reply, delivered by the
-    // `message.completed` override.
+    // `content.completed` override.
     expect(ephemeralTexts(request)).toEqual([]);
   });
 
   // FAILS IF: a not_vaulted user is DISPATCHED. That is the headline bug this fork exists to
-  // prevent — the turn would die inside `getToken` and the user would get `turn.failed`'s
+  // prevent — the turn would die inside `getToken` and the user would get `turn.settled`'s
   // deliberately detail-free line instead of the one message that tells them what to do.
   it("never dispatches a not_vaulted user, and hands them the re-link URL instead", async () => {
     requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
