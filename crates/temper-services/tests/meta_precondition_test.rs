@@ -579,6 +579,48 @@ async fn values_compare_after_normalization(pool: PgPool) {
     }
 }
 
+/// **A legacy bare-string `tags` row is judged as stored and as normalized.** A row written before
+/// the write-time normalization holds the string itself, and a reader sees the string. Expecting
+/// what the reader sees holds; expecting the normalized one-element array holds; a wrong value
+/// fails, reporting the stored string as `current`.
+///
+/// FAILS IF only the expected side is normalized: the stored string then never equals the
+/// normalized guard, and every guard on such a key fails.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_legacy_bare_string_tags_row_is_guardable(pool: PgPool) {
+    let (owner, context) = seed_profile(&pool, "legacytags@example.com").await;
+    let resource = create(&pool, owner, context, json!({"topic": "x"})).await;
+    insert_newer_live_row(&pool, resource, "tags", json!("legacy")).await;
+    assert_eq!(
+        open_tier(&pool, owner, resource).await["tags"],
+        json!("legacy"),
+        "a reader sees the stored string"
+    );
+    let be = backend(&pool, owner);
+    for guard in [json!("legacy"), json!(["legacy"])] {
+        be.update_resource(patch_open(
+            resource,
+            json!({"y": 1}),
+            Some(expect(json!({"open": {"tags": guard.clone()}}))),
+        ))
+        .await
+        .unwrap_or_else(|e| panic!("expecting {guard} holds: {e:?}"));
+    }
+    let f = failure(
+        be.update_resource(patch_open(
+            resource,
+            json!({"y": 2}),
+            Some(expect(json!({"open": {"tags": "other"}}))),
+        ))
+        .await,
+    );
+    assert_eq!(
+        f.failed[0].current,
+        json!("legacy"),
+        "current is the stored value"
+    );
+}
+
 /// **The managed tier is judged too**, and `null` means absent there as well.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_managed_guard_is_judged(pool: PgPool) {

@@ -134,8 +134,12 @@ pub(crate) async fn judge(
     // that read's last-write-wins over `ORDER BY created, id`. `NULLIF` applies AFTER `DISTINCT ON`
     // and never filters inside `live`: a newest row holding a top-level `null` reads as absent, as
     // the read shows it, and an older value beneath it must never surface. A missing row is the
-    // `LEFT JOIN`'s SQL NULL. The comparison is jsonb `=` after the write-time normalization, so a
-    // bare-string `tags` matches its stored array and `1` matches `1.0`; never compare in Rust.
+    // `LEFT JOIN`'s SQL NULL. The comparison is jsonb `=` after the write-time normalization of BOTH
+    // sides, so a bare-string `tags` guard matches its stored array, a legacy bare-string `tags`
+    // row (written before normalization existed) matches both what a reader sees and its array
+    // form, and `1` matches `1.0`. The normalization is idempotent, so a stored value already in
+    // shape is unchanged by it. `current` stays the stored value, as a reader sees it. Never
+    // compare in Rust.
     let rows = sqlx::query!(
         r#"WITH vis AS (
              SELECT EXISTS (
@@ -161,7 +165,8 @@ pub(crate) async fn judge(
                   CASE WHEN e.value = 'null'::jsonb
                        THEN NULLIF(l.property_value, 'null'::jsonb) IS NULL
                        ELSE NULLIF(l.property_value, 'null'::jsonb) IS NOT NULL
-                            AND l.property_value = _property_value_normalized(e.key, e.value)
+                            AND _property_value_normalized(l.property_key, l.property_value)
+                                = _property_value_normalized(e.key, e.value)
                   END AS "holds!"
              FROM exp e
              LEFT JOIN live l ON l.property_key = e.key
