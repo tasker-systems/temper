@@ -1588,7 +1588,8 @@ async fn list_total_slice(pool: &PgPool, w: &World) -> Vec<Violation> {
     // by every resource in the world — readable or not — must count exactly the readable ones, and
     // report the rest as `input_unusable`. And a bound of ONE unreadable id must answer exactly as a
     // bound of one id that names nothing: `total: 0`, one unusable. A count taken over the bound
-    // rather than over the core's verdict would answer 1 for the first and 0 for the second.
+    // rather than over the core's verdict would answer 1 for the hidden id — and, if it counted
+    // only rows that exist, 0 for the absent one.
     let bounded = |ids: Vec<Uuid>| {
         let rows = StageName::parse("rows").unwrap();
         let c = Composition {
