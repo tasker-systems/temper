@@ -116,3 +116,11 @@ pub struct DataArtifactsTemplate<'a> {
 pub struct WorkingAGoalTemplate<'a> {
     pub surface: &'a str,
 }
+
+/// Coordinating agents through records: the setup act, the claim/outcome/agent shapes, and the
+/// guarded-write patterns. Shared prose; the tool and command spellings diverge by surface.
+#[derive(Template)]
+#[template(path = "shared/coordinating-through-records.md")]
+pub struct CoordinatingThroughRecordsTemplate<'a> {
+    pub surface: &'a str,
+}
