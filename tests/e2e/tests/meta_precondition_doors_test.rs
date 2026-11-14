@@ -1131,7 +1131,7 @@ async fn a_misspelled_expect_is_refused_and_nothing_is_written(pool: PgPool) {
     for event in captured.iter().filter(|e| e.level <= tracing::Level::WARN) {
         for value in event.fields.values().chain(event.span_fields.values()) {
             assert!(
-                !value.contains("claim-of-the-caller") && !value.contains("expects"),
+                !value.contains("claim-of-the-caller"),
                 "a {} line carries the refused call: {event:#?}",
                 event.level
             );

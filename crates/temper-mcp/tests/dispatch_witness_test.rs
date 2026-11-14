@@ -230,14 +230,13 @@ async fn every_declared_argument_reaches_its_tool() {
         )
         .await;
         if let Ok(rmcp::model::CallToolResponse::Complete(result)) = &answer {
-            let text = result.content[0]
-                .as_text()
-                .map(|t| t.text.as_str())
-                .unwrap_or("");
-            assert!(
-                !text.contains("unknown argument"),
-                "`{name}`: no declared argument is refused: {text}"
-            );
+            for part in &result.content {
+                let text = part.as_text().map(|t| t.text.as_str()).unwrap_or("");
+                assert!(
+                    !text.contains("unknown argument"),
+                    "`{name}`: no declared argument is refused: {text}"
+                );
+            }
         }
     }
 }

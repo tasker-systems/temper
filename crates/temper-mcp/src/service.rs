@@ -1223,8 +1223,12 @@ fn request_parts(extensions: &rmcp::model::Extensions) -> http::request::Parts {
 /// The host's `correlation_id`, applied to a call only when the tool declares the argument and
 /// the agent sent none (absent or `null`). An agent-supplied value is never overridden, and a
 /// tool without the argument is never given one.
-fn fill_correlation_id(request: &mut rmcp::model::CallToolRequestParams, id: uuid::Uuid) {
-    let declares = TemperMcpService::tool_router()
+fn fill_correlation_id(
+    router: &rmcp::handler::server::router::tool::ToolRouter<TemperMcpService>,
+    request: &mut rmcp::model::CallToolRequestParams,
+    id: uuid::Uuid,
+) {
+    let declares = router
         .get(request.name.as_ref())
         .and_then(|tool| tool.input_schema.get("properties").cloned())
         .is_some_and(|props| props.get("correlation_id").is_some());
@@ -1246,10 +1250,10 @@ fn fill_correlation_id(request: &mut rmcp::model::CallToolRequestParams, id: uui
 /// The refusal for a call carrying an argument its tool does not declare, or `None` when every
 /// argument is declared. An unknown tool is left to the router, which answers "tool not found".
 fn refuse_undeclared_arguments(
+    router: &rmcp::handler::server::router::tool::ToolRouter<TemperMcpService>,
     request: &rmcp::model::CallToolRequestParams,
 ) -> Option<rmcp::model::CallToolResult> {
     let arguments = request.arguments.as_ref()?;
-    let router = TemperMcpService::tool_router();
     let tool = router.get(request.name.as_ref())?;
     let unknown = crate::arguments::undeclared(&tool.input_schema, arguments);
     (!unknown.is_empty())
@@ -1295,23 +1299,25 @@ impl rmcp::ServerHandler for TemperMcpService {
         mut request: rmcp::model::CallToolRequestParams,
         mut context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        // Built once per call: the correlation fill, the argument gate and dispatch share it.
+        let router = Self::tool_router();
         let mut parts = request_parts(&context.extensions);
         // Any identity riding in from elsewhere is discarded: only this gate resolves one.
         parts.extensions.remove::<ResolvedIdentity>();
         if let Some(identity) = self.outgoing_identity(&parts)? {
             if let Some(correlation_id) = identity.correlation_id() {
-                fill_correlation_id(&mut request, correlation_id);
+                fill_correlation_id(&router, &mut request, correlation_id);
             }
             parts.extensions.insert(ResolvedIdentity(identity));
         }
         // The tools read the parts from the context: replace them with the resolved ones (or
         // supply empty ones when the transport carried none).
         context.extensions.insert(parts);
-        if let Some(refused) = refuse_undeclared_arguments(&request) {
+        if let Some(refused) = refuse_undeclared_arguments(&router, &request) {
             return Ok(refused.into());
         }
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        Self::tool_router().call(tcc).await
+        router.call(tcc).await
     }
 
     /// Manual override — `#[tool_handler]` generates `list_tools` only when the impl
@@ -1435,14 +1441,14 @@ mod tests {
         let agent = "01a10000-0000-7000-8000-000000000001";
 
         let mut absent = call("create_resource", serde_json::json!({"title": "t"}));
-        super::fill_correlation_id(&mut absent, host);
+        super::fill_correlation_id(&TemperMcpService::tool_router(), &mut absent, host);
         assert_eq!(
             absent.arguments.unwrap()["correlation_id"],
             serde_json::json!(host.to_string())
         );
 
         let mut null = call("relationship", serde_json::json!({"correlation_id": null}));
-        super::fill_correlation_id(&mut null, host);
+        super::fill_correlation_id(&TemperMcpService::tool_router(), &mut null, host);
         assert_eq!(
             null.arguments.unwrap()["correlation_id"],
             serde_json::json!(host.to_string())
@@ -1452,7 +1458,7 @@ mod tests {
             "create_resource",
             serde_json::json!({"correlation_id": agent}),
         );
-        super::fill_correlation_id(&mut sent, host);
+        super::fill_correlation_id(&TemperMcpService::tool_router(), &mut sent, host);
         assert_eq!(
             sent.arguments.unwrap()["correlation_id"],
             serde_json::json!(agent),
@@ -1460,7 +1466,7 @@ mod tests {
         );
 
         let mut read = call("search", serde_json::json!({"query": "q"}));
-        super::fill_correlation_id(&mut read, host);
+        super::fill_correlation_id(&TemperMcpService::tool_router(), &mut read, host);
         assert!(
             !read.arguments.unwrap().contains_key("correlation_id"),
             "a tool that does not declare the argument is never given it"
@@ -1548,6 +1554,64 @@ mod tests {
             )));
         svc.relay_client(&parts)
             .expect("the call's resolved identity builds the client");
+    }
+
+    /// The host's correlation fill never trips the argument gate it runs before: every tool, called
+    /// with no arguments and then filled, passes the gate. FAILS IF the fill inserts a key a tool
+    /// does not declare, or the gate is moved to read a set the fill does not.
+    #[test]
+    fn the_correlation_fill_never_trips_the_argument_gate() {
+        let router = TemperMcpService::tool_router();
+        let host = uuid::Uuid::now_v7();
+        let mut filled = 0;
+        for tool in router.list_all() {
+            let mut request = rmcp::model::CallToolRequestParams::new(tool.name.to_string())
+                .with_arguments(serde_json::Map::new());
+            super::fill_correlation_id(&router, &mut request, host);
+            if request
+                .arguments
+                .as_ref()
+                .is_some_and(|a| a.contains_key("correlation_id"))
+            {
+                filled += 1;
+            }
+            assert!(
+                super::refuse_undeclared_arguments(&router, &request).is_none(),
+                "`{}`: the fill tripped the gate",
+                tool.name
+            );
+        }
+        assert!(filled >= 10, "the fill reached only {filled} tools");
+    }
+
+    /// Every tool's input schema is one flat object whose top-level `properties` is the whole
+    /// declared argument set: the set the undeclared-argument gate (`crate::arguments`) admits.
+    /// FAILS IF a schema grows a top-level `oneOf`/`anyOf`/`allOf`/`$ref` (its arguments would live
+    /// where the gate does not read, and a declared argument would be refused) or loses
+    /// `properties`.
+    #[test]
+    fn every_input_schema_declares_its_arguments_as_top_level_properties() {
+        for tool in TemperMcpService::tool_router().list_all() {
+            let schema = &*tool.input_schema;
+            assert_eq!(
+                schema.get("type"),
+                Some(&serde_json::json!("object")),
+                "`{}`",
+                tool.name
+            );
+            assert!(
+                schema.get("properties").is_some_and(|p| p.is_object()),
+                "`{}` declares no top-level properties",
+                tool.name
+            );
+            for combinator in ["oneOf", "anyOf", "allOf", "$ref", "patternProperties"] {
+                assert!(
+                    !schema.contains_key(combinator),
+                    "`{}` carries a top-level `{combinator}` the gate does not read",
+                    tool.name
+                );
+            }
+        }
     }
 
     /// Every tool that carries the agent's act fields carries `correlation_id` where the fill

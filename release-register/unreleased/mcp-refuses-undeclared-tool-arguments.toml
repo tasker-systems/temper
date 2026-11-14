@@ -12,7 +12,7 @@ update_resource disarmed the guard, and the write landed unconditionally and ans
 
 The refusal is a tool-execution error result (isError: true), never a JSON-RPC error, which rmcp
 logs at warn with its data. Its one text part names the unknown keys (at most 8, each cut to 64
-characters) and the keys the tool takes, and carries no argument value:
+characters and escaped) and the keys the tool takes, and carries no argument value:
 "update_resource_meta: unknown argument `expects`; nothing was done. update_resource_meta takes:
 ...". It carries no structuredContent.
 
