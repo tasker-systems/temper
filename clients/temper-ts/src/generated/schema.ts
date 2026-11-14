@@ -7317,9 +7317,9 @@ export interface components {
          */
         FailedExpectation: {
             /** @description What is there now (`null`: absent). */
-            current: Record<string, never> | null;
+            current: unknown;
             /** @description What the caller expected, as it sent it (`null`: absent). */
-            expected: Record<string, never> | null;
+            expected: unknown;
             /** @description The key the expectation named. Present on every `open` and `managed` entry. */
             key?: string | null;
             tier: components["schemas"]["PreconditionTier"];
@@ -8599,6 +8599,13 @@ export interface components {
          *       read.
          *
          *     Unknown members are refused (`422`), so a misspelled tier is never silently dropped.
+         *
+         *     - **A retried write can meet its own success.** If a guarded write landed but its answer was
+         *       lost, the same request sent again is refused with a `412` whose `current` is the value it
+         *       wrote. Make guarded values unique to the writer (a claim id, a lease token) so that refusal
+         *       reads as "my earlier attempt landed".
+         *     - **Only the named keys are guarded.** Other keys the same write sets land as they would without
+         *       an `expect`; an `open_meta_add` on an unguarded key unions over a read taken before the lock.
          */
         MetaExpect: {
             /** @description Managed-tier keys and the value each is expected to hold now (`null`: absent). */
@@ -20542,7 +20549,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResourceView"];
                 };
             };
-            /** @description Bad request (e.g. unknown open_meta key, or content sent without server-side pipeline) */
+            /** @description Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, or a malformed `expect`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED) */
             400: {
                 headers: {
                     [name: string]: unknown;

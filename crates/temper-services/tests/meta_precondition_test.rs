@@ -1024,18 +1024,31 @@ async fn a_scrubbed_value_never_surfaces(pool: PgPool) {
 
     let read = open_tier(&pool, owner, resource).await;
     let shown = read.get("note").cloned().unwrap_or(Value::Null);
-    let f = failure(
-        backend(&pool, owner)
-            .update_resource(patch_open(
+    let be = backend(&pool, owner);
+    // The scrubbed value itself must not satisfy a guard: a 200 here would be a yes/no answer
+    // about a value the act removed.
+    for guess in ["hush-hush", "the-old-value"] {
+        let f = failure(
+            be.update_resource(patch_open(
                 resource,
                 json!({"x": 1}),
-                Some(expect(json!({"open": {"note": "the-old-value"}}))),
+                Some(expect(json!({"open": {"note": guess}}))),
             ))
             .await,
-    );
-    assert_eq!(f.failed[0].current, shown, "current is what the read shows");
-    assert!(
-        !serde_json::to_string(&f).unwrap().contains("hush-hush"),
-        "the scrubbed value never comes back"
-    );
+        );
+        assert_eq!(f.failed[0].current, shown, "current is what the read shows");
+        assert_ne!(
+            f.failed[0].current,
+            json!("hush-hush"),
+            "the scrubbed value never comes back"
+        );
+    }
+    // And the guard on what the read shows holds.
+    be.update_resource(patch_open(
+        resource,
+        json!({"x": 1}),
+        Some(expect(json!({"open": {"note": shown}}))),
+    ))
+    .await
+    .expect("the read's value is the current value");
 }

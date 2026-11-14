@@ -33,6 +33,13 @@ use serde_json::Value;
 ///   read.
 ///
 /// Unknown members are refused (`422`), so a misspelled tier is never silently dropped.
+///
+/// - **A retried write can meet its own success.** If a guarded write landed but its answer was
+///   lost, the same request sent again is refused with a `412` whose `current` is the value it
+///   wrote. Make guarded values unique to the writer (a claim id, a lease token) so that refusal
+///   reads as "my earlier attempt landed".
+/// - **Only the named keys are guarded.** Other keys the same write sets land as they would without
+///   an `expect`; an `open_meta_add` on an unguarded key unions over a read taken before the lock.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -88,10 +95,8 @@ pub struct FailedExpectation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     /// What the caller expected, as it sent it (`null`: absent).
-    #[cfg_attr(feature = "web-api", schema(value_type = Object, nullable))]
     pub expected: Value,
     /// What is there now (`null`: absent).
-    #[cfg_attr(feature = "web-api", schema(value_type = Object, nullable))]
     pub current: Value,
 }
 

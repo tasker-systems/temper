@@ -950,12 +950,18 @@ impl DbBackend {
         readback::ensure_visible(&mut *conn, self.profile_id, resource)
             .await
             .map_err(map_readback_err)?;
-        match precondition::judge(&mut *conn, resource, expect)
+        match precondition::judge(&mut *conn, self.profile_id, resource, expect)
             .await
             .map_err(api_err)?
         {
-            Ok(()) => Ok(()),
-            Err(failure) => Err(TemperError::PreconditionFailed(failure)),
+            precondition::Judgment::Holds => Ok(()),
+            precondition::Judgment::Fails(failure) => Err(TemperError::PreconditionFailed(failure)),
+            precondition::Judgment::NotVisible => {
+                Err(map_readback_err(readback::ReadbackError::NotVisible {
+                    resource_id: resource,
+                    principal: self.profile_id,
+                }))
+            }
         }
     }
 

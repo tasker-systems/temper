@@ -10,7 +10,7 @@ use sqlx::PgConnection;
 
 use temper_core::error::TemperError;
 use temper_core::types::data_artifact::holds_nul;
-use temper_core::types::ids::ResourceId;
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::precondition::{
     FailedExpectation, MetaExpect, PreconditionFailure, PreconditionTier,
 };
@@ -103,18 +103,31 @@ pub(crate) fn refuse_without_a_write(writes_something: bool) -> Result<(), Tempe
     }
 }
 
+/// What [`judge`] found.
+#[derive(Debug)]
+pub(crate) enum Judgment {
+    /// Every expectation holds.
+    Holds,
+    /// At least one does not; the failure lists exactly those, `open` before `managed` and by key
+    /// within a tier.
+    Fails(PreconditionFailure),
+    /// The caller cannot read the resource in this statement's snapshot. No value was read; the
+    /// caller answers GET's 404.
+    NotVisible,
+}
+
 /// Judge every expectation against the resource's newest live property rows, in one statement on
 /// `conn`. The caller holds the resource's writer lock on `conn`'s transaction and has already
-/// established that the caller can read the resource, so `current` discloses only what a read
-/// would.
-///
-/// `Ok(Err(failure))` when any expectation fails; the failure lists exactly those, `open` before
-/// `managed` and by key within a tier.
+/// asked the read gate on it; the statement asks GET's read predicate once more itself, so the
+/// values it reports and the standing that admits them come from one snapshot. A revocation
+/// committing between the gate and this statement is answered [`Judgment::NotVisible`], never a
+/// value.
 pub(crate) async fn judge(
     conn: &mut PgConnection,
+    principal: ProfileId,
     resource: ResourceId,
     expect: &MetaExpect,
-) -> anyhow::Result<Result<(), PreconditionFailure>> {
+) -> anyhow::Result<Judgment> {
     let open = serde_json::to_value(&expect.open)?;
     let managed = serde_json::to_value(&expect.managed)?;
     // `live` is the rows `readback::meta` classifies, newest first per key, so its newest-wins is
@@ -124,7 +137,11 @@ pub(crate) async fn judge(
     // `LEFT JOIN`'s SQL NULL. The comparison is jsonb `=` after the write-time normalization, so a
     // bare-string `tags` matches its stored array and `1` matches `1.0`; never compare in Rust.
     let rows = sqlx::query!(
-        r#"WITH exp AS (
+        r#"WITH vis AS (
+             SELECT EXISTS (
+               SELECT 1 FROM resources_visible_to($4) v WHERE v.resource_id = $1
+             ) AS visible
+           ), exp AS (
              SELECT 'open'::text AS tier, key, value FROM jsonb_each($2::jsonb)
              UNION ALL
              SELECT 'managed'::text, key, value FROM jsonb_each($3::jsonb)
@@ -133,9 +150,11 @@ pub(crate) async fn judge(
                FROM kb_properties
               WHERE owner_table = 'kb_resources' AND owner_id = $1 AND NOT is_folded
                 AND property_key IN (SELECT key FROM exp)
+                AND (SELECT visible FROM vis)
               ORDER BY property_key, created DESC, id DESC
            )
-           SELECT e.tier AS "tier!",
+           SELECT (SELECT visible FROM vis) AS "visible!",
+                  e.tier AS "tier!",
                   e.key AS "key!",
                   e.value AS "expected!",
                   NULLIF(l.property_value, 'null'::jsonb) AS current,
@@ -150,9 +169,13 @@ pub(crate) async fn judge(
         resource.uuid(),
         open,
         managed,
+        principal.uuid(),
     )
     .fetch_all(&mut *conn)
     .await?;
+    if rows.iter().any(|row| !row.visible) {
+        return Ok(Judgment::NotVisible);
+    }
 
     let failed: Vec<FailedExpectation> = rows
         .into_iter()
@@ -169,9 +192,9 @@ pub(crate) async fn judge(
         })
         .collect();
     if failed.is_empty() {
-        Ok(Ok(()))
+        Ok(Judgment::Holds)
     } else {
-        Ok(Err(PreconditionFailure { failed }))
+        Ok(Judgment::Fails(PreconditionFailure { failed }))
     }
 }
 

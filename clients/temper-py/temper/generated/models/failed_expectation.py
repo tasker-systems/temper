@@ -28,8 +28,8 @@ class FailedExpectation(BaseModel):
     """
     One expectation that did not hold.  `current` is the value the caller could read now; `null` means the key is absent now. Nothing else is ever added: no actor, time, event, position, revision or count.
     """ # noqa: E501
-    current: Optional[Dict[str, Any]] = Field(description="What is there now (`null`: absent).")
-    expected: Optional[Dict[str, Any]] = Field(description="What the caller expected, as it sent it (`null`: absent).")
+    current: Optional[Any]
+    expected: Optional[Any]
     key: Optional[StrictStr] = Field(default=None, description="The key the expectation named. Present on every `open` and `managed` entry.")
     tier: PreconditionTier
     __properties: ClassVar[List[str]] = ["current", "expected", "key", "tier"]

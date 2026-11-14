@@ -16,10 +16,8 @@ require 'time'
 module Temper::Generated
   # One expectation that did not hold.  `current` is the value the caller could read now; `null` means the key is absent now. Nothing else is ever added: no actor, time, event, position, revision or count.
   class FailedExpectation < ApiModelBase
-    # What is there now (`null`: absent).
     attr_accessor :current
 
-    # What the caller expected, as it sent it (`null`: absent).
     attr_accessor :expected
 
     # The key the expectation named. Present on every `open` and `managed` entry.

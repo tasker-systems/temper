@@ -360,7 +360,7 @@ pub async fn create(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Updated resource", body = ResourceView),
-        (status = 400, description = "Bad request (e.g. unknown open_meta key, or content sent without server-side pipeline)", body = ErrorBody),
+        (status = 400, description = "Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, or a malformed `expect`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),

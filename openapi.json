@@ -12038,7 +12038,7 @@
             }
           },
           "400": {
-            "description": "Bad request (e.g. unknown open_meta key, or content sent without server-side pipeline)",
+            "description": "Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, or a malformed `expect`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -22031,17 +22031,9 @@
         ],
         "properties": {
           "current": {
-            "type": [
-              "object",
-              "null"
-            ],
             "description": "What is there now (`null`: absent)."
           },
           "expected": {
-            "type": [
-              "object",
-              "null"
-            ],
             "description": "What the caller expected, as it sent it (`null`: absent)."
           },
           "key": {
@@ -24200,7 +24192,7 @@
       },
       "MetaExpect": {
         "type": "object",
-        "description": "Per-key expected values for a meta write, by tier.\n\n- **A top-level `null` means absent**: the key has no live value, which is also how a key whose\n  newest stored value is a top-level `null` reads. A nested `null` is a value.\n- **Values are compared as stored**: after the server's write-time normalization (a bare-string\n  `tags` value is stored as a one-element array) and by JSON value equality, so `1` equals\n  `1.0`. Echo back the values you read rather than reformatting them, and guard on strings or\n  on integers within ±2^53.\n- **A key need not be one the write writes.** Every named key is judged, written or not.\n- **`open`** names open-tier keys: never `facet`, `doc_type`, a managed key, or an identity key\n  (`temper-title`, `temper-slug`, `temper-id`, `temper-context`, `temper-goal`,\n  `temper-type`). **`managed`** names managed workflow and provenance keys only\n  (`temper-stage`, `temper-status`, …). Anything else is a `400`.\n- **A key named here may not also be in `open_meta_add`** (`400`): the union is computed\n  from a read taken before the guard is judged.\n- **An `expect` on a request that writes nothing is a `400`**: a check without a write is a\n  read.\n\nUnknown members are refused (`422`), so a misspelled tier is never silently dropped.",
+        "description": "Per-key expected values for a meta write, by tier.\n\n- **A top-level `null` means absent**: the key has no live value, which is also how a key whose\n  newest stored value is a top-level `null` reads. A nested `null` is a value.\n- **Values are compared as stored**: after the server's write-time normalization (a bare-string\n  `tags` value is stored as a one-element array) and by JSON value equality, so `1` equals\n  `1.0`. Echo back the values you read rather than reformatting them, and guard on strings or\n  on integers within ±2^53.\n- **A key need not be one the write writes.** Every named key is judged, written or not.\n- **`open`** names open-tier keys: never `facet`, `doc_type`, a managed key, or an identity key\n  (`temper-title`, `temper-slug`, `temper-id`, `temper-context`, `temper-goal`,\n  `temper-type`). **`managed`** names managed workflow and provenance keys only\n  (`temper-stage`, `temper-status`, …). Anything else is a `400`.\n- **A key named here may not also be in `open_meta_add`** (`400`): the union is computed\n  from a read taken before the guard is judged.\n- **An `expect` on a request that writes nothing is a `400`**: a check without a write is a\n  read.\n\nUnknown members are refused (`422`), so a misspelled tier is never silently dropped.\n\n- **A retried write can meet its own success.** If a guarded write landed but its answer was\n  lost, the same request sent again is refused with a `412` whose `current` is the value it\n  wrote. Make guarded values unique to the writer (a claim id, a lease token) so that refusal\n  reads as \"my earlier attempt landed\".\n- **Only the named keys are guarded.** Other keys the same write sets land as they would without\n  an `expect`; an `open_meta_add` on an unguarded key unions over a read taken before the lock.",
         "properties": {
           "managed": {
             "type": "object",
