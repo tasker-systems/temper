@@ -1604,7 +1604,18 @@ mod tests {
                 "`{}` declares no top-level properties",
                 tool.name
             );
-            for combinator in ["oneOf", "anyOf", "allOf", "$ref", "patternProperties"] {
+            for combinator in [
+                "oneOf",
+                "anyOf",
+                "allOf",
+                "$ref",
+                "patternProperties",
+                "if",
+                "then",
+                "else",
+                "not",
+                "dependentSchemas",
+            ] {
                 assert!(
                     !schema.contains_key(combinator),
                     "`{}` carries a top-level `{combinator}` the gate does not read",
