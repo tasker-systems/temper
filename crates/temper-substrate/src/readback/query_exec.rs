@@ -101,6 +101,11 @@ pub struct TallyRow {
     /// malformed as ONE number. Always 0 where the input came from an upstream stage (already
     /// gated) or from an anchor pair (see `query_plan::NO_UNUSABLE`).
     pub unusable: i64,
+    /// The count of the stage's UNPAGED match set, for an act that pages one — `list-resources-with`
+    /// today — and `None` for every other stage and for a refused one. Counted in the same
+    /// statement as the rows, over the set the page was cut from, so it is present on every page:
+    /// `0` when nothing matched, and the full count past the end.
+    pub total: Option<i64>,
 }
 
 /// What one artifact ask of one stage counted: one row per (stage, ask) the compiler emitted an arm
@@ -267,8 +272,9 @@ impl QueryRows {
     /// so summing or interleaving them cannot happen by reaching for the obvious accessor.
     pub fn hits_for(&self, stage: &str) -> Vec<&HitRow> {
         let mut rows: Vec<&HitRow> = self.hits.iter().filter(|h| h.stage == stage).collect();
-        // Descending: every quantity in this family is better-when-higher (`fts_norm`, `vec_norm`,
-        // `graph_score`, `region_score`). A row with no quantity sorts last rather than first — it
+        // Descending: every quantity in this family is higher-first (`fts_norm`, `vec_norm`,
+        // `graph_score` and `region_score` are better-when-higher; `created_epoch` is newer-when-
+        // higher, and its caller-chosen `asc` is restored by the assembler, never here). A row with no quantity sorts last rather than first — it
         // is the absence of a score, not a perfect one.
         rows.sort_by(|a, b| {
             b.quantity
@@ -327,6 +333,7 @@ pub async fn execute(pool: &PgPool, compiled: &CompiledQuery) -> Result<QueryRow
                 stage,
                 produced: row.try_get("produced")?,
                 unusable: row.try_get("unusable")?,
+                total: row.try_get("total")?,
             }),
             RowClass::Population => out.populations.push(PopulationRow {
                 stage,
@@ -373,6 +380,7 @@ mod tests {
                     stage: (*s).to_string(),
                     produced: i as i64,
                     unusable: 0,
+                    total: None,
                 })
                 .collect(),
             refusals: vec![PlanRefusal {

@@ -113,6 +113,10 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("BoundTermNotApplicable", 1),
         ("CombinatorArity", 2),
         ("StageNotReturnable", 1),
+        // `StageNotPipeable` `[added — 2026-11-14]`, the mirror of `StageNotReturnable` and decided
+        // the same way: by act NAME, consulting no declaration, so a client raises it against a
+        // server it does not share a binary with and under-refuses an act it does not know.
+        ("StageNotPipeable", 1),
         ("Cycle", 1),
         ("DanglingReference", 1),
         ("DuplicateInputRelation", 1),

@@ -893,6 +893,7 @@ fn refusing_a_path(shape: ShapeId) -> Composition {
         },
         stages: vec![
             StageNode::Act(ActInvocation {
+                order: None,
                 name: sel.clone(),
                 act: ActName::FindResourcesWith,
                 intention: None,
@@ -913,6 +914,7 @@ fn refusing_a_path(shape: ShapeId) -> Composition {
                 }],
             }),
             StageNode::Act(ActInvocation {
+                order: None,
                 name: hits,
                 act: ActName::FindExact,
                 intention: Some(Intention {

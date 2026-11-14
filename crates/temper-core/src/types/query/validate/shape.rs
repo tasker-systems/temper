@@ -467,7 +467,8 @@ pub(super) fn validate_shape_indexed(
             ),
             Some(StageNode::Act(inv)) if matches!(inv.act, ActName::FindResourcesWith) => Some(
                 "selects a set and orders nothing, so its rows have no quantity to score them; \
-                 pipe it into a find act as a bound and return that instead",
+                 return `list-resources-with` with the same filters to get its rows, or pipe it \
+                 into a find act as a bound and return that instead",
             ),
             _ => None,
         };
@@ -484,6 +485,40 @@ pub(super) fn validate_shape_indexed(
                 RefusalReason::UnknownReturnStage,
                 format!("returns names undeclared stage `{}`", ret.stage.as_str()),
             ));
+        }
+    }
+
+    // **A page may not be PIPED.** `[added — 2026-11-14]` The mirror of the rule above: a
+    // `list-resources-with` stage may be returned and nothing else. Its output is a page, and a
+    // page named as a later stage's input — a bound, a seed, or any combinator operand — looks
+    // exactly like the set it samples. As a bound it narrows to an arbitrary subset while reading
+    // as a narrowing; as a `difference` subtrahend it is worse, because `difference` is
+    // anti-monotone: every match past the page comes back as ABSENT, under `extent: complete`.
+    // Taint comes only from refusals, so nothing downstream would say so.
+    //
+    // Named acts, as `StageNotReturnable` is decided, and safe under version skew for the same
+    // reason: an older client parses the act as `ActName::Other(..)` and under-refuses. One
+    // refusal per consuming stage (`break`), for the bounded-refusal-list reason the dangling
+    // reference check gives.
+    for node in &c.stages {
+        for up in node.upstream_names() {
+            if let Some(StageNode::Act(inv)) = by_name.get(up.as_str()) {
+                if matches!(inv.act, ActName::ListResourcesWith) {
+                    errs.push(refusal(
+                        Some(node.name()),
+                        RefusalReason::StageNotPipeable,
+                        format!(
+                            "stage `{}` takes `{}` as an input, and a `list-resources-with` \
+                             stage returns a page, which is a sample of its set and not the set; \
+                             select with `find-resources-with` and pipe that, and return \
+                             `list-resources-with`",
+                            node.name().as_str(),
+                            up.as_str()
+                        ),
+                    ));
+                    break;
+                }
+            }
         }
     }
 

@@ -302,6 +302,23 @@ PREFIX='__temper_ungated_'
 #   EMITTER: `emit_ungated_core_call`'s `CoreCall::Walk` arm writes `VISIBLE_IDS` first and
 #     `PRINCIPAL_BIND` last. No caller-supplied value reaches either.
 #   RESIDUE: unchanged and accepted.
+#
+# REVIEWED 2026-11-14 (`__temper_ungated_list_resources_with`, migration 20261128000010, the
+# `list-resources-with` act: the selection's rows, returned). The function-NAME set grows by one
+# and the SQL-file set by one. The relation watch does not move: the body reads the selection core
+# and `kb_resources`, which the 14-argument core already reads.
+#   VERDICT: the gated wrapper `query_list_resources_with` computes
+#     `resources_visible_to(p_principal)` once and hands it down, with `p_principal` as the anchor
+#     reader — `query_find_resources_with`'s shape exactly. The core computes no visible set of its
+#     own: it calls `__temper_ungated_find_resources_with` with `p_visible_ids` unchanged, so every
+#     row it returns has passed that core's `JOIN unnest(p_visible_ids)`, and then narrows by
+#     `p_bound_ids`, a scope whose NULL is unbounded — the opposite polarity from the verdict.
+#   EMITTER: `emit_ungated_core_call`'s `CoreCall::List` arm writes `VISIBLE_IDS` first and
+#     `PRINCIPAL_BIND` as the anchor reader, as the `Selection` arm does; the bound is the last
+#     argument and comes from `narrowing_for`. No caller-supplied value reaches either authorization
+#     input. The stage's `total` is a `count(*)` over this call's output, so it counts only rows
+#     that passed the verdict.
+#   RESIDUE: unchanged and accepted.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_artifact_ask_counts
 __temper_ungated_artifact_ask_population
@@ -315,6 +332,7 @@ __temper_ungated_governed_artifact_states
 __temper_ungated_governed_artifact_states_in
 __temper_ungated_governed_artifacts
 __temper_ungated_governed_artifacts_in
+__temper_ungated_list_resources_with
 __temper_ungated_survey
 EOF
 
@@ -370,9 +388,17 @@ EOF
 # `VISIBLE_IDS` and `PRINCIPAL_BIND` as every other arm does, so the count is still constants rather
 # than call sites. `validate/mod.rs` does not move: the counts function is no act's fragment, so
 # `CALLABLE_FRAGMENTS` does not name it.
+#
+# REVIEWED 2026-11-14 (`list-resources-with`, migration 20261128000010) — both counts move by one.
+#   validate/mod.rs 6 -> 7: `CALLABLE_FRAGMENTS` gains
+#     `query_list_resources_with -> __temper_ungated_list_resources_with`. Naming a core here still
+#     does NOT call one.
+#   query_plan.rs 6 -> 7: the `EMIT_LIST_RESOURCES_WITH` constant, and nothing else. The list arm
+#     emits through it and through `emit_ungated_core_call`'s `CoreCall::List` arm, which fixes
+#     `VISIBLE_IDS` and `PRINCIPAL_BIND` as every other arm does.
 read -r -d '' RUST_BASELINE <<'EOF' || true
-6 crates/temper-core/src/types/query/validate/mod.rs
-6 crates/temper-substrate/src/readback/query_plan.rs
+7 crates/temper-core/src/types/query/validate/mod.rs
+7 crates/temper-substrate/src/readback/query_plan.rs
 EOF
 
 # The SQL half: ungated functions DEFINED in migrations. A definition is what creates the hazard; a
@@ -666,6 +692,8 @@ sql_relations_current() {
 #   SQL_BASELINE entry of the same date; this list moves for the same reason.
 # Reviewed 2026-10-24, migration 20261106000000: it DEFINES the counted set's body and re-points the
 #   counted set to delegate to it. The review is the SQL_BASELINE entry of the same date.
+# Reviewed 2026-11-14, migration 20261128000010: it DEFINES the list core over the selection core.
+#   The review is the SQL_BASELINE entry of the same date.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -687,6 +715,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20261105000000_artifact_ask_population_counts.sql
 20261106000000_artifact_ask_batch_read.sql
 20261119000010_follow_from_home_gate.sql
+20261128000010_list_resources_with.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──

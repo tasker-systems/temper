@@ -558,6 +558,11 @@
           "type": "string"
         },
         {
+          "const": "created_epoch",
+          "description": "The resource's creation instant in Unix epoch seconds. UNBOUNDED, and an enumeration key\nrather than a relevance: higher is newer, never better. `list-resources-with`.",
+          "type": "string"
+        },
+        {
           "description": "A kind this consumer does not recognize — only ever produced by deserializing a producer\nnewer than this consumer.",
           "type": "string"
         }

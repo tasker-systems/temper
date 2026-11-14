@@ -50,7 +50,8 @@ paths it declares, with the closed operators `has_key`, `contains` and `compare`
 One ask object, two arms:
 
 - **Which resources hold matches** — `find-resources-with`'s `artifact_filter`, in a query
-  composition; it answers resource ids that pipe on. A resource is selected when, for **every** ask,
+  composition; it answers resource ids that pipe on (`list-resources-with` takes the same filter and
+  returns the resources as rows). A resource is selected when, for **every** ask,
   one of its artifacts satisfies **all** of that ask's predicates — so predicates in one ask hold of
   one artifact, and separate asks may be met by different artifacts.
 - **The matching artifacts, whole** — the batch read, the ask sent alone. It answers artifacts, never

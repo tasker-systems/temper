@@ -198,6 +198,7 @@ fn plan_asking(asks: Vec<ArtifactAsk>) -> Composition {
         },
         stages: vec![
             StageNode::Act(ActInvocation {
+                order: None,
                 name: sel.clone(),
                 act: ActName::FindResourcesWith,
                 intention: None,
@@ -209,6 +210,7 @@ fn plan_asking(asks: Vec<ArtifactAsk>) -> Composition {
                 artifact_filter: asks,
             }),
             StageNode::Act(ActInvocation {
+                order: None,
                 name: hits,
                 act: ActName::FindExact,
                 intention: Some(Intention {
@@ -674,6 +676,7 @@ async fn two_asking_stages_over_two_homes_each_carry_their_own_counts(pool: PgPo
     c.stages.insert(
         1,
         StageNode::Act(ActInvocation {
+            order: None,
             name: sel_b.clone(),
             act: ActName::FindResourcesWith,
             intention: None,

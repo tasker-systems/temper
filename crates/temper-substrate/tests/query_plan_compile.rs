@@ -31,6 +31,7 @@ fn test_profile() -> ProfileId {
 /// which act produced it, so they move onto a reachable act unchanged.
 fn find_root(name: &str, ids: Vec<Uuid>) -> StageNode {
     StageNode::Act(ActInvocation {
+        order: None,
         name: StageName::parse(name).unwrap(),
         act: ActName::FindExact,
         intention: Some(Intention {
@@ -60,6 +61,7 @@ fn find_root(name: &str, ids: Vec<Uuid>) -> StageNode {
 /// instead of the bound this file's assertions read.
 fn find_from(name: &str, upstream: &str) -> StageNode {
     StageNode::Act(ActInvocation {
+        order: None,
         name: StageName::parse(name).unwrap(),
         act: ActName::FindExact,
         intention: Some(Intention {
@@ -464,6 +466,7 @@ const EMIT_FIND_WIDE: &str = "__temper_ungated_find_wide";
 /// plan here would refuse `MissingIntention` for a reason no test is about.
 fn find_stage(name: &str, act: ActName, input: Option<StageInput>) -> StageNode {
     StageNode::Act(ActInvocation {
+        order: None,
         name: StageName::parse(name).unwrap(),
         intention: Some(Intention {
             query: "salience".to_string(),
@@ -850,6 +853,7 @@ fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
     let seeds = vec![Uuid::now_v7()];
     let bound = vec![Uuid::now_v7(), Uuid::now_v7()];
     let walk = StageNode::Act(ActInvocation {
+        order: None,
         name: StageName::parse("near").unwrap(),
         act: ActName::FollowFrom,
         // A walk asks the corpus no question — it walks from a set it is handed.
@@ -987,6 +991,7 @@ fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
 #[test]
 fn a_walk_without_an_edge_filter_narrows_on_neither_axis() {
     let walk = StageNode::Act(ActInvocation {
+        order: None,
         name: StageName::parse("near").unwrap(),
         act: ActName::FollowFrom,
         intention: None,
@@ -1044,6 +1049,7 @@ fn a_walk_without_an_edge_filter_narrows_on_neither_axis() {
 #[test]
 fn an_edge_property_predicate_is_bound_as_the_serialized_typed_value() {
     let walk = StageNode::Act(ActInvocation {
+        order: None,
         name: StageName::parse("near").unwrap(),
         act: ActName::FollowFrom,
         intention: None,
@@ -1130,6 +1136,7 @@ fn an_edge_property_predicate_is_bound_as_the_serialized_typed_value() {
 fn a_declared_offset_reaches_the_walks_tenth_slot_and_an_absent_one_still_fills_it() {
     let walk_with = |terms: std::collections::BTreeMap<BoundTerm, i64>| {
         let walk = StageNode::Act(ActInvocation {
+            order: None,
             name: StageName::parse("near").unwrap(),
             act: ActName::FollowFrom,
             intention: None,
@@ -1579,8 +1586,19 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
             // narrowing argument and never an id source. Its one ask also gives the statement a
             // `Population` call — the ask's counts — which this guard holds to the same rule.
             asking_selection("asked"),
+            // `[added — 2026-11-14]` The `List` arm, bounded by the upstream find stage: the shape
+            // in which an upstream set and the verdict are both in scope for the list core.
+            list_stage(
+                "listed",
+                vec![StageInput::Upstream {
+                    relation: StageRelation::Bound,
+                    stage: StageName::parse("hits").unwrap(),
+                }],
+                &[],
+                None,
+            ),
         ],
-        vec!["narrowed"],
+        vec!["narrowed", "listed"],
         &asked_shapes(),
     );
     let c = compile(&v, test_profile()).expect("compiles");
@@ -1588,10 +1606,17 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
     let calls = ungated_core_calls(&c.sql);
     assert_eq!(
         calls.len(),
-        6,
-        "both find stages, both selections, the survey AND the asking selection's one population \
-         arm must reach an ungated function; got {calls:?} in:\n{}",
+        7,
+        "both find stages, both selections, the survey, the list AND the asking selection's one \
+         population arm must reach an ungated function; got {calls:?} in:\n{}",
         c.sql
+    );
+    assert!(
+        calls.iter().any(|c| c
+            .lines()
+            .next()
+            .is_some_and(|own| own.ends_with(r#"ARRAY(SELECT id FROM "hits"))"#))),
+        "the list variant must be among the calls this guard inspects: {calls:?}"
     );
     assert!(
         calls.iter().any(|c| c
@@ -1675,6 +1700,7 @@ fn no_stage_can_be_named_after_the_hoisted_visibility_relation() {
 /// A `find-resources-with` selection stage carrying every narrowing the act admits.
 fn selection(name: &str) -> StageNode {
     StageNode::Act(ActInvocation {
+        order: None,
         name: StageName::parse(name).unwrap(),
         act: ActName::FindResourcesWith,
         // **No intention, and no builder threads one onto it.** This is the one act that asks the
@@ -1748,6 +1774,7 @@ fn the_callers_ask() -> ArtifactAsk {
 /// else.
 fn asking_selection(name: &str) -> StageNode {
     StageNode::Act(ActInvocation {
+        order: None,
         name: StageName::parse(name).unwrap(),
         act: ActName::FindResourcesWith,
         intention: None,
@@ -1912,6 +1939,7 @@ fn every_arm_carries_the_population_columns_and_only_an_asking_stage_has_a_popul
 /// must cover it to verify the first argument is still the hoisted visible set.
 fn survey_stage(name: &str) -> StageNode {
     StageNode::Act(ActInvocation {
+        order: None,
         name: StageName::parse(name).unwrap(),
         act: ActName::Survey,
         intention: Some(Intention {
@@ -2512,4 +2540,323 @@ fn each_ask_of_a_stage_has_its_own_population_arm_reading_its_own_element() {
             "the arm labelled {k} must read element {k}.\n  expected: {reads}\n  arm: {arm}"
         );
     }
+}
+
+// ─── list-resources-with ────────────────────────────────────────────────────────────────────────
+
+/// A `list-resources-with` stage: no question, the given inputs, terms and order.
+fn list_stage(
+    name: &str,
+    inputs: Vec<StageInput>,
+    terms: &[(temper_core::types::query::BoundTerm, i64)],
+    order: Option<temper_core::types::resource::SortOrder>,
+) -> StageNode {
+    StageNode::Act(ActInvocation {
+        order,
+        name: StageName::parse(name).unwrap(),
+        act: ActName::ListResourcesWith,
+        intention: None,
+        inputs,
+        terms: terms.iter().cloned().collect(),
+        resource_filter: None,
+        edge_filter: None,
+        properties: vec![],
+        artifact_filter: vec![],
+    })
+}
+
+/// **A list stage is two CTEs: its unpaged match set `_m<k>`, and the page over it.** The core is
+/// the list core, its first argument the hoisted verdict and its last the bound; the page orders by
+/// `quantity` in the stage's direction then `id ASC`, and pages with the `paging_for` binds; the
+/// tally counts the match set for `total`.
+///
+/// Each `$n` is asserted where it sits in the TEXT. The bind vector's order is not the signature's
+/// (`narrowing_for` and `paging_for` push first), and only the placement is a property of the call.
+#[test]
+fn a_list_stage_emits_its_unpaged_match_set_and_a_page_over_it() {
+    let ids = vec![Uuid::now_v7(), Uuid::now_v7()];
+    let v = build(
+        vec![list_stage(
+            "rows",
+            vec![caller_set(IdKind::Resource, ids.clone())],
+            &[(BoundTerm::Limit, 10), (BoundTerm::Offset, 20)],
+            None,
+        )],
+        vec!["rows"],
+    );
+    let q = compile(&v, test_profile()).expect("a list stage compiles");
+
+    let matched = cte_body(&q.sql, "_m0");
+    let args = core_call_args(&matched, "__temper_ungated_list_resources_with");
+    let args = split_top_level(&args);
+    assert_eq!(
+        args.len(),
+        15,
+        "the list core takes fifteen arguments: {args:?}"
+    );
+    assert_eq!(
+        args[0], "(SELECT ids FROM __temper_vis)",
+        "the verdict comes first"
+    );
+    assert_eq!(args[12], "$1", "the principal reads the anchor, thirteenth");
+    assert_eq!(
+        args[14], "$2::uuid[]",
+        "the caller's ids are the bound, last"
+    );
+    assert!(
+        matched.contains("created_epoch::double precision AS quantity"),
+        "the match set carries created_epoch as the stage quantity: {matched}"
+    );
+    assert!(
+        !matched.contains("LIMIT") && !matched.contains("ORDER BY"),
+        "the match set is unpaged and unordered: {matched}"
+    );
+
+    let page = cte_body(&q.sql, "rows");
+    assert!(
+        page.contains(r#"FROM "_m0""#)
+            && page.contains("ORDER BY quantity DESC, id ASC LIMIT $3::int OFFSET $4::int"),
+        "the page reads the match set, newest first by default, id ascending on a tie: {page}"
+    );
+    assert!(
+        matches!(&q.binds[1], QueryBind::Uuids(b) if *b == ids),
+        "{:?}",
+        q.binds
+    );
+    assert!(matches!(q.binds[2], QueryBind::Int(10)), "{:?}", q.binds);
+    assert!(matches!(q.binds[3], QueryBind::Int(20)), "{:?}", q.binds);
+
+    let tally = tally_arm(&q.sql, "rows");
+    assert!(
+        tally.contains(r#"(SELECT count(*) FROM "_m0")::bigint AS total"#),
+        "the tally counts the unpaged match set: {tally}"
+    );
+    assert!(
+        tally.contains(r#"(SELECT count(*) FROM "rows")::bigint AS produced"#),
+        "and `produced` is still the page: {tally}"
+    );
+    let hit = hit_arm(&q.sql, "rows").expect("the returned stage arms as hits");
+    assert!(
+        hit.contains("NULL::bigint AS total") && hit.contains(r#"FROM "rows""#),
+        "the hit arm reads the page, and carries no total of its own: {hit}"
+    );
+    assert_eq!(q.sql.matches("resources_visible_to(").count(), 1);
+}
+
+/// The direction is the stage's `order`, rendered as one of two literals; an omitted order is
+/// `desc`. An omitted `limit` binds the published ceiling and an omitted offset is the literal `0`.
+#[test]
+fn a_list_stage_pages_in_its_order_and_defaults_to_the_ceiling() {
+    use temper_core::types::resource::SortOrder;
+    for (order, expected) in [
+        (
+            None,
+            "ORDER BY quantity DESC, id ASC LIMIT $2::int OFFSET 0",
+        ),
+        (
+            Some(SortOrder::Desc),
+            "ORDER BY quantity DESC, id ASC LIMIT $2::int OFFSET 0",
+        ),
+        (
+            Some(SortOrder::Asc),
+            "ORDER BY quantity ASC, id ASC LIMIT $2::int OFFSET 0",
+        ),
+    ] {
+        let v = build(vec![list_stage("rows", vec![], &[], order)], vec!["rows"]);
+        let q = compile(&v, test_profile()).expect("compiles");
+        let page = cte_body(&q.sql, "rows");
+        assert!(page.contains(expected), "{order:?}: {page}");
+        assert!(
+            matches!(q.binds[1], QueryBind::Int(50)),
+            "an omitted limit is the ceiling: {:?}",
+            q.binds
+        );
+        let args = core_call_args(
+            &cte_body(&q.sql, "_m0"),
+            "__temper_ungated_list_resources_with",
+        );
+        assert_eq!(
+            split_top_level(&args)[14],
+            "NULL::uuid[]",
+            "no bound is unbounded"
+        );
+    }
+}
+
+/// A 63-byte stage name compiles, and its match set's name is positional — two list stages get
+/// `_m0` and `_m1`, and neither can be a stage's name, because a stage's must start with a letter.
+#[test]
+fn a_maximal_stage_name_compiles_and_match_sets_are_named_by_position() {
+    let long = format!("a{}", "b".repeat(62));
+    assert_eq!(long.len(), 63);
+    assert!(
+        StageName::parse(&long).is_some(),
+        "63 bytes is a legal stage name"
+    );
+    assert!(
+        StageName::parse("_m0").is_none(),
+        "a match set's name is never a stage's"
+    );
+    let v = build(
+        vec![
+            list_stage(&long, vec![], &[], None),
+            list_stage("second", vec![], &[], None),
+        ],
+        vec![long.as_str(), "second"],
+    );
+    let q = compile(&v, test_profile()).expect("a maximal stage name compiles");
+    assert!(
+        cte_body(&q.sql, &long).contains(r#"FROM "_m0""#),
+        "{}",
+        q.sql
+    );
+    assert!(
+        cte_body(&q.sql, "second").contains(r#"FROM "_m1""#),
+        "{}",
+        q.sql
+    );
+    assert_eq!(q.sql.matches(r#""_m0" AS ("#).count(), 1);
+    assert_eq!(q.sql.matches(r#""_m1" AS ("#).count(), 1);
+    assert_eq!(
+        q.sql.matches("resources_visible_to(").count(),
+        1,
+        "one verdict, however many list stages: {}",
+        q.sql
+    );
+}
+
+/// A list stage bounded by a REFUSED upstream is bounded to `'{}'` through the empty refused body,
+/// never `NULL` — which the list core reads as unbounded.
+#[test]
+fn a_list_stage_bounded_by_a_refused_stage_is_bounded_to_nothing() {
+    let v = build(
+        vec![
+            find_stage("wide", ActName::FindAboutAnywhere, None),
+            list_stage(
+                "rows",
+                vec![StageInput::Upstream {
+                    relation: StageRelation::Bound,
+                    stage: StageName::parse("wide").unwrap(),
+                }],
+                &[],
+                None,
+            ),
+        ],
+        vec!["rows"],
+    );
+    let q = compile(&v, test_profile()).expect("compiles");
+    assert!(cte_body(&q.sql, "wide").contains("WHERE false"));
+    let args = core_call_args(
+        &cte_body(&q.sql, "_m1"),
+        "__temper_ungated_list_resources_with",
+    );
+    assert_eq!(
+        split_top_level(&args)[14],
+        r#"ARRAY(SELECT id FROM "wide")"#,
+        "the bound is the refused stage's empty set, never NULL"
+    );
+}
+
+/// **A list stage with an `artifact_filter` binds its asks once and arms its population**, the
+/// same arm a selection asking the same ask gets — so `asks_ran_or_refused` holds and the trace's
+/// population rows are the selection's.
+#[test]
+fn a_list_stage_binds_its_asks_once_and_arms_the_selections_population() {
+    let listing = match list_stage("rows", vec![], &[], None) {
+        StageNode::Act(mut inv) => {
+            inv.artifact_filter = vec![the_callers_ask()];
+            StageNode::Act(inv)
+        }
+        other => other,
+    };
+    let v = build_with(vec![listing], vec!["rows"], &asked_shapes());
+    let q = compile(&v, test_profile()).expect("a list stage with asks compiles");
+    let args = core_call_args(
+        &cte_body(&q.sql, "_m0"),
+        "__temper_ungated_list_resources_with",
+    );
+    let args = split_top_level(&args);
+    // limit ($2), then the narrowings (all NULL), then the asks.
+    assert_eq!(args[9], "$3::jsonb", "the asks slot, tenth: {args:?}");
+    let sealed: Vec<serde_json::Value> = v
+        .asks(&StageName::parse("rows").unwrap())
+        .iter()
+        .map(ValidatedAsk::bind)
+        .collect();
+    assert_eq!(
+        q.binds
+            .iter()
+            .filter(|b| matches!(b, QueryBind::Json(j) if *j == serde_json::Value::Array(sealed.clone())))
+            .count(),
+        1,
+        "the sealed asks bind once"
+    );
+    let population = "__temper_ungated_artifact_ask_counts((SELECT ids FROM __temper_vis), $1, \
+                      ($3::jsonb -> 0)) AS c";
+    assert_eq!(q.sql.matches(population).count(), 1, "{}", q.sql);
+    assert!(q
+        .sql
+        .contains("'population'::text AS row_class, 'rows'::text AS stage"));
+
+    // The selection asking the same ask arms the same population, at its own bind.
+    let selected = build_with(
+        vec![asking_selection("sel"), find_from("hits", "sel")],
+        vec!["hits"],
+        &asked_shapes(),
+    );
+    let s = compile(&selected, test_profile()).expect("compiles");
+    let arm = |sql: &str, stage: &str| {
+        sql.split("\nUNION ALL\n")
+            .find(|a| a.contains(&format!("'population'::text AS row_class, '{stage}'::text")))
+            .map(|a| {
+                a.replace(&format!("'{stage}'::text"), "'_'::text")
+                    .replace("$2::jsonb", "$n::jsonb")
+                    .replace("$3::jsonb", "$n::jsonb")
+            })
+            .unwrap()
+    };
+    assert_eq!(arm(&q.sql, "rows"), arm(&s.sql, "sel"));
+}
+
+/// The list core is held to the one-emitter rule: its first argument is the hoisted verdict and
+/// the caller's ids reach it as the bound, never in the visible-set slot.
+#[test]
+fn the_list_core_takes_its_ids_from_the_hoisted_relation_and_nothing_else() {
+    let ids = vec![Uuid::now_v7()];
+    let v = build(
+        vec![
+            find_stage("hits", ActName::FindExact, None),
+            list_stage(
+                "rows",
+                vec![StageInput::Upstream {
+                    relation: StageRelation::Bound,
+                    stage: StageName::parse("hits").unwrap(),
+                }],
+                &[],
+                None,
+            ),
+            list_stage("mine", vec![caller_set(IdKind::Resource, ids)], &[], None),
+        ],
+        vec!["rows", "mine"],
+    );
+    let q = compile(&v, test_profile()).expect("compiles");
+    let calls: Vec<String> = ungated_core_calls(&q.sql)
+        .into_iter()
+        .filter(|c| {
+            q.sql
+                .contains(&format!("__temper_ungated_list_resources_with{c}"))
+        })
+        .collect();
+    assert_eq!(calls.len(), 2, "{}", q.sql);
+    for call in &calls {
+        assert!(
+            call.starts_with("((SELECT ids FROM __temper_vis),"),
+            "the verdict, first: {call}"
+        );
+    }
+    assert!(
+        !q.sql
+            .contains(r#"__temper_ungated_list_resources_with(ARRAY(SELECT id FROM "hits")"#),
+        "the upstream set never lands in the visible-set slot"
+    );
 }

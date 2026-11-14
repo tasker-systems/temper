@@ -1340,7 +1340,8 @@ pub enum DataArtifactAction {
     /// resource you can see in the shape's home, and like listing and search it leaves out a
     /// resource still ingesting, or one whose ingest ended without finishing. `list <resource>`
     /// names one resource and answers its artifacts even then. To find the resources that own
-    /// matching artifacts rather than the artifacts, use `temper query` with `find-resources-with`.
+    /// matching artifacts rather than the artifacts, use `temper query` with `list-resources-with`
+    /// (or `find-resources-with`, to pipe them into another stage).
     Ask {
         /// The ask as JSON — `{"shape": "<id>", "predicates": [...], ...}` — inline, `@<path>` to
         /// read a file, or `-` to read stdin. Not with --shape or --where.

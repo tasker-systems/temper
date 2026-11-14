@@ -139,6 +139,10 @@ pub enum RefusalReason {
     /// generated schemas, so an inapplicable bound is a property of the plan rather than a
     /// runtime surprise.
     BoundTermNotApplicable,
+    /// An `order` was supplied to an act that does not let the caller choose its direction
+    /// (`ActDeclaration::accepts_order` is `false`). Declined, never ignored, by the rule
+    /// `bound_term_not_applicable` follows: an act-level parameter the act does not admit.
+    OrderNotApplicable,
     /// The act is declared and built, but its mechanic is not reachable from THIS surface — the
     /// compiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the
     /// distinction `BuildState` cannot draw: existence versus reachability-from-this-surface.
@@ -364,6 +368,15 @@ pub enum RefusalReason {
     /// client's handling depend on which route produced it, when the repair is the same: return
     /// something that ranks, and use this stage as its input.
     StageNotReturnable,
+    /// A stage whose output is a PAGE is named as another stage's input — a bound, a seed, or a
+    /// combinator operand. Today that is a `list-resources-with` stage.
+    ///
+    /// The mirror of [`RefusalReason::StageNotReturnable`]. A page looks exactly like the set it
+    /// is a sample of, so piping it on would bound a later stage to an arbitrary subset while
+    /// looking like a narrowing — and as a `difference` subtrahend it reports every match past the
+    /// page as absent, under `extent: complete`. The repair is to select with
+    /// `find-resources-with`, pipe that, and return `list-resources-with`.
+    StageNotPipeable,
     /// `returns` names a stage that was never declared.
     UnknownReturnStage,
     /// The composition contains a cycle; a query DAG must be acyclic.

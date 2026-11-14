@@ -71,6 +71,10 @@ pub enum ScoreKind {
     /// `0.4*sal_norm + 0.6*query_cos`, spanning `[-0.6, 1.0]`. `survey`.
     #[serde(rename = "region_score")]
     RegionScore,
+    /// The resource's creation instant in Unix epoch seconds. UNBOUNDED, and an enumeration key
+    /// rather than a relevance: higher is newer, never better. `list-resources-with`.
+    #[serde(rename = "created_epoch")]
+    CreatedEpoch,
     /// A kind this consumer does not recognize — only ever produced by deserializing a producer
     /// newer than this consumer.
     #[serde(untagged)]
@@ -90,6 +94,7 @@ impl ScoreKind {
             ScoreKind::VecNorm => "vec_norm",
             ScoreKind::GraphScore => "graph_score",
             ScoreKind::RegionScore => "region_score",
+            ScoreKind::CreatedEpoch => "created_epoch",
             ScoreKind::Other(s) => s.as_str(),
         }
     }

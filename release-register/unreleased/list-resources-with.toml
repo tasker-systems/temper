@@ -1,0 +1,23 @@
+title    = "A `list-resources-with` query act returns the resources a `find-resources-with` selection selects, as rows, newest first and paged"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "mcp", "clients", "schema"]
+status   = "signal-only"
+body = '''
+`/api/query` (and so `temper query` and MCP `run_query`) gains the act `list-resources-with`. It
+takes `find-resources-with`'s filters (`resource_filter`, `artifact_filter`) and anchors, plus a
+resource bound, so a union, intersect or difference can come back as rows. It orders by the
+resource's `created` (score kind `created_epoch`), newest first unless the stage sets
+`order: asc`, ties by id ascending, and pages by `limit` (ceiling 50) and `offset`. Its stage
+result fills `total` on every page from one count over the unpaged match set in the same statement
+(`0` when nothing matches, visible rows only), and its `extent` is exact from that total. A list
+stage is returned and feeds nothing: naming it as another stage's input is refused
+`stage_not_pipeable`. `ActInvocation` gains the optional `order` field, which every other act
+refuses `order_not_applicable`; `find-resources-with` and every other existing act are unchanged.
+
+Wire: two arms on open vocabularies (`ActName`, `ScoreKind`), two `RefusalReason` arms, one
+optional request field; no route and no response field. Schema: migration 20261128000010 adds two
+functions (`__temper_ungated_list_resources_with`, `query_list_resources_with`), no REPLACE and no
+DROP. The Rust API's `ActName` and `ScoreKind` are not `#[non_exhaustive]`, so a dependent's
+exhaustive match over either gains an arm to handle. Release relevance: signal-only.
+'''

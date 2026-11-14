@@ -30,6 +30,7 @@ use temper_core::types::query::{
     search_family, ActName, BoundTerm, IdKind, PlanRefusal, RefusalReason, StageInput, StageNode,
     StageRelation, ValidatedComposition,
 };
+use temper_core::types::resource::SortOrder;
 use uuid::Uuid;
 
 /// A compiled statement and its ordered binds. The SQL text is never concatenated with a caller
@@ -123,6 +124,9 @@ const PLACEHOLDER_FN: &str = "__temper_unbound_act";
 pub const EMIT_FIND_EXACT: &str = "__temper_ungated_find_exact";
 pub const EMIT_FIND_WIDE: &str = "__temper_ungated_find_wide";
 pub const EMIT_FIND_RESOURCES_WITH: &str = "__temper_ungated_find_resources_with";
+/// The list core: the selection core's set, narrowed by a resource bound, with each row's
+/// `created_epoch`. Unpaged — the compiler orders, pages and counts it (`20261128000010`).
+pub const EMIT_LIST_RESOURCES_WITH: &str = "__temper_ungated_list_resources_with";
 /// The walk's depth, FIXED — not a bound term and not a caller input.
 ///
 /// `[ruled — 2026-08-14, Pete]` *"Depth 3 is too large for a neighborhood traversal of this kind"*
@@ -295,10 +299,10 @@ pub fn compile(
     // them did and they answered over less than the truth. See [`tainted_by_refusal`] for why this
     // is a different question from "did this stage refuse", and why only one position reads it.
     let mut tainted: BTreeSet<String> = BTreeSet::new();
-    for node in v.ordered() {
-        let (name, body, unusable, asks_bound_at) = match node {
+    for (k, node) in v.ordered().iter().enumerate() {
+        let (name, body, unusable, asks_bound_at, total) = match node {
             StageNode::Act(inv) => {
-                let emitted = emit_act_body(inv, v.asks(&inv.name), &mut binds, &mut refusals)?;
+                let emitted = emit_act_body(inv, k, v.asks(&inv.name), &mut binds, &mut refusals)?;
                 let refused = refusals.iter().any(|r| r.stage.as_ref() == Some(&inv.name));
                 asks_ran_or_refused(
                     &inv.name,
@@ -306,11 +310,17 @@ pub fn compile(
                     emitted.asks_bound_at,
                     refused,
                 )?;
+                // A stage with an unpaged match set emits it as its own CTE, ahead of the page
+                // that reads it, and its tally counts it for `total`. **Only a stage that did not
+                // refuse**: a refused stage's body is `refused_body`, which reads no match CTE, so
+                // its tally projects `NULL` — the compiler never names a CTE it did not emit.
+                let total = emit_match_set(emitted.match_set, refused, &mut ctes);
                 (
                     inv.name.as_str(),
                     emitted.body,
                     emitted.unusable,
                     emitted.asks_bound_at,
+                    total,
                 )
             }
             // A combinator's inputs are upstream stages, so nothing it was handed can be unusable.
@@ -323,7 +333,13 @@ pub fn compile(
                     }
                     None => emit_combine_body(cn),
                 };
-                (cn.name.as_str(), body, NO_UNUSABLE.to_string(), None)
+                (
+                    cn.name.as_str(),
+                    body,
+                    NO_UNUSABLE.to_string(),
+                    None,
+                    NO_TOTAL.to_string(),
+                )
             }
         };
         if tainted_by_refusal(node, &refusals, &tainted) {
@@ -345,6 +361,7 @@ pub fn compile(
         tallies.push(StageTally {
             stage: name.to_string(),
             unusable,
+            total,
         });
     }
 
@@ -369,7 +386,43 @@ struct EmittedAct {
     /// The `$n` holding the stage's sealed asks ([`artifact_asks_slot`]) — `None` for a stage that
     /// asks nothing. The population arms read the asks through this one bind.
     asks_bound_at: Option<usize>,
+    /// The stage's UNPAGED match set, for an act whose body is a page over it — `None` for every
+    /// act but `list-resources-with`. `compile` emits it as a CTE ahead of the body and counts it
+    /// in the stage's tally, which is `StageResult.total`.
+    match_set: Option<MatchSet>,
 }
+
+/// An unpaged match set: the CTE's name and its body, in the five-column stage contract.
+///
+/// **The name is positional, `_m<k>`, never `<stage>__m`.** A `StageName` may be 63 bytes, so a
+/// suffix would overflow Postgres's identifier limit and the silent truncation could collide with
+/// another stage's name. A `StageName` must begin with a letter, so a name beginning with `_`
+/// cannot be one; `k` is the stage's index in emission order, so two match sets cannot share one.
+struct MatchSet {
+    cte: String,
+    body: String,
+}
+
+/// Emit a stage's match set as its own CTE and return the tally's `total` expression over it —
+/// or emit nothing and return [`NO_TOTAL`].
+///
+/// **Nothing for a stage that refused**, whatever its emitter handed back. A refused stage's body
+/// is [`refused_body`], which reads no match CTE, so its tally must not count one: the compiler
+/// decides from the refusal it recorded, and never names a CTE it did not emit — which would
+/// surface as a statement error, a 500, where a typed refusal belongs.
+fn emit_match_set(match_set: Option<MatchSet>, refused: bool, ctes: &mut Vec<String>) -> String {
+    match match_set {
+        Some(MatchSet { cte, body }) if !refused => {
+            ctes.push(format!("\"{cte}\" AS (\n{body}\n)"));
+            format!("(SELECT count(*) FROM \"{cte}\")::bigint")
+        }
+        _ => NO_TOTAL.to_string(),
+    }
+}
+
+/// A tally's `total` for every stage that carries none: a typed NULL, so the column list is one
+/// list on every arm. Not a zero — absent means *this stage does not count*, and `0` is a count.
+const NO_TOTAL: &str = "NULL::bigint";
 
 /// One stage's entry in the disclosure half of the final select.
 struct StageTally {
@@ -377,6 +430,9 @@ struct StageTally {
     /// A SQL scalar expression yielding `bigint`. See [`NO_UNUSABLE`] for when it is a literal zero
     /// and why that is a fact rather than a default.
     unusable: String,
+    /// A SQL scalar expression yielding `bigint`: the count of the stage's unpaged match set, or
+    /// [`NO_TOTAL`]. How many, never which — the tally's rule.
+    total: String,
 }
 
 /// A stage whose artifact asks ran: one population arm per ask, each reading its ask as element
@@ -397,8 +453,8 @@ struct StagePopulation {
 /// row for every sealed ask of every stage no refusal names, and refuses any row for a stage a
 /// refusal names; that agrees with what `compile` arms only while every stage carrying sealed asks
 /// either binds them or refuses, never both. Today `validate` refuses a non-empty `artifact_filter`
-/// on every act but `find-resources-with`, whose emitter always binds and never refuses, so this
-/// cannot fire. It guards a future act admitted to the filter whose emitter does not bind it, or
+/// on every act but `find-resources-with` and `list-resources-with`, whose emitters both bind
+/// through `selection_args` and never refuse, so this cannot fire. It guards a future act admitted to the filter whose emitter does not bind it, or
 /// binds it and then refuses: that plan fails here, loudly, rather than answering with a trace the
 /// assembler would refuse as a 500.
 fn asks_ran_or_refused(
@@ -535,6 +591,7 @@ fn subtrahend_refusal(
 /// checked, in the form the SQL binds.
 fn emit_act_body(
     inv: &temper_core::types::query::ActInvocation,
+    k: usize,
     asks: &[ValidatedAsk],
     binds: &mut Vec<QueryBind>,
     refusals: &mut Vec<PlanRefusal>,
@@ -550,6 +607,7 @@ fn emit_act_body(
         body,
         unusable: unusable.clone(),
         asks_bound_at: None,
+        match_set: None,
     };
     let (anchor_table, anchor_id) = narrowing.anchor();
     let (anchor_table, anchor_id) = (anchor_table.to_string(), anchor_id.to_string());
@@ -619,49 +677,75 @@ fn emit_act_body(
             // selection by an upstream set is `CombineOp::Intersect` and a selection that truncates
             // is a sample. An anchor IS honoured, which is why `narrowing.anchor()` is read.
             //
-            // **A filter the seal does not hold fails the compile; it never narrows nothing.** A
-            // stage whose `artifact_filter` has asks the seal did not admit would otherwise bind
-            // `NULL::jsonb`, which selects as though no ask were made. `validate` seals a stage's
-            // asks only when it admitted all of them and refuses the composition otherwise, so this
-            // is a validator/compiler contradiction, unreachable through `validate`, answered the
-            // way `bound_for_find` and the anchor arm answer theirs: an `Err` naming the stage.
-            if asks.len() != inv.artifact_filter.len() {
-                return Err(PlanRefusal {
-                    stage: Some(inv.name.clone()),
-                    reason: RefusalReason::ShapeNotAskable,
-                    detail: format!(
-                        "this stage carries {} artifact asks and the seal holds {} validated; the \
-                         validator should have refused the stage before compilation",
-                        inv.artifact_filter.len(),
-                        asks.len()
-                    ),
-                    teaches: None,
-                });
-            }
-
-            // Order matters and is not cosmetic: `binds` is positional, so the binds are pushed in
-            // signature order — the narrowings, the asks, then the open-key one — and each slot's
-            // `$n` follows the one before it.
-            let narrowings = selection_narrowings_for(inv, binds);
-            let (artifact_asks, asks_bound_at) = artifact_asks_slot(asks, binds);
-            let properties = resource_properties_for(inv, binds);
+            // The seal check and the argument order live in `selection_args`, shared with
+            // `list-resources-with`.
+            let args = selection_args(inv, asks, binds)?;
             let call = emit_ungated_core_call(&CoreCall::Selection {
                 core: EMIT_FIND_RESOURCES_WITH,
-                narrowings,
-                artifact_asks,
+                narrowings: args.narrowings,
+                artifact_asks: args.artifact_asks,
                 anchor_table: &anchor_table,
                 anchor_id: &anchor_id,
-                properties,
+                properties: args.properties,
             });
             // The asks' `$n` travels out with the body, so each population arm reads its ask from
             // this one bind rather than binding the list a second time.
             Ok(EmittedAct {
-                asks_bound_at,
+                asks_bound_at: args.asks_bound_at,
                 ..emitted(format!(
                     "  -- act: {act} -> {EMIT_FIND_RESOURCES_WITH}\n  \
                      SELECT resource_id AS id, 'resource'::text AS kind, \
                      NULL::double precision AS quantity, NULL::jsonb AS via, NULL::uuid AS region\n    \
                      FROM {call}"
+                ))
+            })
+        }
+        Some(EMIT_LIST_RESOURCES_WITH) => {
+            // **`find-resources-with`'s mechanic, returned.** The same selection arguments, from
+            // the same helper, so the two signatures cannot drift; plus a resource bound, applied
+            // beneath the page; plus the page itself, which this compiler emits around the core.
+            //
+            // A seed is refused rather than silently narrowed, as for every find arm.
+            let bound = bound_for_find(inv)?;
+            // **The bind order is not signature order, and need not be.** `narrowing_for` (the
+            // caller's resource ids) and `paging_for` (limit, offset) pushed theirs at the top of
+            // this function, before any arm ran; the selection arguments follow. Every `$n` is
+            // explicit, so the call is positional in its TEXT, which is what the fragment reads.
+            let args = selection_args(inv, asks, binds)?;
+            let call = emit_ungated_core_call(&CoreCall::List {
+                core: EMIT_LIST_RESOURCES_WITH,
+                narrowings: args.narrowings,
+                artifact_asks: args.artifact_asks,
+                anchor_table: &anchor_table,
+                anchor_id: &anchor_id,
+                properties: args.properties,
+                bound: &bound,
+            });
+            // **The direction is one of two literals this compiler chooses between, never a
+            // caller's string.** `desc` when the stage sends no order — newest first. The tiebreak
+            // is `id ASC` in either direction, the family's id-ascending tiebreak; the assembler's
+            // stable re-sort by the same quantity keeps it.
+            let direction = match inv.order.unwrap_or_default() {
+                SortOrder::Desc => "DESC",
+                SortOrder::Asc => "ASC",
+            };
+            let cte = format!("_m{k}");
+            Ok(EmittedAct {
+                asks_bound_at: args.asks_bound_at,
+                match_set: Some(MatchSet {
+                    body: format!(
+                        "  -- act: {act} -> {EMIT_LIST_RESOURCES_WITH} (the unpaged match set)\n  \
+                         SELECT resource_id AS id, 'resource'::text AS kind, \
+                         created_epoch::double precision AS quantity, NULL::jsonb AS via, \
+                         NULL::uuid AS region\n    \
+                         FROM {call}"
+                    ),
+                    cte: cte.clone(),
+                }),
+                ..emitted(format!(
+                    "  -- act: {act} (the page over \"{cte}\")\n  \
+                     SELECT id, kind, quantity, via, region FROM \"{cte}\"\n    \
+                     ORDER BY quantity {direction}, id ASC LIMIT {limit} OFFSET {offset}"
                 ))
             })
         }
@@ -949,6 +1033,23 @@ enum CoreCall<'a> {
         /// against a name that also has a twelve-parameter form.
         properties: String,
     },
+    /// The list core: the selection core's arguments in their order, then a resource bound.
+    ///
+    /// **No paging and no direction**, and that is the fragment's shape rather than an omission:
+    /// the core returns the UNPAGED match set, and the compiler orders and pages it around the call
+    /// so the stage's tally can count what the page was cut from. The bound is last because it is
+    /// the fifteenth argument (`20261128000010`); a `uuid[]` there beside the `jsonb` before it
+    /// cannot transpose silently.
+    List {
+        core: &'a str,
+        narrowings: String,
+        artifact_asks: String,
+        anchor_table: &'a str,
+        anchor_id: &'a str,
+        properties: String,
+        /// The stage's `p_bound_ids` — `NULL::uuid[]` unbounded, `'{}'` for a refused upstream.
+        bound: &'a str,
+    },
     /// The survey core: a query embedding, a funnel width, and an anchor pair. The only core that
     /// takes BOTH `VISIBLE_IDS` (the resource gate) and `PRINCIPAL_BIND` (the region gate inside
     /// `wayfind_region_scores`).
@@ -1044,6 +1145,20 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
         } => format!(
             "{core}({VISIBLE_IDS}, {narrowings}, {artifact_asks}, {anchor_table}, {anchor_id}, \
              {PRINCIPAL_BIND}, {properties})"
+        ),
+        // The selection's arguments with the same two authorization inputs in the same two
+        // roles, then the bound — which is a scope, never the verdict.
+        CoreCall::List {
+            core,
+            narrowings,
+            artifact_asks,
+            anchor_table,
+            anchor_id,
+            properties,
+            bound,
+        } => format!(
+            "{core}({VISIBLE_IDS}, {narrowings}, {artifact_asks}, {anchor_table}, {anchor_id}, \
+             {PRINCIPAL_BIND}, {properties}, {bound})"
         ),
         // The visible set is the first argument, and `PRINCIPAL_BIND` the last (`p_anchor_reader`):
         // the walk admits an edge only if its HOME anchor is readable too (`20261119000010`),
@@ -1451,6 +1566,58 @@ enum OwnerSlot {
     Principal,
 }
 
+/// The selection core's arguments for one stage: its eight narrowings, its sealed asks and the `$n`
+/// they bound at, and its open-key slot — bound in that order.
+///
+/// **The one place both selection-shaped arms build them**, `find-resources-with` and
+/// `list-resources-with`, so the two calls cannot drift in what they bind or in what order.
+///
+/// **A filter the seal does not hold fails the compile; it never narrows nothing.** A stage whose
+/// `artifact_filter` has asks the seal did not admit would otherwise bind `NULL::jsonb`, which
+/// selects as though no ask were made. `validate` seals a stage's asks only when it admitted all of
+/// them and refuses the composition otherwise, so this is a validator/compiler contradiction,
+/// unreachable through `validate`, answered the way `bound_for_find` and the anchor arm answer
+/// theirs: an `Err` naming the stage.
+fn selection_args(
+    inv: &temper_core::types::query::ActInvocation,
+    asks: &[ValidatedAsk],
+    binds: &mut Vec<QueryBind>,
+) -> Result<SelectionArgs, PlanRefusal> {
+    if asks.len() != inv.artifact_filter.len() {
+        return Err(PlanRefusal {
+            stage: Some(inv.name.clone()),
+            reason: RefusalReason::ShapeNotAskable,
+            detail: format!(
+                "this stage carries {} artifact asks and the seal holds {} validated; the \
+                 validator should have refused the stage before compilation",
+                inv.artifact_filter.len(),
+                asks.len()
+            ),
+            teaches: None,
+        });
+    }
+    // Order matters and is not cosmetic: `binds` is positional, so the binds are pushed in
+    // signature order — the narrowings, the asks, then the open-key one — and each slot's `$n`
+    // follows the one before it.
+    let narrowings = selection_narrowings_for(inv, binds);
+    let (artifact_asks, asks_bound_at) = artifact_asks_slot(asks, binds);
+    let properties = resource_properties_for(inv, binds);
+    Ok(SelectionArgs {
+        narrowings,
+        artifact_asks,
+        asks_bound_at,
+        properties,
+    })
+}
+
+/// What [`selection_args`] built.
+struct SelectionArgs {
+    narrowings: String,
+    artifact_asks: String,
+    asks_bound_at: Option<usize>,
+    properties: String,
+}
+
 /// The selection core's eight narrowing arguments, in signature order, each bound or a typed `NULL`.
 ///
 /// **A `NULL` here narrows NOTHING**, which is the opposite polarity from the `p_visible_ids` these
@@ -1764,7 +1931,8 @@ fn final_select(
         .map(|s| {
             format!(
                 "SELECT 'hit'::text AS row_class, '{s}'::text AS stage, id, kind, quantity, via, \
-                 region, NULL::bigint AS produced, NULL::bigint AS unusable, {NO_POPULATION} \
+                 region, NULL::bigint AS produced, NULL::bigint AS unusable, {NO_TOTAL} AS total, \
+                 {NO_POPULATION} \
                  FROM \"{s}\""
             )
         })
@@ -1772,12 +1940,13 @@ fn final_select(
     arms.extend(tallies.iter().map(|t| {
         let s = &t.stage;
         let unusable = &t.unusable;
+        let total = &t.total;
         format!(
             "SELECT 'tally'::text AS row_class, '{s}'::text AS stage, NULL::uuid AS id, \
              NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
              NULL::uuid AS region, \
              (SELECT count(*) FROM \"{s}\")::bigint AS produced, {unusable} AS unusable, \
-             {NO_POPULATION}"
+             {total} AS total, {NO_POPULATION}"
         )
     }));
     arms.extend(populations.iter().flat_map(population_arms));
@@ -1790,7 +1959,8 @@ fn final_select(
             "SELECT NULL::text AS row_class, NULL::text AS stage, NULL::uuid AS id, \
              NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
              NULL::uuid AS region, \
-             NULL::bigint AS produced, NULL::bigint AS unusable, {NO_POPULATION} WHERE false"
+             NULL::bigint AS produced, NULL::bigint AS unusable, {NO_TOTAL} AS total, \
+             {NO_POPULATION} WHERE false"
         );
     }
     arms.join("\nUNION ALL\n")
@@ -1827,7 +1997,7 @@ fn population_arms(p: &StagePopulation) -> Vec<String> {
                 "SELECT 'population'::text AS row_class, '{s}'::text AS stage, NULL::uuid AS id, \
                  NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
                  NULL::uuid AS region, NULL::bigint AS produced, NULL::bigint AS unusable, \
-                 {k}::bigint AS ask_position, c.in_force_shape_id, c.in_force_shape_version, \
+                 {NO_TOTAL} AS total, {k}::bigint AS ask_position, c.in_force_shape_id, c.in_force_shape_version, \
                  c.declared_satisfied, c.declared_not_satisfied, c.declared_not_yet_checked, \
                  c.matched FROM {call} AS c"
             )
@@ -1845,10 +2015,40 @@ fn act_name(act: &temper_core::types::query::ActName) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A refused stage's tally names no match set.** Its body is `refused_body`, which reads no
+    /// `_m<k>`, so counting one would reference a CTE that was never emitted — a statement error
+    /// where a typed refusal belongs. Decided from the refusal `compile` recorded, whatever the
+    /// emitter handed back.
+    #[test]
+    fn a_refused_stage_emits_no_match_set_and_counts_none() {
+        let set = || {
+            Some(MatchSet {
+                cte: "_m3".to_string(),
+                body: "  SELECT 1".to_string(),
+            })
+        };
+        let mut ctes = Vec::new();
+        assert_eq!(emit_match_set(set(), true, &mut ctes), NO_TOTAL);
+        assert!(
+            ctes.is_empty(),
+            "a refused stage emits no match set: {ctes:?}"
+        );
+
+        assert_eq!(emit_match_set(None, false, &mut ctes), NO_TOTAL);
+        assert!(ctes.is_empty(), "a stage with no match set emits none");
+
+        assert_eq!(
+            emit_match_set(set(), false, &mut ctes),
+            "(SELECT count(*) FROM \"_m3\")::bigint"
+        );
+        assert_eq!(ctes, vec!["\"_m3\" AS (\n  SELECT 1\n)".to_string()]);
+    }
     use temper_core::types::query::{ActInvocation, ActName, IdSet, StageName};
 
     fn inv(inputs: Vec<StageInput>) -> ActInvocation {
         ActInvocation {
+            order: None,
             name: StageName::parse("s").unwrap(),
             act: ActName::FollowFrom,
             // `follow-from` asks no question of its own — it walks from a set it is handed.

@@ -52,6 +52,8 @@ A plan is JSON: `stages` (a DAG) and `outcome` (which stages return rows).
 **Selecting by data artifacts.** `find-resources-with` takes `artifact_filter` beside
 `resource_filter`: a list of asks, each a shape id and predicates over its paths. It answers
 resources, never artifacts; `temper data-artifact ask` reads the artifacts themselves.
+`list-resources-with` takes the same two filters and returns the matching resources as rows —
+newest first, paged by `limit` and `offset`, with a `total` — and feeds no later stage.
 `data-artifacts.md` carries the ask's semantics and refusals.
 
 ## Read the trace, not just the hits
@@ -97,7 +99,8 @@ walk instead when you wanted a neighbourhood, not an enumeration.
   union is over-inclusive. Page the walk, union the walk's pages, take the difference once. Unioning
   pages that feed a `union` or `intersect` is sound.
 - **An act that admits no `limit` returns a set, not a page** — no `offset`, never `partial`.
-  `find-resources-with` is the one to know.
+  `find-resources-with` is the one to know. Its rows come back through `list-resources-with`, whose
+  `total` counts the whole match set on every page.
 - **A clean `--check` is not a promise the query runs.** It is local (no network, no token), reports
   every refusal at once with a non-zero exit, and answers expressibility against the published
   contract only. It loads no shape, so it lists artifact asks under `shapes_not_checked`.

@@ -32,6 +32,9 @@ module Temper::Generated
     # This node's name, referenced by downstream stages and by `returns`.
     attr_accessor :name
 
+    # The direction this act's ordering quantity runs in, for an act that lets the caller choose it. Only `list-resources-with` does (`ActDeclaration::accepts_order`), ordering by `created`: `desc` is newest first and is what runs when this is absent, `asc` is oldest first.  **A field rather than a term**, because a term is a number of rows and has one meaning on every read; a direction is neither. On any other act it is refused (`RefusalReason::OrderNotApplicable`), never ignored. The response does not echo it: it cannot be clamped, so what ran is the value sent, or `desc`.
+    attr_accessor :order
+
     # # A tombstone  Every predicate here is refused, and the refusal says where the capability went.  **Keep this heading to one line** `[found in review — 2026-08-15]`. schemars takes the first heading LINE as the schema `title` and the remainder as `description`, so a heading that wraps ships a truncated sentence as the title and an orphan word as the start of the description — into `act_invocation.schema.json`, `openapi.json`, and every generated client. A mechanical constraint of the generator, not a style preference.  `[2026-08-15]` **Both halves now have containers** — [`super::filter::ResourceFilter`]'s `properties` and [`super::filter::EdgeFilter`]'s — so a property predicate has a home that names its own subject, and this field has nothing left to mean. The subject tag it carried (`PropertySubject`), that tag's open arm, the `UnknownFilterValue` refusal the open arm existed to raise, and the subject-tagged predicate type are all **deleted**.  **The field is not deleted with them, and that is the whole decision** `[decided — 2026-08-15, Pete]`. [`ActInvocation`] carries `deny_unknown_fields`, and serde short-circuits before `validate` runs — so removing the field would turn a named `FilterNotApplicable` inside `ErrorBody` into a deserializer 400 **outside** that shape. A stale caller would go from being told where to move their predicate to being told their body is unparseable. Retyping to [`super::filter::PropertyPredicate`], which carries no `deny_unknown_fields`, keeps a stale `{\"subject\":…,\"key\":…,\"op\":…}` parsing: the tag is ignored and the redirect still fires.  **The residue:** with the tag gone the redirect cannot name *which* container, so it names both and lets the caller pick. That is a real loss of fidelity in the refusal, accepted as the price of deleting the type.
     attr_accessor :properties
 
@@ -40,6 +43,28 @@ module Temper::Generated
 
     # Act-level bound terms. A term this act does not admit is refused STATICALLY (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.
     attr_accessor :terms
+
+    class EnumAttributeValidator
+      attr_reader :datatype
+      attr_reader :allowable_values
+
+      def initialize(datatype, allowable_values)
+        @allowable_values = allowable_values.map do |value|
+          case datatype.to_s
+          when /Integer/i
+            value.to_i
+          when /Float/i
+            value.to_f
+          else
+            value
+          end
+        end
+      end
+
+      def valid?(value)
+        !value || allowable_values.include?(value)
+      end
+    end
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
@@ -50,6 +75,7 @@ module Temper::Generated
         :'inputs' => :'inputs',
         :'intention' => :'intention',
         :'name' => :'name',
+        :'order' => :'order',
         :'properties' => :'properties',
         :'resource_filter' => :'resource_filter',
         :'terms' => :'terms'
@@ -75,6 +101,7 @@ module Temper::Generated
         :'inputs' => :'Array<StageInput>',
         :'intention' => :'Intention',
         :'name' => :'String',
+        :'order' => :'SortOrder',
         :'properties' => :'Array<PropertyPredicate>',
         :'resource_filter' => :'ResourceFilter',
         :'terms' => :'Hash<String, Integer>'
@@ -86,6 +113,7 @@ module Temper::Generated
       Set.new([
         :'edge_filter',
         :'intention',
+        :'order',
         :'resource_filter',
       ])
     end
@@ -136,6 +164,10 @@ module Temper::Generated
         self.name = attributes[:'name']
       else
         self.name = nil
+      end
+
+      if attributes.key?(:'order')
+        self.order = attributes[:'order']
       end
 
       if attributes.key?(:'properties')
@@ -241,6 +273,7 @@ module Temper::Generated
           inputs == o.inputs &&
           intention == o.intention &&
           name == o.name &&
+          order == o.order &&
           properties == o.properties &&
           resource_filter == o.resource_filter &&
           terms == o.terms
@@ -255,7 +288,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [act, artifact_filter, edge_filter, inputs, intention, name, properties, resource_filter, terms].hash
+      [act, artifact_filter, edge_filter, inputs, intention, name, order, properties, resource_filter, terms].hash
     end
 
     # Builds the object from hash

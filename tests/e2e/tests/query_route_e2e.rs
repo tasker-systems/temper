@@ -55,6 +55,7 @@ async fn ingest_semantic(app: &common::E2eTestApp, title: &str, slug: &str, cont
 
 fn find_about(stage: &str, query: &str) -> StageNode {
     StageNode::Act(ActInvocation {
+        order: None,
         name: StageName::parse(stage).unwrap(),
         act: ActName::FindAboutAnywhere,
         // No embedding — this is the raw-HTTP caller, the class of client that structurally cannot
@@ -361,6 +362,7 @@ async fn a_walk_seeded_by_a_find_returns_its_provenance_through_the_route(pool: 
     // this test is about is the route and the payload. The upstream-seeded form is exercised at the
     // compile and execute layers, where the emitted SQL can actually be read.
     let walk = StageNode::Act(ActInvocation {
+        order: None,
         name: StageName::parse("neighbours").unwrap(),
         act: ActName::FollowFrom,
         intention: None,

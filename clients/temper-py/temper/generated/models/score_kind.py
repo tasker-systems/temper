@@ -36,7 +36,9 @@ class ScoreKind(BaseModel):
     # data type: str
     oneof_schema_4_validator: Optional[StrictStr] = Field(default=None, description="`0.4*sal_norm + 0.6*query_cos`, spanning `[-0.6, 1.0]`. `survey`.")
     # data type: str
-    oneof_schema_5_validator: Optional[StrictStr] = Field(default=None, description="A kind this consumer does not recognize — only ever produced by deserializing a producer newer than this consumer.")
+    oneof_schema_5_validator: Optional[StrictStr] = Field(default=None, description="The resource's creation instant in Unix epoch seconds. UNBOUNDED, and an enumeration key rather than a relevance: higher is newer, never better. `list-resources-with`.")
+    # data type: str
+    oneof_schema_6_validator: Optional[StrictStr] = Field(default=None, description="A kind this consumer does not recognize — only ever produced by deserializing a producer newer than this consumer.")
     actual_instance: Optional[Union[str]] = None
     one_of_schemas: Set[str] = { "str" }
 
@@ -88,6 +90,12 @@ class ScoreKind(BaseModel):
         # validate data type: str
         try:
             instance.oneof_schema_5_validator = v
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # validate data type: str
+        try:
+            instance.oneof_schema_6_validator = v
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
@@ -153,6 +161,15 @@ class ScoreKind(BaseModel):
             instance.oneof_schema_5_validator = json.loads(json_str)
             # assign value to actual_instance
             instance.actual_instance = instance.oneof_schema_5_validator
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into str
+        try:
+            # validation
+            instance.oneof_schema_6_validator = json.loads(json_str)
+            # assign value to actual_instance
+            instance.actual_instance = instance.oneof_schema_6_validator
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
