@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.confidence_band import ConfidenceBand
 from temper.generated.models.managed_meta import ManagedMeta
+from temper.generated.models.meta_expect import MetaExpect
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -37,12 +38,13 @@ class MetaUpdatePayload(BaseModel):
     persona: Optional[StrictStr] = Field(default=None, description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")
     rationale: Optional[StrictStr] = Field(default=None, description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")
     reasoning: Optional[StrictStr] = Field(default=None, description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")
+    expect: Optional[MetaExpect] = Field(default=None, description="What this write expects the resource's meta to hold now, per key (`null`: absent). If any expectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED` with each failed key and its current value. Judged under the resource's writer lock, in the write's own transaction. Absent: the write is unconditional, exactly as before. See [`MetaExpect`](crate::types::precondition::MetaExpect) for the rules. A meta write never takes a body expectation.")
     managed_hash: StrictStr = Field(description="SHA-256 hash of the managed_meta JSON (computed over canonical form)")
     managed_meta: ManagedMeta = Field(description="Typed managed (temper-*) frontmatter — the closed Property vocabulary. Only the named `temper-*` keys are accepted; there is no catch-all. Hash stability is preserved because `managed_hash` is computed over the canonicalized form.")
     open_hash: StrictStr = Field(description="SHA-256 hash of the open_meta JSON (computed over canonical form)")
     open_meta: Optional[Any]
     resource_id: UUID = Field(description="UUID of the resource being updated")
-    __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "managed_hash", "managed_meta", "open_hash", "open_meta", "resource_id"]
+    __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "expect", "managed_hash", "managed_meta", "open_hash", "open_meta", "resource_id"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -83,6 +85,9 @@ class MetaUpdatePayload(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of expect
+        if self.expect:
+            _dict['expect'] = self.expect.to_dict()
         # override the default output from pydantic by calling `to_dict()` of managed_meta
         if self.managed_meta:
             _dict['managed_meta'] = self.managed_meta.to_dict()
@@ -121,6 +126,11 @@ class MetaUpdatePayload(BaseModel):
         if self.reasoning is None and "reasoning" in self.model_fields_set:
             _dict['reasoning'] = None
 
+        # set to None if expect (nullable) is None
+        # and model_fields_set contains the field
+        if self.expect is None and "expect" in self.model_fields_set:
+            _dict['expect'] = None
+
         # set to None if open_meta (nullable) is None
         # and model_fields_set contains the field
         if self.open_meta is None and "open_meta" in self.model_fields_set:
@@ -145,6 +155,7 @@ class MetaUpdatePayload(BaseModel):
             "persona": obj.get("persona"),
             "rationale": obj.get("rationale"),
             "reasoning": obj.get("reasoning"),
+            "expect": MetaExpect.from_dict(obj["expect"]) if obj.get("expect") is not None else None,
             "managed_hash": obj.get("managed_hash"),
             "managed_meta": ManagedMeta.from_dict(obj["managed_meta"]) if obj.get("managed_meta") is not None else None,
             "open_hash": obj.get("open_hash"),

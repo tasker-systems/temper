@@ -669,6 +669,7 @@ async fn a_move_out_settles_the_home_it_left_as_a_delete_does(pool: PgPool) {
     };
     backend
         .update_resource(temper_workflow::operations::UpdateResource {
+            expect: None,
             open_meta_add: None,
             resource: moved,
             title: Some("moved and retitled".to_string()),

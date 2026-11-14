@@ -115,6 +115,16 @@ pub const RESOURCE_BUSY_CODE: &str = "RESOURCE_BUSY";
 /// Spelled here for the same reason as [`FORBIDDEN_DETAIL_CODE`].
 pub const PRECONDITION_NOT_HONOURED_CODE: &str = "PRECONDITION_NOT_HONOURED";
 
+/// The wire `error.code` a conditional write travels under when an expectation it carried did not
+/// hold: a `412`, with nothing applied. The body's `error.precondition` lists every failed
+/// expectation and what is there now (`types::precondition::PreconditionFailure`).
+///
+/// **Distinct from [`PRECONDITION_NOT_HONOURED_CODE`].** That one says the server will not judge
+/// the guard here; this one says it judged it and it failed, so the caller re-reads and decides.
+///
+/// Spelled here for the same reason as [`FORBIDDEN_DETAIL_CODE`].
+pub const PRECONDITION_FAILED_CODE: &str = "PRECONDITION_FAILED";
+
 /// Details from a system access gate rejection (CLI error rendering).
 ///
 /// Distinct from `types::access_gate::SystemAccessDetails` which carries
@@ -212,6 +222,13 @@ pub enum TemperError {
     #[error("the resource is busy; nothing was applied, retry the request")]
     ResourceBusy,
 
+    /// A conditional write whose expectations did not all hold, refused with nothing applied.
+    /// `412` on HTTP under [`PRECONDITION_FAILED_CODE`]. The message names the failed keys only;
+    /// the expected and current values travel in the payload, and only to a caller who can read
+    /// the resource.
+    #[error("{}", .0.message())]
+    PreconditionFailed(crate::types::precondition::PreconditionFailure),
+
     /// A data-artifact write the system declined for reasons the caller can act on — the
     /// SQL wrapper's refusal vocabulary or the enforcing-shape verdict's per-violation
     /// detail. Travels the wire under [`DATA_ARTIFACT_REFUSAL_CODE`] so a client
@@ -303,6 +320,7 @@ impl TemperError {
             Self::IngestEnded(_) => INGEST_ENDED_CODE,
             Self::ContentIntegrity(_) => "content-integrity",
             Self::ResourceBusy => RESOURCE_BUSY_CODE,
+            Self::PreconditionFailed(_) => PRECONDITION_FAILED_CODE,
             Self::DataArtifactRefusal(_) => DATA_ARTIFACT_REFUSAL_CODE,
             Self::PlanRefused { .. } => "project",
             Self::Forbidden => "forbidden",

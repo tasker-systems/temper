@@ -159,8 +159,7 @@ pub struct ListRow {
 
 /// The one Rust-callable spelling of "can `principal` see `resource`?", under `resources_visible_to`.
 ///
-/// This exists so `ensure_visible` (below — private, so deliberately not an intra-doc link from a
-/// public item) and Task 6's authorization gate ask the identical
+/// This exists so [`ensure_visible`] (below) and Task 6's authorization gate ask the identical
 /// question instead of two independent restatements that could drift apart silently. It is also the
 /// predicate the SQL side already treats as canonical for a profile principal:
 /// `resources_readable_by('profile', p)` — the gate `resource_standing_shape` runs
@@ -169,11 +168,16 @@ pub struct ListRow {
 /// `resources_visible_to` directly here is equivalent for the profile principal, and is the
 /// incumbent Rust-callable form.
 ///
-pub async fn is_resource_visible(
-    pool: &PgPool,
+/// Generic over the executor so a write can ask it on its own transaction, under a lock it holds,
+/// and see what that transaction sees; a pool caller passes the pool.
+pub async fn is_resource_visible<'e, E>(
+    executor: E,
     principal: ProfileId,
     resource: ResourceId,
-) -> Result<bool> {
+) -> Result<bool>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     // `resources_visible_to` and its nested `profile_reachable_teams` → `profile_effective_teams`/
     // `team_ancestors` resolve their unqualified references against the connection search_path
     // (`public` — the one schema), so no per-txn `SET LOCAL`.
@@ -187,7 +191,7 @@ pub async fn is_resource_visible(
         principal.uuid(),
         resource.uuid(),
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
     Ok(visible)
 }
@@ -229,12 +233,19 @@ pub async fn is_resource_visible_by_membership(
 /// CONFORMing to production's NotFound-on-not-visible) versus [`ReadbackError::Fault`] for a genuine DB
 /// error in the check itself (mapped to 500). Conflating the two — the pre-typing behavior — masked
 /// real faults as 404.
-async fn ensure_visible(
-    pool: &PgPool,
+///
+/// Public, and generic over the executor, so a conditional write asks GET's own question twice:
+/// on the pool before its transaction opens, and on its transaction under the resource's writer
+/// lock. Both answer exactly what this read answers a non-reader.
+pub async fn ensure_visible<'e, E>(
+    executor: E,
     principal: ProfileId,
     new_id: ResourceId,
-) -> std::result::Result<(), ReadbackError> {
-    let visible = is_resource_visible(pool, principal, new_id).await?;
+) -> std::result::Result<(), ReadbackError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let visible = is_resource_visible(executor, principal, new_id).await?;
     if visible {
         Ok(())
     } else {

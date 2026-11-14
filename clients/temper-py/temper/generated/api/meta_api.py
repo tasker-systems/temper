@@ -384,10 +384,12 @@ class MetaApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceView",
+            '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
             '410': "ErrorBody",
+            '412': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -462,10 +464,12 @@ class MetaApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceView",
+            '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
             '410': "ErrorBody",
+            '412': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -540,10 +544,12 @@ class MetaApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceView",
+            '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
             '410': "ErrorBody",
+            '412': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

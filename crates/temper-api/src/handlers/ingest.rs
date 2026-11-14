@@ -193,6 +193,7 @@ pub async fn update(
 
     let act = payload.act.into_act_context().map_err(ApiError::from)?;
     let cmd = UpdateResource {
+        expect: None,
         resource: ResourceId::from(resource_id),
         title: None,
         slug: None,

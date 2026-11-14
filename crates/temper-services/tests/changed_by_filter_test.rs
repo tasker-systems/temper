@@ -142,6 +142,7 @@ async fn create(backend: &DbBackend, context: Uuid, slug: &str) -> Uuid {
 async fn retitle(backend: &DbBackend, resource: Uuid, title: &str) {
     backend
         .update_resource(UpdateResource {
+            expect: None,
             open_meta_add: None,
             resource: ResourceId::from(resource),
             title: Some(title.to_string()),

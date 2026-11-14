@@ -559,6 +559,17 @@ pub struct ResourceUpdateRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(skip))]
     pub content_block: Option<uuid::Uuid>,
+    /// What this update expects the resource's meta to hold now, per key (`null`: absent). If any
+    /// expectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED`
+    /// with each failed key and its current value. Judged under the resource's writer lock, in
+    /// the update's own transaction. Absent: the update is unconditional, exactly as before. See
+    /// [`MetaExpect`](crate::types::precondition::MetaExpect) for the rules.
+    ///
+    /// `ts(skip)`-ped like `sources` and `content_block`: a conditional write is a CLI/agent path
+    /// the SvelteKit UI does not send.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    pub expect: Option<crate::types::precondition::MetaExpect>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship for the update act.
     /// Flattened as top-level keys; all optional (empty when nothing is supplied).
     ///
@@ -735,6 +746,7 @@ mod wire_tests {
     fn resource_update_request_serde_round_trips_with_all_fields() {
         use serde_json::json;
         let req = ResourceUpdateRequest {
+            expect: None,
             open_meta_add: None,
             title: Some("New Title".to_string()),
             managed_meta: Some(ManagedMeta {
@@ -775,6 +787,7 @@ mod wire_tests {
     #[test]
     fn resource_update_request_omits_none_fields_on_serialize() {
         let req = ResourceUpdateRequest {
+            expect: None,
             open_meta_add: None,
             title: None,
             managed_meta: Some(ManagedMeta {

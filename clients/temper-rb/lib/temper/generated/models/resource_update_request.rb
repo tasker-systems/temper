@@ -55,6 +55,9 @@ module Temper::Generated
     # Context move ref: a bare UUID or `@owner/slug` decorated form. Bare names (no `@`/`+` prefix, not a UUID) are rejected 400 by the server (Decision 1). When present the server resolves the ref to a `ContextId` (visibility-gated to the principal) and re-homes the resource. Forwarded verbatim from the CLI `--context-to` flag.
     attr_accessor :context_to
 
+    # What this update expects the resource's meta to hold now, per key (`null`: absent). If any expectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED` with each failed key and its current value. Judged under the resource's writer lock, in the update's own transaction. Absent: the update is unconditional, exactly as before. See [`MetaExpect`](crate::types::precondition::MetaExpect) for the rules.  `ts(skip)`-ped like `sources` and `content_block`: a conditional write is a CLI/agent path the SvelteKit UI does not send.
+    attr_accessor :expect
+
     # Goal-set: the resolved goal `ResourceId` (as UUID) to link this resource to. When present the server folds any existing `advances`→goal edge and asserts a new one. Mutually exclusive with `clear_goal` (the CLI rejects both together). Forwarded from the CLI `--goal <ref>` flag (resolved client-side).
     attr_accessor :goal
 
@@ -111,6 +114,7 @@ module Temper::Generated
         :'content_block' => :'content_block',
         :'content_hash' => :'content_hash',
         :'context_to' => :'context_to',
+        :'expect' => :'expect',
         :'goal' => :'goal',
         :'managed_meta' => :'managed_meta',
         :'open_meta' => :'open_meta',
@@ -147,6 +151,7 @@ module Temper::Generated
         :'content_block' => :'String',
         :'content_hash' => :'String',
         :'context_to' => :'String',
+        :'expect' => :'MetaExpect',
         :'goal' => :'String',
         :'managed_meta' => :'ManagedMeta',
         :'open_meta' => :'Object',
@@ -173,6 +178,7 @@ module Temper::Generated
         :'content_block',
         :'content_hash',
         :'context_to',
+        :'expect',
         :'goal',
         :'managed_meta',
         :'open_meta',
@@ -250,6 +256,10 @@ module Temper::Generated
         self.context_to = attributes[:'context_to']
       end
 
+      if attributes.key?(:'expect')
+        self.expect = attributes[:'expect']
+      end
+
       if attributes.key?(:'goal')
         self.goal = attributes[:'goal']
       end
@@ -314,6 +324,7 @@ module Temper::Generated
           content_block == o.content_block &&
           content_hash == o.content_hash &&
           context_to == o.context_to &&
+          expect == o.expect &&
           goal == o.goal &&
           managed_meta == o.managed_meta &&
           open_meta == o.open_meta &&
@@ -332,7 +343,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, chunks_packed, clear_goal, content, content_block, content_hash, context_to, goal, managed_meta, open_meta, open_meta_add, sources, title, type_to].hash
+      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, chunks_packed, clear_goal, content, content_block, content_hash, context_to, expect, goal, managed_meta, open_meta, open_meta_add, sources, title, type_to].hash
     end
 
     # Builds the object from hash

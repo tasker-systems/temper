@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.confidence_band import ConfidenceBand
 from temper.generated.models.managed_meta import ManagedMeta
+from temper.generated.models.meta_expect import MetaExpect
 from temper.generated.models.provenance_source import ProvenanceSource
 from typing import Optional, Set
 from typing_extensions import Self
@@ -44,6 +45,7 @@ class ResourceUpdateRequest(BaseModel):
     content_block: Optional[UUID] = Field(default=None, description="Which content block the body revise + `sources` target. `None` → the resource's sole non-folded body block (today's default); `Some(id)` addresses that block explicitly (must belong to the resource and be non-folded). Also the escape hatch for a multi-block resource.  `ts(skip)`-ped for the same reason as `sources`/`act`: per-block addressing is a CLI/agent write path the SvelteKit UI never exercises, so the generated TS omits it.")
     content_hash: Optional[StrictStr] = Field(default=None, description="SHA-256 hash of `content`. Required iff `content` is `Some`.")
     context_to: Optional[StrictStr] = Field(default=None, description="Context move ref: a bare UUID or `@owner/slug` decorated form. Bare names (no `@`/`+` prefix, not a UUID) are rejected 400 by the server (Decision 1). When present the server resolves the ref to a `ContextId` (visibility-gated to the principal) and re-homes the resource. Forwarded verbatim from the CLI `--context-to` flag.")
+    expect: Optional[MetaExpect] = Field(default=None, description="What this update expects the resource's meta to hold now, per key (`null`: absent). If any expectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED` with each failed key and its current value. Judged under the resource's writer lock, in the update's own transaction. Absent: the update is unconditional, exactly as before. See [`MetaExpect`](crate::types::precondition::MetaExpect) for the rules.  `ts(skip)`-ped like `sources` and `content_block`: a conditional write is a CLI/agent path the SvelteKit UI does not send.")
     goal: Optional[UUID] = Field(default=None, description="Goal-set: the resolved goal `ResourceId` (as UUID) to link this resource to. When present the server folds any existing `advances`→goal edge and asserts a new one. Mutually exclusive with `clear_goal` (the CLI rejects both together). Forwarded from the CLI `--goal <ref>` flag (resolved client-side).")
     managed_meta: Optional[ManagedMeta] = Field(default=None, description="Partial managed_meta — only fields with `Some` apply. Untouched fields preserve their stored value. There is no in-band signal for \"clear this field\"; field-clearing is reserved for a future PUT endpoint.")
     open_meta: Optional[Any] = None
@@ -51,7 +53,7 @@ class ResourceUpdateRequest(BaseModel):
     sources: Optional[List[ProvenanceSource]] = Field(default=None, description="Block-provenance sources this body was distilled from — recorded against the resource's body block, position → accretion `seq`. Resource refs only in T7b; URL/`remote` sources are T7c.  `ts(skip)`-ped: `ProvenanceSource` is a `{kind,value}`-tagged enum with no ts-rs `export_to`, and the SvelteKit UI never sends provenance (this is a CLI/agent write path, exactly like `act` below). Skipping keeps the generated TS honest — the UI cannot set provenance — and avoids emitting a dangling `ProvenanceSource` import. (Precedent: the `act` field below, likewise `ts(skip)`-ped.)")
     title: Optional[StrictStr] = None
     type_to: Optional[StrictStr] = Field(default=None, description="Type-move: convert the resource to a new doc-type. Forwarded from the CLI `--type-to` flag; the server rewrites the authoritative `doc_type` via `MoveSpec.type_to`. First-class since Phase 2 (type is no longer carried as a `temper-type` key inside `managed_meta`).")
-    __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "chunks_packed", "clear_goal", "content", "content_block", "content_hash", "context_to", "goal", "managed_meta", "open_meta", "open_meta_add", "sources", "title", "type_to"]
+    __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "chunks_packed", "clear_goal", "content", "content_block", "content_hash", "context_to", "expect", "goal", "managed_meta", "open_meta", "open_meta_add", "sources", "title", "type_to"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -92,6 +94,9 @@ class ResourceUpdateRequest(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of expect
+        if self.expect:
+            _dict['expect'] = self.expect.to_dict()
         # override the default output from pydantic by calling `to_dict()` of managed_meta
         if self.managed_meta:
             _dict['managed_meta'] = self.managed_meta.to_dict()
@@ -167,6 +172,11 @@ class ResourceUpdateRequest(BaseModel):
         if self.context_to is None and "context_to" in self.model_fields_set:
             _dict['context_to'] = None
 
+        # set to None if expect (nullable) is None
+        # and model_fields_set contains the field
+        if self.expect is None and "expect" in self.model_fields_set:
+            _dict['expect'] = None
+
         # set to None if goal (nullable) is None
         # and model_fields_set contains the field
         if self.goal is None and "goal" in self.model_fields_set:
@@ -222,6 +232,7 @@ class ResourceUpdateRequest(BaseModel):
             "content_block": obj.get("content_block"),
             "content_hash": obj.get("content_hash"),
             "context_to": obj.get("context_to"),
+            "expect": MetaExpect.from_dict(obj["expect"]) if obj.get("expect") is not None else None,
             "goal": obj.get("goal"),
             "managed_meta": ManagedMeta.from_dict(obj["managed_meta"]) if obj.get("managed_meta") is not None else None,
             "open_meta": obj.get("open_meta"),

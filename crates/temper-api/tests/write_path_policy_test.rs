@@ -328,6 +328,7 @@ async fn derived_rebuild_sentinel_skips_the_policy(pool: PgPool) {
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
     backend
         .update_resource(UpdateResource {
+            expect: None,
             open_meta_add: None,
             resource: temper_core::types::ids::ResourceId::from(
                 Uuid::parse_str(&resource).unwrap(),

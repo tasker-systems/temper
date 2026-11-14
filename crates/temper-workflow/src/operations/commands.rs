@@ -158,6 +158,13 @@ pub struct UpdateResource {
     /// parses and resolves it server-side. `None` when not a CLI-originated
     /// context move (API handler builds `move_to` directly after resolution).
     pub context_ref: Option<String>,
+    /// Per-key meta expectations (`PUT /meta`'s and `PATCH`'s `expect`). `None` is an
+    /// unconditional write, exactly as before. When present, `DbBackend` judges them under the
+    /// resource's writer lock in the update's own transaction, and refuses the whole update with
+    /// [`TemperError::PreconditionFailed`](temper_core::error::TemperError::PreconditionFailed)
+    /// if any does not hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<temper_core::types::precondition::MetaExpect>,
     /// Per-act correlation + authorship — stamps every sub-event of the update fan-out
     /// (`block_mutated` / `property_set` / `resource_updated` / `resource_rehomed`). Empty by default;
     /// correlation never authorizes the write.
@@ -562,6 +569,7 @@ mod tests {
     #[test]
     fn update_resource_all_optional_fields_default_none() {
         let cmd = UpdateResource {
+            expect: None,
             open_meta_add: None,
             resource: ResourceId(uuid::Uuid::now_v7()),
             title: None,

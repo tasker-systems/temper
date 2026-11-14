@@ -212,6 +212,7 @@ from temper.generated.models.facet_ack import FacetAck
 from temper.generated.models.facet_predicate import FacetPredicate
 from temper.generated.models.facet_retract_ack import FacetRetractAck
 from temper.generated.models.facet_set_request import FacetSetRequest
+from temper.generated.models.failed_expectation import FailedExpectation
 from temper.generated.models.field_scrub_clearing_event import FieldScrubClearingEvent
 from temper.generated.models.field_scrub_execute_response import FieldScrubExecuteResponse
 from temper.generated.models.field_scrub_execute_response_one_of import FieldScrubExecuteResponseOneOf
@@ -285,6 +286,7 @@ from temper.generated.models.materialize_ack import MaterializeAck
 from temper.generated.models.materialize_delta import MaterializeDelta
 from temper.generated.models.materialize_request import MaterializeRequest
 from temper.generated.models.merge_policy import MergePolicy
+from temper.generated.models.meta_expect import MetaExpect
 from temper.generated.models.meta_update_payload import MetaUpdatePayload
 from temper.generated.models.narrowed_by import NarrowedBy
 from temper.generated.models.no_prior_standing import NoPriorStanding
@@ -303,6 +305,8 @@ from temper.generated.models.pending_invitation_counts import PendingInvitationC
 from temper.generated.models.plan_refusal import PlanRefusal
 from temper.generated.models.plan_refusal_details import PlanRefusalDetails
 from temper.generated.models.polarity import Polarity
+from temper.generated.models.precondition_failure import PreconditionFailure
+from temper.generated.models.precondition_tier import PreconditionTier
 from temper.generated.models.profile import Profile
 from temper.generated.models.profile_auth_link import ProfileAuthLink
 from temper.generated.models.profile_update_request import ProfileUpdateRequest

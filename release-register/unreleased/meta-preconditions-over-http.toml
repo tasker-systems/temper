@@ -1,0 +1,37 @@
+title    = "PUT /meta and PATCH /api/resources/{id} accept an optional expect: per-key expected meta values, judged under the resource's writer lock, refused 412 PRECONDITION_FAILED when any does not hold"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "clients"]
+status   = "signal-only"
+body = '''
+What changed: MetaUpdatePayload (PUT /api/resources/{id}/meta) and ResourceUpdateRequest
+(PATCH /api/resources/{id}) gain an optional `expect: {open?: {key: value}, managed?: {key: value}}`.
+A top-level null means "absent". DbBackend::update_resource takes the resource's writer lock
+itself, re-checks that the caller can read the resource, and judges every expectation against the
+newest live property rows in one statement, in the write's own transaction. If all hold the write
+lands exactly as it would without one; if any fails nothing is written and the answer is 412 under
+the new code PRECONDITION_FAILED, with the failed entries ({tier, key, expected, current}) in the
+new optional ErrorDetail.precondition, a sibling of details. Validation 400s: a key outside its tier
+(facet, doc_type, managed keys under open, non-managed keys under managed, identity keys), U+0000,
+a key also named in open_meta_add, an expect naming no key, and an expect on a request that writes
+nothing. An unknown member of expect, `body` included, is a 422.
+
+Who observes it: only callers that send expect. Without it every write behaves as before. A caller
+who may modify a resource it cannot read gets the 404 GET answers, never a 412. The refusal
+carries current values only to readers, and never an actor, time, event or id.
+
+Clients: the three generated SDKs (temper-ts, temper-py, temper-rb) gain the request field, the
+four schemas and ErrorDetail.precondition. The CLI's cloud translator forwards a command's expect;
+no CLI flag or MCP input sets one yet.
+
+Why additive: one optional request field on two payloads, one optional error property, one new
+error-code value. openapi.json grows against the 0.6 pin (check-openapi-pin: grew). An older client
+sends no expect and is unaffected.
+
+Why behavioral, and the rollback silence: rolling the API back past this release silently disarms
+conditional writes. An older server does not know `expect`, ignores it, and applies the write
+unconditionally with a 200. DEPLOYING.md says so.
+
+Witnesses: crates/temper-services/tests/meta_precondition_test.rs and
+crates/temper-api/tests/meta_precondition_http_test.rs. Release relevance: signal-only.
+'''

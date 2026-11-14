@@ -37,6 +37,9 @@ module Temper::Generated
     # Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.
     attr_accessor :reasoning
 
+    # What this write expects the resource's meta to hold now, per key (`null`: absent). If any expectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED` with each failed key and its current value. Judged under the resource's writer lock, in the write's own transaction. Absent: the write is unconditional, exactly as before. See [`MetaExpect`](crate::types::precondition::MetaExpect) for the rules. A meta write never takes a body expectation.
+    attr_accessor :expect
+
     # SHA-256 hash of the managed_meta JSON (computed over canonical form)
     attr_accessor :managed_hash
 
@@ -83,6 +86,7 @@ module Temper::Generated
         :'persona' => :'persona',
         :'rationale' => :'rationale',
         :'reasoning' => :'reasoning',
+        :'expect' => :'expect',
         :'managed_hash' => :'managed_hash',
         :'managed_meta' => :'managed_meta',
         :'open_hash' => :'open_hash',
@@ -111,6 +115,7 @@ module Temper::Generated
         :'persona' => :'String',
         :'rationale' => :'String',
         :'reasoning' => :'String',
+        :'expect' => :'MetaExpect',
         :'managed_hash' => :'String',
         :'managed_meta' => :'ManagedMeta',
         :'open_hash' => :'String',
@@ -129,6 +134,7 @@ module Temper::Generated
         :'persona',
         :'rationale',
         :'reasoning',
+        :'expect',
         :'open_meta',
       ])
     end
@@ -175,6 +181,10 @@ module Temper::Generated
 
       if attributes.key?(:'reasoning')
         self.reasoning = attributes[:'reasoning']
+      end
+
+      if attributes.key?(:'expect')
+        self.expect = attributes[:'expect']
       end
 
       if attributes.key?(:'managed_hash')
@@ -295,6 +305,7 @@ module Temper::Generated
           persona == o.persona &&
           rationale == o.rationale &&
           reasoning == o.reasoning &&
+          expect == o.expect &&
           managed_hash == o.managed_hash &&
           managed_meta == o.managed_meta &&
           open_hash == o.open_hash &&
@@ -311,7 +322,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, managed_hash, managed_meta, open_hash, open_meta, resource_id].hash
+      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, expect, managed_hash, managed_meta, open_hash, open_meta, resource_id].hash
     end
 
     # Builds the object from hash

@@ -7067,6 +7067,7 @@ export interface components {
             code: string;
             details?: components["schemas"]["ErrorDetails"] | null;
             message: string;
+            precondition?: components["schemas"]["PreconditionFailure"] | null;
         };
         /**
          * @description The `oneOf` an error's `details` may be.
@@ -7307,6 +7308,21 @@ export interface components {
              *     (both default it) so a raw API caller need not supply it.
              */
             weight?: number;
+        };
+        /**
+         * @description One expectation that did not hold.
+         *
+         *     `current` is the value the caller could read now; `null` means the key is absent now. Nothing
+         *     else is ever added: no actor, time, event, position, revision or count.
+         */
+        FailedExpectation: {
+            /** @description What is there now (`null`: absent). */
+            current: Record<string, never> | null;
+            /** @description What the caller expected, as it sent it (`null`: absent). */
+            expected: Record<string, never> | null;
+            /** @description The key the expectation named. Present on every `open` and `managed` entry. */
+            key?: string | null;
+            tier: components["schemas"]["PreconditionTier"];
         };
         /**
          * @description An event clear mode appends before it redacts (field-grain scrub spec S2): a
@@ -8563,8 +8579,36 @@ export interface components {
          * @enum {string}
          */
         MergePolicy: "manual" | "auto";
+        /**
+         * @description Per-key expected values for a meta write, by tier.
+         *
+         *     - **A top-level `null` means absent**: the key has no live value, which is also how a key whose
+         *       newest stored value is a top-level `null` reads. A nested `null` is a value.
+         *     - **Values are compared as stored**: after the server's write-time normalization (a bare-string
+         *       `tags` value is stored as a one-element array) and by JSON value equality, so `1` equals
+         *       `1.0`. Echo back the values you read rather than reformatting them, and guard on strings or
+         *       on integers within ±2^53.
+         *     - **A key need not be one the write writes.** Every named key is judged, written or not.
+         *     - **`open`** names open-tier keys: never `facet`, `doc_type`, a managed key, or an identity key
+         *       (`temper-title`, `temper-slug`, `temper-id`, `temper-context`, `temper-goal`,
+         *       `temper-type`). **`managed`** names managed workflow and provenance keys only
+         *       (`temper-stage`, `temper-status`, …). Anything else is a `400`.
+         *     - **A key named here may not also be in `open_meta_add`** (`400`): the union is computed
+         *       from a read taken before the guard is judged.
+         *     - **An `expect` on a request that writes nothing is a `400`**: a check without a write is a
+         *       read.
+         *
+         *     Unknown members are refused (`422`), so a misspelled tier is never silently dropped.
+         */
+        MetaExpect: {
+            /** @description Managed-tier keys and the value each is expected to hold now (`null`: absent). */
+            managed?: Record<string, never>;
+            /** @description Open-tier keys and the value each is expected to hold now (`null`: absent). */
+            open?: Record<string, never>;
+        };
         /** @description Payload for meta-only sync updates that do not require re-chunking. */
         MetaUpdatePayload: components["schemas"]["ActInput"] & {
+            expect?: components["schemas"]["MetaExpect"] | null;
             /** @description SHA-256 hash of the managed_meta JSON (computed over canonical form) */
             managed_hash: string;
             /**
@@ -8818,6 +8862,18 @@ export interface components {
          * @enum {string}
          */
         Polarity: "forward" | "inverse";
+        /**
+         * @description Every expectation of a refused write that did not hold. The payload of a
+         *     `412 PRECONDITION_FAILED`, carried as `error.precondition`.
+         */
+        PreconditionFailure: {
+            failed: components["schemas"]["FailedExpectation"][];
+        };
+        /**
+         * @description Which tier a failed expectation named.
+         * @enum {string}
+         */
+        PreconditionTier: "open" | "managed";
         /**
          * @description Profile — the temper-domain identity.
          *
@@ -10681,6 +10737,7 @@ export interface components {
              *     resource. Forwarded verbatim from the CLI `--context-to` flag.
              */
             context_to?: string | null;
+            expect?: components["schemas"]["MetaExpect"] | null;
             /**
              * Format: uuid
              * @description Goal-set: the resolved goal `ResourceId` (as UUID) to link this resource to.
@@ -20530,6 +20587,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description An `expect` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed key with its current value */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     list_artifacts: {
@@ -21549,6 +21615,15 @@ export interface operations {
                     "application/json": components["schemas"]["ResourceView"];
                 };
             };
+            /** @description Bad request, including a malformed `expect` (code BAD_REQUEST) or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description Unauthorized */
             401: {
                 headers: {
@@ -21578,6 +21653,15 @@ export interface operations {
             };
             /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
             410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An `expect` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed key with its current value */
+            412: {
                 headers: {
                     [name: string]: unknown;
                 };

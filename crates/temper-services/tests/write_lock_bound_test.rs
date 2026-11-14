@@ -89,6 +89,7 @@ async fn seed(pool: &PgPool, email: &str) -> (DbBackend, uuid::Uuid, ResourceId)
 
 fn retitle(resource: ResourceId, title: &str) -> UpdateResource {
     UpdateResource {
+        expect: None,
         open_meta_add: None,
         resource,
         title: Some(title.to_string()),

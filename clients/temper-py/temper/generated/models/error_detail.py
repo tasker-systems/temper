@@ -20,6 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.error_details import ErrorDetails
+from temper.generated.models.precondition_failure import PreconditionFailure
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -29,9 +30,10 @@ class ErrorDetail(BaseModel):
     ErrorDetail
     """ # noqa: E501
     code: StrictStr
-    details: Optional[ErrorDetails] = Field(default=None, description="Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every other error.")
+    details: Optional[ErrorDetails] = Field(default=None, description="Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every other error. A `PRECONDITION_FAILED` refusal carries its payload in `precondition`, not here.")
     message: StrictStr
-    __properties: ClassVar[List[str]] = ["code", "details", "message"]
+    precondition: Optional[PreconditionFailure] = Field(default=None, description="Present on `PRECONDITION_FAILED` only: every expectation of the refused write that did not hold, each with what is there now. Absent on every other error.")
+    __properties: ClassVar[List[str]] = ["code", "details", "message", "precondition"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -75,10 +77,18 @@ class ErrorDetail(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of details
         if self.details:
             _dict['details'] = self.details.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of precondition
+        if self.precondition:
+            _dict['precondition'] = self.precondition.to_dict()
         # set to None if details (nullable) is None
         # and model_fields_set contains the field
         if self.details is None and "details" in self.model_fields_set:
             _dict['details'] = None
+
+        # set to None if precondition (nullable) is None
+        # and model_fields_set contains the field
+        if self.precondition is None and "precondition" in self.model_fields_set:
+            _dict['precondition'] = None
 
         return _dict
 
@@ -94,7 +104,8 @@ class ErrorDetail(BaseModel):
         _obj = cls.model_validate({
             "code": obj.get("code"),
             "details": ErrorDetails.from_dict(obj["details"]) if obj.get("details") is not None else None,
-            "message": obj.get("message")
+            "message": obj.get("message"),
+            "precondition": PreconditionFailure.from_dict(obj["precondition"]) if obj.get("precondition") is not None else None
         })
         return _obj
 

@@ -233,6 +233,7 @@ lib/temper/generated/models/facet_ack.rb
 lib/temper/generated/models/facet_predicate.rb
 lib/temper/generated/models/facet_retract_ack.rb
 lib/temper/generated/models/facet_set_request.rb
+lib/temper/generated/models/failed_expectation.rb
 lib/temper/generated/models/field_scrub_clearing_event.rb
 lib/temper/generated/models/field_scrub_execute_response.rb
 lib/temper/generated/models/field_scrub_execute_response_one_of.rb
@@ -306,6 +307,7 @@ lib/temper/generated/models/materialize_ack.rb
 lib/temper/generated/models/materialize_delta.rb
 lib/temper/generated/models/materialize_request.rb
 lib/temper/generated/models/merge_policy.rb
+lib/temper/generated/models/meta_expect.rb
 lib/temper/generated/models/meta_update_payload.rb
 lib/temper/generated/models/narrowed_by.rb
 lib/temper/generated/models/no_prior_standing.rb
@@ -324,6 +326,8 @@ lib/temper/generated/models/pending_invitation_counts.rb
 lib/temper/generated/models/plan_refusal.rb
 lib/temper/generated/models/plan_refusal_details.rb
 lib/temper/generated/models/polarity.rb
+lib/temper/generated/models/precondition_failure.rb
+lib/temper/generated/models/precondition_tier.rb
 lib/temper/generated/models/profile.rb
 lib/temper/generated/models/profile_auth_link.rb
 lib/temper/generated/models/profile_update_request.rb
