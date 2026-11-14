@@ -308,8 +308,10 @@ pub struct UpdateResourceInput {
     /// `data.precondition.failed` listing each key with what is there now. Make guarded values
     /// unique to you (a claim id): a refusal whose `current` is your own value means an earlier
     /// attempt of yours landed. Not on `facet`, `doc_type`, or identity keys; a key may not be
-    /// both guarded here and added to in `open_meta_add`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// both guarded here and added to in `open_meta_add`. A misspelled key reads as absent, so an
+    /// absence guard on it always holds. This tool's answer is a read taken after the write, so it
+    /// can already show a later writer's value.
+    #[serde(default)]
     pub expect: Option<temper_core::types::precondition::MetaExpect>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
     /// keys; all optional. `confidence` required when any other authorship field is supplied.
@@ -351,9 +353,9 @@ pub struct UpdateResourceMetaInput {
     /// written and the tool errors with `data.code` `PRECONDITION_FAILED` and
     /// `data.precondition.failed` listing each key with what is there now. Make guarded values
     /// unique to you (a claim id): a refusal whose `current` is your own value means an earlier
-    /// attempt of yours landed. Not on `facet`, `doc_type`, or identity keys; a key may not be
-    /// both guarded here and added to in `open_meta_add`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// attempt of yours landed. Not on `facet`, `doc_type`, or identity keys. A misspelled key
+    /// reads as absent, so an absence guard on it always holds.
+    #[serde(default)]
     pub expect: Option<temper_core::types::precondition::MetaExpect>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
     /// keys; all optional. `confidence` required when any other authorship field is supplied.

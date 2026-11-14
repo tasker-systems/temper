@@ -79,16 +79,18 @@ pub struct ErrorPayload {
     /// Structured detail, present only for a refused plan and a failed conditional write; skipped
     /// when `None`, so other errors' payloads carry no `details` key. See [`PayloadDetails`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    // `ErrorDetails` derives no `JsonSchema` and `ErrorPayload`'s schema is published nowhere; a
-    // consumer of that schema must derive it for `ErrorDetails` before dropping this skip.
+    // `PayloadDetails` (through `ErrorDetails`) derives no `JsonSchema`, and `ErrorPayload`'s
+    // schema is published nowhere; a consumer of that schema must derive it before dropping this
+    // skip.
     #[cfg_attr(feature = "mcp", schemars(skip))]
     pub details: Option<PayloadDetails>,
 }
 
 /// What an [`ErrorPayload`]'s `details` carries.
 ///
-/// Untagged, and unambiguous by required field: a refused plan's list requires `refusals`, a
-/// failed conditional write requires `failed`.
+/// Untagged, and unambiguous by required field: `ErrorDetails`' arms require `refusal` (system
+/// access) or `refusals` (a refused plan), and a failed conditional write requires `failed`.
+/// Asserted by `each_payload_details_arm_round_trips_to_its_own_variant`.
 ///
 /// - **`Refusal`**: what the HTTP door puts in `error.details`, the refused plan's list, each
 ///   entry with its `reason` and `teaches`.
@@ -107,4 +109,44 @@ pub struct ErrorPayload {
 pub enum PayloadDetails {
     Refusal(ErrorDetails),
     Precondition(PreconditionFailure),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// **Each arm parses back as itself through the untagged union.** FAILS IF an arm ever stops
+    /// requiring its field (an all-optional `ErrorDetails` arm would swallow the precondition
+    /// payload as a `Refusal`).
+    #[test]
+    fn each_payload_details_arm_round_trips_to_its_own_variant() {
+        let precondition = json!({"failed": [
+            {"tier": "open", "key": "claim_id", "expected": null, "current": "theirs"}
+        ]});
+        let back: PayloadDetails = serde_json::from_value(precondition.clone()).expect("parses");
+        assert!(matches!(back, PayloadDetails::Precondition(ref f) if f.failed.len() == 1));
+        assert_eq!(serde_json::to_value(&back).unwrap(), precondition);
+
+        let refusals = json!({"refusals": [
+            {"stage": null, "reason": "no_returns", "detail": "outcome.returns is empty"}
+        ]});
+        let back: PayloadDetails = serde_json::from_value(refusals).expect("parses");
+        assert!(matches!(
+            back,
+            PayloadDetails::Refusal(ErrorDetails::PlanRefusals(_))
+        ));
+
+        // `code` borrows, so the payload parses from a `'static` document.
+        let payload: ErrorPayload = serde_json::from_str(
+            r#"{"code": "PRECONDITION_FAILED", "message": "1 precondition failed: open.claim_id",
+                "details": {"failed": [{"tier": "open", "key": "claim_id",
+                                        "expected": null, "current": "theirs"}]}}"#,
+        )
+        .expect("an ErrorPayload parses");
+        assert!(matches!(
+            payload.details,
+            Some(PayloadDetails::Precondition(_))
+        ));
+    }
 }

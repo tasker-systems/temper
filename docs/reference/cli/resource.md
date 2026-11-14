@@ -563,7 +563,7 @@ Options:
           Write only if these meta values hold now, as a JSON object: '{"open":{"KEY":VALUE},"managed":{"temper-KEY":VALUE}}'. A top-level null means absent, and a key need not be one this write sets. If any does not hold, nothing is written, the exit code is 1, and `--format json` prints code PRECONDITION_FAILED with each failed key and its current value in `details.failed`. Guard on a value unique to you: a current value equal to your own means an earlier attempt of yours landed
 
       --expect-absent <TIER:KEY>
-          Write only if this key is absent now: `open:<key>` or `managed:<key>`. Repeatable, and combined with --expect; the same as naming the key with null there
+          Write only if this key is absent now: `open:<key>` or `managed:<key>`. Repeatable, and combined with --expect; the same as naming the key with null there. A misspelled key reads as absent, so its guard always holds
 
       --invocation <INVOCATION>
           Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
@@ -750,7 +750,7 @@ Options:
           Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
 
       --expect-absent <TIER:KEY>
-          Write only if this key is absent now: `open:<key>` or `managed:<key>`. Repeatable, and combined with --expect; the same as naming the key with null there
+          Write only if this key is absent now: `open:<key>` or `managed:<key>`. Repeatable, and combined with --expect; the same as naming the key with null there. A misspelled key reads as absent, so its guard always holds
 
       --invocation <INVOCATION>
           Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)

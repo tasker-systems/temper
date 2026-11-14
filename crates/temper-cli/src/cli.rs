@@ -180,7 +180,8 @@ pub struct ExpectArgs {
     #[arg(long, value_name = "JSON")]
     pub expect: Option<String>,
     /// Write only if this key is absent now: `open:<key>` or `managed:<key>`. Repeatable, and
-    /// combined with --expect; the same as naming the key with null there.
+    /// combined with --expect; the same as naming the key with null there. A misspelled key reads
+    /// as absent, so its guard always holds.
     #[arg(long, value_name = "TIER:KEY")]
     pub expect_absent: Vec<String>,
 }
