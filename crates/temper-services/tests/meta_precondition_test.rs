@@ -1139,7 +1139,8 @@ async fn a_guarded_goal_clear_on_a_goalless_resource_is_judged_and_records_nothi
 /// writes added to the update path runs only when `expect` is present, so these are the values the
 /// unguarded write produced before.
 ///
-/// FAILS IF the unconditional path ever starts recording differently or answering another shape.
+/// FAILS IF the unconditional path ever records another event list, or answers with other
+/// top-level members or another open tier. Nested values beyond `open_meta` are not pinned.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_writer_that_states_nothing_sees_no_change(pool: PgPool) {
     let (owner, context) = seed_profile(&pool, "unguarded@example.com").await;

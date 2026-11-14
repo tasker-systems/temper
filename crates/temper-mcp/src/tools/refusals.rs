@@ -126,7 +126,8 @@ pub(crate) fn precondition_failed(
     let text = format!(
         "{context}: {message}; nothing was written. `structuredContent.precondition.failed` holds \
          each failed key with what is there now (a `current` equal to the value you were writing \
-         means an earlier attempt of yours landed)"
+         means an earlier attempt of yours landed). If you cannot see `structuredContent`, read \
+         the resource with `get_resource` and compare"
     );
     let detail = ErrorDetail {
         code: temper_core::error::PRECONDITION_FAILED_CODE.to_string(),
