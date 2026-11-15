@@ -5810,6 +5810,7 @@ class ResourcesApi:
         self,
         id: Annotated[UUID, Field(description="Resource ID")],
         resource_update_request: ResourceUpdateRequest,
+        if_match: Annotated[Optional[StrictStr], Field(description="A synonym for `expect.body`: the quoted `body_token` the save expects to replace (a list matches on any member). Guards the body only.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -5831,6 +5832,8 @@ class ResourcesApi:
         :type id: UUID
         :param resource_update_request: (required)
         :type resource_update_request: ResourceUpdateRequest
+        :param if_match: A synonym for `expect.body`: the quoted `body_token` the save expects to replace (a list matches on any member). Guards the body only.
+        :type if_match: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -5858,6 +5861,7 @@ class ResourcesApi:
         _param = self._update_resource_serialize(
             id=id,
             resource_update_request=resource_update_request,
+            if_match=if_match,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -5890,6 +5894,7 @@ class ResourcesApi:
         self,
         id: Annotated[UUID, Field(description="Resource ID")],
         resource_update_request: ResourceUpdateRequest,
+        if_match: Annotated[Optional[StrictStr], Field(description="A synonym for `expect.body`: the quoted `body_token` the save expects to replace (a list matches on any member). Guards the body only.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -5911,6 +5916,8 @@ class ResourcesApi:
         :type id: UUID
         :param resource_update_request: (required)
         :type resource_update_request: ResourceUpdateRequest
+        :param if_match: A synonym for `expect.body`: the quoted `body_token` the save expects to replace (a list matches on any member). Guards the body only.
+        :type if_match: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -5938,6 +5945,7 @@ class ResourcesApi:
         _param = self._update_resource_serialize(
             id=id,
             resource_update_request=resource_update_request,
+            if_match=if_match,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -5970,6 +5978,7 @@ class ResourcesApi:
         self,
         id: Annotated[UUID, Field(description="Resource ID")],
         resource_update_request: ResourceUpdateRequest,
+        if_match: Annotated[Optional[StrictStr], Field(description="A synonym for `expect.body`: the quoted `body_token` the save expects to replace (a list matches on any member). Guards the body only.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -5991,6 +6000,8 @@ class ResourcesApi:
         :type id: UUID
         :param resource_update_request: (required)
         :type resource_update_request: ResourceUpdateRequest
+        :param if_match: A synonym for `expect.body`: the quoted `body_token` the save expects to replace (a list matches on any member). Guards the body only.
+        :type if_match: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -6018,6 +6029,7 @@ class ResourcesApi:
         _param = self._update_resource_serialize(
             id=id,
             resource_update_request=resource_update_request,
+            if_match=if_match,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -6045,6 +6057,7 @@ class ResourcesApi:
         self,
         id,
         resource_update_request,
+        if_match,
         x_temper_surface,
         _request_auth,
         _content_type,
@@ -6071,6 +6084,8 @@ class ResourcesApi:
             _path_params['id'] = id
         # process the query parameters
         # process the header parameters
+        if if_match is not None:
+            _header_params['If-Match'] = if_match
         if x_temper_surface is not None:
             _header_params['X-Temper-Surface'] = x_temper_surface
         # process the form parameters

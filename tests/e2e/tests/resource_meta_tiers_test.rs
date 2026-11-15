@@ -142,19 +142,22 @@ async fn a_body_less_show_is_a_strict_subset_of_full_show_and_carries_the_stamp(
         "a body-less show anchors on id: {meta}"
     );
 
-    // And the subset is proper by exactly ONE key. Dropping a section must remove the
-    // section and nothing else — a `--without body` that also quietly shed, say, `open_meta`
-    // would still pass the loop above, since a subset relation cannot see an absence.
-    let dropped: Vec<&String> = full
+    // And the subset is proper by exactly the body section's keys: the body and the token
+    // that names it. Dropping a section must remove the section and nothing else — a
+    // `--without body` that also quietly shed, say, `open_meta` would still pass the loop
+    // above, since a subset relation cannot see an absence.
+    let mut dropped: Vec<&str> = full
         .as_object()
         .expect("full show is an object")
         .keys()
+        .map(String::as_str)
         .filter(|k| !meta_obj.contains_key(*k))
         .collect();
+    dropped.sort_unstable();
     assert_eq!(
         dropped,
-        vec!["content"],
-        "`--without body` must drop the body key and nothing else"
+        vec!["body_token", "content"],
+        "`--without body` must drop the body section's keys and nothing else"
     );
 
     // And the §7-dissolved hashes are gone from the wire entirely, not emitted empty.

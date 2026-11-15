@@ -739,6 +739,7 @@ mod tests {
         }
 
         ResourceView {
+            body_token: None,
             id: ResourceId::from(Uuid::nil()),
             r#ref: String::new(),
             title: "a memory".to_string(),

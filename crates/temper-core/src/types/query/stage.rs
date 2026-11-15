@@ -336,6 +336,7 @@ mod tests {
     fn inert_resource() -> crate::types::resource_view::ResourceView {
         use crate::types::ids::{ProfileId, ResourceId};
         crate::types::resource_view::ResourceView {
+            body_token: None,
             id: ResourceId::new(),
             r#ref: "a-resource-019fe3d0".to_string(),
             title: "a resource".to_string(),

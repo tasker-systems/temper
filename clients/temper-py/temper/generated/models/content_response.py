@@ -27,13 +27,14 @@ from pydantic_core import to_jsonable_python
 
 class ContentResponse(BaseModel):
     """
-    Response body for resource content.
+    Response body for `GET /api/resources/{id}/content`: the readable body, and its token.  **Every field is determined by `markdown` and the URL**, so the `ETag` this read answers (the quoted `body_token`) validates the whole representation. Nothing else may be added here: a field that varies independently of the bytes (meta, an ingest state, a timestamp) would make that strong tag wrong. The meta tiers are `GET /api/resources/{id}/meta`.
     """ # noqa: E501
-    managed_meta: Optional[ManagedMeta] = Field(default=None, description="Typed server-side managed_meta from kb_resource_manifests — the closed Property vocabulary. Only the named `temper-*` keys are represented; there is no catch-all. Used by CLI sync pull to reconstruct complete frontmatter (identity/type/home come from the resource row, not here).")
+    body_token: Optional[StrictStr] = Field(default=None, description="The body token of exactly `markdown` ([`crate::body_token`]): send it as `expect.body` (or `If-Match`) on `PATCH /api/resources/{id}` to save over these bytes only. Absent from a server that predates it.")
+    managed_meta: Optional[ManagedMeta] = Field(default=None, description="**Never set by the server**, which answers this read with the body alone (see above). Kept for clients that build a `ContentResponse` locally to carry frontmatter beside a body.")
     markdown: StrictStr = Field(description="The body. For a `verbatim` resource ([`BodyStorage::Verbatim`]) these are the stored bytes unchanged; for a `derived` one, a reconstruction from chunks.")
     open_meta: Optional[Any] = None
     resource_id: UUID = Field(description="A `kb_resources.id` value.")
-    __properties: ClassVar[List[str]] = ["managed_meta", "markdown", "open_meta", "resource_id"]
+    __properties: ClassVar[List[str]] = ["body_token", "managed_meta", "markdown", "open_meta", "resource_id"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -77,6 +78,11 @@ class ContentResponse(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of managed_meta
         if self.managed_meta:
             _dict['managed_meta'] = self.managed_meta.to_dict()
+        # set to None if body_token (nullable) is None
+        # and model_fields_set contains the field
+        if self.body_token is None and "body_token" in self.model_fields_set:
+            _dict['body_token'] = None
+
         # set to None if managed_meta (nullable) is None
         # and model_fields_set contains the field
         if self.managed_meta is None and "managed_meta" in self.model_fields_set:
@@ -99,6 +105,7 @@ class ContentResponse(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
+            "body_token": obj.get("body_token"),
             "managed_meta": ManagedMeta.from_dict(obj["managed_meta"]) if obj.get("managed_meta") is not None else None,
             "markdown": obj.get("markdown"),
             "open_meta": obj.get("open_meta"),

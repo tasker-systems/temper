@@ -442,6 +442,7 @@ mod tests {
     fn test_resource_row() -> ResourceView {
         use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
         ResourceView {
+            body_token: None,
             id: ResourceId(uuid::Uuid::nil()),
             r#ref: String::new(),
             kb_context_id: Some(ContextId(uuid::Uuid::nil())),
@@ -484,6 +485,7 @@ mod tests {
         use temper_core::types::ids::ResourceId;
         let meta = test_resource_row();
         let content = ContentResponse {
+            body_token: None,
             resource_id: ResourceId(uuid::Uuid::nil()),
             markdown: "# Test Title\n\n## Section\n\nbody text\n".to_string(),
             managed_meta: None,
@@ -524,6 +526,7 @@ mod tests {
         use temper_core::types::ids::ResourceId;
         let meta = test_resource_row();
         let content = ContentResponse {
+            body_token: None,
             resource_id: ResourceId(uuid::Uuid::nil()),
             markdown: "# Title\n\n## Section\n".to_string(),
             managed_meta: None,
@@ -554,6 +557,7 @@ mod tests {
             ..Default::default()
         };
         let content = ContentResponse {
+            body_token: None,
             resource_id: ResourceId(uuid::Uuid::nil()),
             markdown: "# Body".to_string(),
             managed_meta: Some(managed),
@@ -585,6 +589,7 @@ mod tests {
             "relates_to": ["task-abc"],
         });
         let content = ContentResponse {
+            body_token: None,
             resource_id: ResourceId(uuid::Uuid::nil()),
             markdown: "body".to_string(),
             managed_meta: None,
@@ -616,6 +621,7 @@ mod tests {
         let server_updated = chrono::Utc.with_ymd_and_hms(2026, 5, 3, 14, 30, 0).unwrap();
         meta.updated = server_updated;
         let content = ContentResponse {
+            body_token: None,
             resource_id: ResourceId(uuid::Uuid::nil()),
             markdown: "body".to_string(),
             managed_meta: None,

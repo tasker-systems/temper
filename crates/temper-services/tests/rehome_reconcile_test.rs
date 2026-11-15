@@ -88,6 +88,7 @@ fn create_cmd(home: HomeAnchor, slug: &str) -> CreateResource {
 
 fn rehome_cmd(resource: uuid::Uuid, dest: uuid::Uuid) -> UpdateResource {
     UpdateResource {
+        if_match: None,
         expect: None,
         open_meta_add: None,
         resource: ResourceId::from(resource),

@@ -565,6 +565,9 @@ Options:
       --expect-absent <TIER:KEY>
           Write only if this key is absent now: `open:<key>` or `managed:<key>`. Repeatable, and combined with --expect; the same as naming the key with null there. A misspelled key reads as absent, so its guard always holds
 
+      --expect-body <TOKEN>
+          Write only if the resource's body is still exactly the bytes this token names: the `body_token` from `resource show --json`, or from an earlier `resource update --body`. If the body has changed, nothing is written, the exit code is 1, and `--format json` prints code PRECONDITION_FAILED with a `body` entry whose `current` is the body's token now: show the resource again and rebase. Guards the body only, never the title
+
       --invocation <INVOCATION>
           Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
 

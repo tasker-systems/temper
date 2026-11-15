@@ -55,7 +55,7 @@ module Temper::Generated
     # Context move ref: a bare UUID or `@owner/slug` decorated form. Bare names (no `@`/`+` prefix, not a UUID) are rejected 400 by the server (Decision 1). When present the server resolves the ref to a `ContextId` (visibility-gated to the principal) and re-homes the resource. Forwarded verbatim from the CLI `--context-to` flag.
     attr_accessor :context_to
 
-    # What this update expects the resource's meta to hold now, per key (`null`: absent). If any expectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED` with each failed key and its current value. Judged under the resource's writer lock, in the update's own transaction. Absent: the update is unconditional, exactly as before. See [`MetaExpect`](crate::types::precondition::MetaExpect) for the rules.  `ts(skip)`-ped like `sources` and `content_block`: a conditional write is a CLI/agent path the SvelteKit UI does not send.
+    # What this update expects the resource to hold now: meta values per key (`null`: absent), and the body's token. If any expectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED` with each failed expectation and what is there now. Judged under the resource's writer lock, in the update's own transaction. Absent: the update is unconditional, exactly as before. See [`ResourceExpect`](crate::types::precondition::ResourceExpect) for the rules.  `ts(skip)`-ped like `sources` and `content_block`: a conditional write is a CLI/agent path the SvelteKit UI does not send.
     attr_accessor :expect
 
     # Goal-set: the resolved goal `ResourceId` (as UUID) to link this resource to. When present the server folds any existing `advances`→goal edge and asserts a new one. Mutually exclusive with `clear_goal` (the CLI rejects both together). Forwarded from the CLI `--goal <ref>` flag (resolved client-side).
@@ -151,7 +151,7 @@ module Temper::Generated
         :'content_block' => :'String',
         :'content_hash' => :'String',
         :'context_to' => :'String',
-        :'expect' => :'MetaExpect',
+        :'expect' => :'ResourceExpect',
         :'goal' => :'String',
         :'managed_meta' => :'ManagedMeta',
         :'open_meta' => :'Object',

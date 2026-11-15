@@ -712,6 +712,30 @@ pub fn prepare_update_body(p: &mut UpdateParams<'_>, defer: bool) -> Result<Opti
     })
 }
 
+/// The whole-body write's refusal of a resource whose ingest has not completed: a partition
+/// decision over a body still arriving, or one whose ingest ended before it finalized, would be a
+/// guess. Public so a door that answers a whole-body save without reaching the write (a retried
+/// save that already landed) refuses it exactly as the write would.
+pub async fn refuse_incomplete_ingest(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+) -> Result<()> {
+    let ingest_state: String = sqlx::query_scalar!(
+        "SELECT ingest_state FROM kb_resources WHERE id = $1",
+        resource.uuid()
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .with_context(|| format!("update_resource: resource {resource} not found"))?;
+    if ingest_state != "complete" {
+        anyhow::bail!(
+            "update_resource: resource {resource} ingest is {ingest_state}, not complete — a \
+             partition decision over an incomplete body would be a guess"
+        );
+    }
+    Ok(())
+}
+
 /// [`update_resource_in_tx`] with the body already prepared ([`prepare_update_body`]).
 pub async fn update_resource_in_tx_prepared(
     conn: &mut sqlx::PgConnection,
@@ -818,20 +842,7 @@ pub async fn update_resource_in_tx_prepared(
             // A partition decision over an incomplete body is a guess — one still arriving, or one
             // whose ingest ended before it finalized (the shipped op's own decline — the check
             // moves from the hook into the arm, same Fatal face).
-            let ingest_state: String = sqlx::query_scalar!(
-                "SELECT ingest_state FROM kb_resources WHERE id = $1",
-                p.resource.uuid()
-            )
-            .fetch_one(&mut *conn)
-            .await
-            .with_context(|| format!("update_resource: resource {} not found", p.resource))?;
-            if ingest_state != "complete" {
-                anyhow::bail!(
-                    "update_resource: resource {} ingest is {ingest_state}, not complete — a \
-                     partition decision over an incomplete body would be a guess",
-                    p.resource
-                );
-            }
+            refuse_incomplete_ingest(&mut *conn, p.resource).await?;
             let base = prepared_body
                 .take()
                 .expect("prepared above whenever p.body is Some");

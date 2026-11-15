@@ -17,9 +17,10 @@ module Temper::Generated
   class PreconditionTier
     OPEN = "open".freeze
     MANAGED = "managed".freeze
+    BODY = "body".freeze
 
     def self.all_vars
-      @all_vars ||= [OPEN, MANAGED].freeze
+      @all_vars ||= [OPEN, MANAGED, BODY].freeze
     end
 
     # Builds the enum from string

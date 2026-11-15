@@ -244,6 +244,22 @@ open_meta?: JsonValue | null,
  */
 content?: string | null, 
 /**
+ * The body token of exactly [`Self::content`] ([`crate::body_token`]), computed over the
+ * bytes this same read returned: send it as `expect.body` on `PATCH /api/resources/{id}` to
+ * save over those bytes only.
+ *
+ * Present beside `content` on a single-resource read that asked for the `body` section, and
+ * on the answer of a `PATCH` that wrote the body, where it is computed inside the write's
+ * own transaction and describes the whole readable body that write left (a per-block write
+ * included). Absent everywhere else: list and search rows carry `content` without a token,
+ * so a body read from a list cannot guard a save. Absent from a server that predates it.
+ *
+ * On a write's answer, only this field is the write's own: the rest of the view is read after
+ * the commit, so `body_hash`, `bytes_merkle` and `updated` can already describe a later
+ * write. Guard the next save with this token, never with a hash.
+ */
+body_token?: string | null, 
+/**
  * Derived embedding-readiness — the `embedding-status` section.
  *
  * Absent means **not requested**, never "not embedded": whenever the section was

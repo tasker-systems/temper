@@ -13,7 +13,12 @@ import type { JsonValue } from "./serde_json/JsonValue";
 export type BodyStorage = "verbatim" | "derived";
 
 /**
- * Response body for resource content.
+ * Response body for `GET /api/resources/{id}/content`: the readable body, and its token.
+ *
+ * **Every field is determined by `markdown` and the URL**, so the `ETag` this read answers (the
+ * quoted `body_token`) validates the whole representation. Nothing else may be added here: a
+ * field that varies independently of the bytes (meta, an ingest state, a timestamp) would make
+ * that strong tag wrong. The meta tiers are `GET /api/resources/{id}/meta`.
  */
 export type ContentResponse = { resource_id: ResourceId, 
 /**
@@ -22,18 +27,19 @@ export type ContentResponse = { resource_id: ResourceId,
  */
 markdown: string, 
 /**
- * Typed server-side managed_meta from kb_resource_manifests — the closed
- * Property vocabulary. Only the named `temper-*` keys are represented;
- * there is no catch-all. Used by CLI sync pull to reconstruct complete
- * frontmatter (identity/type/home come from the resource row, not here).
+ * The body token of exactly `markdown` ([`crate::body_token`]): send it as `expect.body` (or
+ * `If-Match`) on `PATCH /api/resources/{id}` to save over these bytes only. Absent from a
+ * server that predates it.
+ */
+body_token?: string | null, 
+/**
+ * **Never set by the server**, which answers this read with the body alone (see above). Kept
+ * for clients that build a `ContentResponse` locally to carry frontmatter beside a body.
  */
 managed_meta?: ManagedMeta | null, 
 /**
- * Server-side open_meta from kb_resource_manifests. Intentionally
- * untyped — open_meta is the free-form tier. Typed extraction of
- * relationship fields lives in `ResourceRelationships` (see
- * `types::graph`), which parses this value on demand and ignores
- * anything it doesn't recognize.
+ * **Never set by the server**, for the same reason as `managed_meta`. Intentionally untyped
+ * where a client sets it: open_meta is the free-form tier.
  */
 open_meta?: JsonValue | null, };
 

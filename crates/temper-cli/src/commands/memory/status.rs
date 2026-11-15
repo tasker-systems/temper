@@ -296,6 +296,7 @@ mod tests {
         }
 
         ResourceView {
+            body_token: None,
             id: ResourceId::from(Uuid::now_v7()),
             r#ref: String::new(),
             title: title.to_string(),

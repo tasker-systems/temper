@@ -136,7 +136,8 @@ pub async fn get(
     params(("id" = Uuid, Path, description = "Resource ID")),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "The body as markdown. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`.", body = ContentResponse),
+        (status = 200, description = "The body as markdown, and its `body_token`. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`. Answers `Cache-Control: private`. An `If-None-Match` is ignored; this read never answers `304`.", body = ContentResponse,
+            headers(("ETag" = String, description = "The `body_token` of `markdown`, quoted: a strong entity-tag"))),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404", body = ErrorBody),
@@ -146,14 +147,34 @@ pub async fn get_content(
     State(state): State<AppState>,
     auth: AnyPrincipal,
     Path(resource_id): Path<Uuid>,
-) -> ApiResult<Json<ContentResponse>> {
-    temper_services::backend::substrate_read::get_content_select(
+) -> ApiResult<impl axum::response::IntoResponse> {
+    let content = temper_services::backend::substrate_read::get_content_select(
         &state.pool,
         ProfileId::from(auth.0.profile().id),
         ResourceId::from(resource_id),
     )
-    .await
-    .map(Json)
+    .await?;
+    Ok((content_etag(&content), Json(content)))
+}
+
+/// The `ETag` of a `/content` answer: its `body_token`, quoted, strong. The one read that answers
+/// an `ETag`; it is a convenience beside the field, which is authoritative. Valid as a strong tag
+/// because every field of [`ContentResponse`] is a function of `markdown` and the URL. A refusal
+/// answers no `ETag`, and this read never answers `304`: an `If-None-Match` is ignored.
+fn content_etag(content: &ContentResponse) -> axum::http::HeaderMap {
+    let mut headers = axum::http::HeaderMap::new();
+    if let Some(token) = content.body_token.as_deref() {
+        // A token is `bt1.` and base64url, always a valid header value; never panic on one.
+        if let Ok(value) = axum::http::HeaderValue::from_str(&format!("\"{token}\"")) {
+            headers.insert(axum::http::header::ETAG, value);
+        }
+    }
+    // The answer is the caller's own read of a body it may read: never a shared cache's to keep.
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private"),
+    );
+    headers
 }
 
 /// Read a resource's block provenance
@@ -355,17 +376,20 @@ pub async fn create(
     operation_id = "update_resource",
     path = "/api/resources/{id}",
     tag = "Resources",
-    params(("id" = Uuid, Path, description = "Resource ID")),
+    params(
+        ("id" = Uuid, Path, description = "Resource ID"),
+        ("If-Match" = Option<String>, Header, description = "A synonym for `expect.body`: the quoted `body_token` the save expects to replace (a list matches on any member). Guards the body only.")
+    ),
     request_body = ResourceUpdateRequest,
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Updated resource", body = ResourceView),
-        (status = 400, description = "Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, or a malformed `expect`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED)", body = ErrorBody),
+        (status = 400, description = "Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, a malformed `expect`, an `If-Match` that is `*`, unparseable or disagreeing with `expect.body`, a malformed `expect.body`, or, for a caller who reads the resource, a weak `If-Match` tag naming its current body, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED: `If-None-Match`, `If-Unmodified-Since`)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
-        (status = 404, description = "Not found", body = ErrorBody),
+        (status = 404, description = "Not found; also the answer to a caller who cannot read the resource for any well-formed `expect` or `If-Match`, matching or not. A malformed one (`If-Match: *`, unparseable, disagreeing with `expect.body`, or a malformed `expect.body`) is the 400 above, decided from the request alone", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
-        (status = 412, description = "An `expect` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed key with its current value", body = ErrorBody),
+        (status = 412, description = "An `expect` or `If-Match` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed expectation with what is there now (a `body` entry's `current` is the current body's token)", body = ErrorBody),
     )
 )]
 pub async fn update(
@@ -373,6 +397,7 @@ pub async fn update(
     auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<ResourceUpdateRequest>,
 ) -> ApiResult<Json<ResourceView>> {
     use temper_core::context_ref::parse_context_ref;
@@ -432,8 +457,22 @@ pub async fn update(
         _ => None,
     };
 
+    // `If-Match` is honoured on this route only, as a synonym for `expect.body`. It is carried
+    // to the backend unparsed, so it is refused or judged in the order every other precondition
+    // is: a malformed one after the modify floor (a 400 that reads no state), a well-formed one
+    // under the resource's lock after the read gate. Several field lines are one list.
+    let if_match = {
+        let lines: Vec<String> = headers
+            .get_all(axum::http::header::IF_MATCH)
+            .iter()
+            .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+            .collect();
+        (!lines.is_empty()).then(|| lines.join(", "))
+    };
+
     let cmd = UpdateResource {
         expect: req.expect,
+        if_match,
         resource: ResourceId::from(resource_id),
         title: title_top,
         slug: None,

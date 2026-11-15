@@ -430,6 +430,7 @@ temper/generated/models/resource_erasure_plan.py
 temper/generated/models/resource_erasure_refusal_reason.py
 temper/generated/models/resource_erasure_survey.py
 temper/generated/models/resource_erasure_survey_request.py
+temper/generated/models/resource_expect.py
 temper/generated/models/resource_facet_row.py
 temper/generated/models/resource_facets.py
 temper/generated/models/resource_facets_response.py

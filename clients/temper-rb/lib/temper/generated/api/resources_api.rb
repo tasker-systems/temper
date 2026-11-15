@@ -1408,6 +1408,7 @@ module Temper::Generated
     # @param id [String] Resource ID
     # @param resource_update_request [ResourceUpdateRequest] 
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :if_match A synonym for &#x60;expect.body&#x60;: the quoted &#x60;body_token&#x60; the save expects to replace (a list matches on any member). Guards the body only.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [ResourceView]
     def update_resource(id, resource_update_request, opts = {})
@@ -1419,6 +1420,7 @@ module Temper::Generated
     # @param id [String] Resource ID
     # @param resource_update_request [ResourceUpdateRequest] 
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :if_match A synonym for &#x60;expect.body&#x60;: the quoted &#x60;body_token&#x60; the save expects to replace (a list matches on any member). Guards the body only.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(ResourceView, Integer, Hash)>] ResourceView data, response status code and response headers
     def update_resource_with_http_info(id, resource_update_request, opts = {})
@@ -1452,6 +1454,7 @@ module Temper::Generated
       if !content_type.nil?
           header_params['Content-Type'] = content_type
       end
+      header_params[:'If-Match'] = opts[:'if_match'] if !opts[:'if_match'].nil?
       header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
 
       # form parameters

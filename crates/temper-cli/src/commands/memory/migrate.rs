@@ -879,6 +879,7 @@ Never ship code with \"for now\".
     /// `emit`'s own parser can be run against what `migrate` writes.
     fn detail_with(open_meta: serde_json::Value) -> ResourceView {
         ResourceView {
+            body_token: None,
             id: ResourceId::from(uuid::Uuid::now_v7()),
             r#ref: String::new(),
             title: "a curated hook".to_string(),

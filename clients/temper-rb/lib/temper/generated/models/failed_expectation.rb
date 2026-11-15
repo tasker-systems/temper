@@ -20,7 +20,7 @@ module Temper::Generated
 
     attr_accessor :expected
 
-    # The key the expectation named. Present on every `open` and `managed` entry.
+    # The key the expectation named. Present on every `open` and `managed` entry; never on a `body` entry.
     attr_accessor :key
 
     attr_accessor :tier

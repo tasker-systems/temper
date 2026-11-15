@@ -925,10 +925,19 @@ impl DbBackend {
         }
     }
 
-    /// Judge an update's meta expectations on its own transaction, under R's writer lock: take the
-    /// lock, ask GET's read predicate again, then run the one comparison statement. `Err` is the
-    /// refusal to roll back with: GET's `404` for a caller who cannot read R, or
-    /// [`TemperError::PreconditionFailed`] listing every expectation that did not hold.
+    /// Judge an update's expectations on its own transaction, under R's writer lock: take the
+    /// lock, ask GET's read predicate again, then judge the meta tiers in their one comparison
+    /// statement and the body against the token of [`readback::body_on`] read on this same
+    /// transaction. `Err` is the refusal to roll back with: GET's `404` for a caller who cannot
+    /// read R; a `400` for a weak `If-Match` tag that names the current body (a `412` there would
+    /// loop a client that re-reads and retries); or [`TemperError::PreconditionFailed`] listing
+    /// every expectation that did not hold, meta and body together.
+    ///
+    /// `Ok(Some(token))` is the one answer that is neither: a body-only whole-body save
+    /// (`retried_save`, its bytes) whose only failed expectation is the body, and whose bytes
+    /// already ARE the current body, read back verbatim. That is a retried save that landed; the caller rolls back,
+    /// writes nothing, and answers `200` with the current body's token. The ingest-state refusal
+    /// a whole-body write meets still comes first.
     ///
     /// **The lock comes first, and it must be this one.** The floor's `FOR KEY SHARE`, taken by
     /// `begin_floored`, does not serialize writers of R: two claimants both hold it at once. A
@@ -938,31 +947,100 @@ impl DbBackend {
     /// then, under READ COMMITTED, the next statement sees what it wrote. The substrate takes the
     /// same lock again at the head of the update; it is re-entrant, and the lock order (goal rows,
     /// then R) is unchanged.
-    async fn judge_meta_precondition(
+    async fn judge_precondition(
         &self,
         conn: &mut sqlx::PgConnection,
         resource: ResourceId,
-        expect: &temper_core::types::precondition::MetaExpect,
-    ) -> Result<(), TemperError> {
+        meta: Option<&temper_core::types::precondition::MetaExpect>,
+        body: Option<&temper_core::types::precondition::BodyCondition>,
+        retried_save: Option<&str>,
+    ) -> Result<Option<String>, TemperError> {
+        use temper_core::types::precondition::{BodyJudgment, FailedExpectation, PreconditionTier};
+        let not_visible = || {
+            map_readback_err(readback::ReadbackError::NotVisible {
+                resource_id: resource,
+                principal: self.profile_id,
+            })
+        };
         writes::lock_resource_for_write(&mut *conn, resource)
             .await
             .map_err(api_err)?;
         readback::ensure_visible(&mut *conn, self.profile_id, resource)
             .await
             .map_err(map_readback_err)?;
-        match precondition::judge(&mut *conn, self.profile_id, resource, expect)
-            .await
-            .map_err(api_err)?
-        {
-            precondition::Judgment::Holds => Ok(()),
-            precondition::Judgment::Fails(failure) => Err(TemperError::PreconditionFailed(failure)),
-            precondition::Judgment::NotVisible => {
-                Err(map_readback_err(readback::ReadbackError::NotVisible {
-                    resource_id: resource,
-                    principal: self.profile_id,
-                }))
+        let mut failed = Vec::new();
+        if let Some(meta) = meta {
+            match precondition::judge(&mut *conn, self.profile_id, resource, meta)
+                .await
+                .map_err(api_err)?
+            {
+                precondition::Judgment::Holds => {}
+                precondition::Judgment::Fails(failure) => failed.extend(failure.failed),
+                precondition::Judgment::NotVisible => return Err(not_visible()),
             }
         }
+        let mut current_body = None;
+        if let Some(condition) = body {
+            // The token is of the body `/content` would serve now, read on this transaction under
+            // the lock: never the write path's own live-block read, which differs whenever a
+            // block has no stored bytes, and never a pool read, which cannot see this transaction.
+            let read = readback::body_on(&mut *conn, resource)
+                .await
+                .map_err(map_readback_err)?;
+            let verbatim = read.bytes_merkle.is_some();
+            let current = read.content;
+            let token = temper_core::body_token(&current);
+            match condition.judge(&token) {
+                BodyJudgment::Holds => {}
+                BodyJudgment::WeakMatch => {
+                    // This 400 says the weak tag names the current body, so it is a disclosure
+                    // like a 412: read standing is asked once more first (see below).
+                    readback::ensure_visible(&mut *conn, self.profile_id, resource)
+                        .await
+                        .map_err(map_readback_err)?;
+                    return Err(TemperError::BadRequest(
+                        "If-Match holds a weak entity-tag; a body save is guarded only by a \
+                         strong one. Send the body_token you read, quoted, without W/"
+                            .into(),
+                    ));
+                }
+                BodyJudgment::Fails => {
+                    failed.push(FailedExpectation {
+                        tier: PreconditionTier::Body,
+                        key: None,
+                        expected: condition.expected(),
+                        current: serde_json::Value::String(token.clone()),
+                    });
+                }
+            }
+            current_body = Some((current, token, verbatim));
+        }
+        if failed.is_empty() {
+            return Ok(None);
+        }
+        // Read standing once more before a refusal discloses anything. The meta statement asks it
+        // in its own snapshot; the body read does not, so a revocation committing between the
+        // gate above and that read is seen here, by a statement that starts after it.
+        readback::ensure_visible(&mut *conn, self.profile_id, resource)
+            .await
+            .map_err(map_readback_err)?;
+        let only_the_body = failed.len() == 1 && failed[0].tier == PreconditionTier::Body;
+        // Only a verbatim body can be a landed save: a whole-body save stores its bytes, so a body
+        // that reads back derived was never written by one, and a save of its reconstruction is a
+        // real write (it stores bytes), refused like any other stale save.
+        if let (true, Some(sent), Some((current, token, true))) =
+            (only_the_body, retried_save, current_body)
+        {
+            if sent == current {
+                writes::refuse_incomplete_ingest(&mut *conn, resource)
+                    .await
+                    .map_err(write_err)?;
+                return Ok(Some(token));
+            }
+        }
+        Err(TemperError::PreconditionFailed(
+            temper_core::types::precondition::PreconditionFailure { failed },
+        ))
     }
 
     /// The notice an uncompilable shape in force owes this committer
@@ -2954,9 +3032,27 @@ impl Backend for DbBackend {
             .await?;
         // A precondition's own shape is refused next, before anything is read: every rule in
         // `refuse_malformed` is a function of the request alone.
+        //
+        // The body condition is `expect.body` and the `If-Match` header together, parsed here: a
+        // `*`, an unparseable header, or a header that disagrees with `expect.body` is a `400`
+        // that reads no state. Whether it holds is judged only under the lock, after the read
+        // gate, so a caller who cannot read the resource never learns it from a `412`.
+        let meta_expect = cmd
+            .expect
+            .as_ref()
+            .map(|e| e.meta())
+            .filter(|m| !m.is_empty());
         if let Some(expect) = cmd.expect.as_ref() {
-            precondition::refuse_malformed(expect, cmd.open_meta_add.as_ref())?;
+            if expect.is_empty() || meta_expect.is_some() {
+                precondition::refuse_malformed(&expect.meta(), cmd.open_meta_add.as_ref())?;
+            }
         }
+        let body_condition = temper_core::types::precondition::body_condition(
+            cmd.expect.as_ref().and_then(|e| e.body.as_deref()),
+            cmd.if_match.as_deref(),
+        )
+        .map_err(TemperError::BadRequest)?;
+        let conditional = cmd.expect.is_some() || body_condition.is_some();
         // F-2, re-home arm. The gate above authorizes the resource being MOVED; it says nothing about
         // where it is moved TO. A context-move destination arrives resolved through the surfaces'
         // READ-gated `resolve_context_ref`, so without this a caller who may modify R and may merely
@@ -3126,7 +3222,7 @@ impl Backend for DbBackend {
         // modify a resource it cannot read) gets GET's 404 here and takes no lock, so no
         // expectation is ever judged for it. The `open_meta_add` union and the managed `current`
         // above were read before the transaction; neither is what the precondition is judged on.
-        if cmd.expect.is_some() {
+        if conditional {
             precondition::refuse_without_a_write(
                 !properties.is_empty()
                     || !open_unsets.is_empty()
@@ -3139,6 +3235,26 @@ impl Backend for DbBackend {
                 .await
                 .map_err(map_readback_err)?;
         }
+
+        // A retried body save that already landed may be answered `200` without writing, but only
+        // when the request is the body and nothing else: a whole-body save (no block addressed,
+        // no sources) with no property, unset, title, move or goal. Anything else it carried would
+        // be silently dropped by a no-op answer, so such a request is refused `412` instead.
+        let retried_save = cmd
+            .body
+            .as_ref()
+            .filter(|b| {
+                b.content_block.is_none()
+                    && b.sources.is_empty()
+                    && !b.content.is_empty()
+                    && properties.is_empty()
+                    && open_unsets.is_empty()
+                    && title.is_none()
+                    && rehome_to.is_none()
+                    && cmd.goal.is_none()
+                    && cmd.open_meta_add.is_none()
+            })
+            .map(|b| b.content.clone());
 
         // ActContext → EventContext: every sub-event of the update fan-out is correlated + authored.
         let act_ctx = act_context(&cmd.act);
@@ -3188,14 +3304,35 @@ impl Backend for DbBackend {
                 return Err(write_floor::rollback_with(tx, refusal).await);
             }
         }
-        if let Some(expect) = cmd.expect.as_ref() {
-            if let Err(refusal) = self
-                .judge_meta_precondition(&mut tx, ResourceId::from(new_id), expect)
-                .await
-            {
-                return Err(write_floor::rollback_with(tx, refusal).await);
+        // The precondition, under R's writer lock (see `judge_precondition`). The body is already
+        // prepared above, so a save refused here has still paid for its chunking and any inline
+        // embed: the guard can be judged only under the lock, and the embed must not be.
+        if conditional {
+            let judged = self
+                .judge_precondition(
+                    &mut tx,
+                    ResourceId::from(new_id),
+                    meta_expect.as_ref(),
+                    body_condition.as_ref(),
+                    retried_save.as_deref(),
+                )
+                .await;
+            match judged {
+                Ok(None) => {}
+                Ok(Some(token)) => {
+                    // A retried save that already landed: nothing is written, and nothing after
+                    // the write (clocks, reconcile, standing, embed) runs.
+                    write_floor::rollback_with(tx, ()).await;
+                    let mut view =
+                        native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id))
+                            .await?;
+                    view.body_token = Some(token);
+                    return Ok(CommandOutput::new(view));
+                }
+                Err(refusal) => return Err(write_floor::rollback_with(tx, refusal).await),
             }
         }
+        let wrote_body = params.body.is_some();
         writes::update_resource_in_tx_prepared(&mut tx, params, prepared, act_ctx.clone())
             .await
             .map_err(write_err)?;
@@ -3266,6 +3403,19 @@ impl Backend for DbBackend {
         if let Err(refusal) = goal_patched {
             return Err(write_floor::rollback_with(tx, refusal).await);
         }
+        // The answer's body token, for a request that wrote the body: the whole readable body
+        // this transaction leaves, read through the one assembler on the transaction itself, so
+        // it describes exactly this write's bytes (a per-block write included) and never a later
+        // writer's. A pool read here could not see the uncommitted write; a read after the commit
+        // could see the next one. A meta-only update pays nothing and answers no token.
+        let body_token = if wrote_body {
+            match readback::body_on(&mut tx, ResourceId::from(new_id)).await {
+                Ok(read) => Some(temper_core::body_token(&read.content)),
+                Err(e) => return Err(write_floor::rollback_with(tx, map_readback_err(e)).await),
+            }
+        } else {
+            None
+        };
         tx.commit().await.map_err(tx_err)?;
 
         if defer {
@@ -3326,8 +3476,10 @@ impl Backend for DbBackend {
         // the finding itself, so it always fires on a resource update.
         self.tick_resource_standing(ResourceId::from(new_id)).await;
 
-        let view =
+        let mut view =
             native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
+        // Only ever the in-transaction token above; the post-commit read never fills it.
+        view.body_token = body_token;
         Ok(CommandOutput::new(view))
     }
 

@@ -428,6 +428,7 @@ lib/temper/generated/models/resource_erasure_plan.rb
 lib/temper/generated/models/resource_erasure_refusal_reason.rb
 lib/temper/generated/models/resource_erasure_survey.rb
 lib/temper/generated/models/resource_erasure_survey_request.rb
+lib/temper/generated/models/resource_expect.rb
 lib/temper/generated/models/resource_facet_row.rb
 lib/temper/generated/models/resource_facets.rb
 lib/temper/generated/models/resource_facets_response.rb

@@ -12014,6 +12014,18 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "A synonym for `expect.body`: the quoted `body_token` the save expects to replace (a list matches on any member). Guards the body only.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "requestBody": {
@@ -12038,7 +12050,7 @@
             }
           },
           "400": {
-            "description": "Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, or a malformed `expect`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED)",
+            "description": "Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, a malformed `expect`, an `If-Match` that is `*`, unparseable or disagreeing with `expect.body`, a malformed `expect.body`, or, for a caller who reads the resource, a weak `If-Match` tag naming its current body, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED: `If-None-Match`, `If-Unmodified-Since`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12068,7 +12080,7 @@
             }
           },
           "404": {
-            "description": "Not found",
+            "description": "Not found; also the answer to a caller who cannot read the resource for any well-formed `expect` or `If-Match`, matching or not. A malformed one (`If-Match: *`, unparseable, disagreeing with `expect.body`, or a malformed `expect.body`) is the 400 above, decided from the request alone",
             "content": {
               "application/json": {
                 "schema": {
@@ -12088,7 +12100,7 @@
             }
           },
           "412": {
-            "description": "An `expect` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed key with its current value",
+            "description": "An `expect` or `If-Match` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed expectation with what is there now (a `body` entry's `current` is the current body's token)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12995,7 +13007,15 @@
         ],
         "responses": {
           "200": {
-            "description": "The body as markdown. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`.",
+            "description": "The body as markdown, and its `body_token`. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`. Answers `Cache-Control: private`. An `If-None-Match` is ignored; this read never answers `304`.",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The `body_token` of `markdown`, quoted: a strong entity-tag"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -20253,17 +20273,24 @@
       },
       "ContentResponse": {
         "type": "object",
-        "description": "Response body for resource content.",
+        "description": "Response body for `GET /api/resources/{id}/content`: the readable body, and its token.\n\n**Every field is determined by `markdown` and the URL**, so the `ETag` this read answers (the\nquoted `body_token`) validates the whole representation. Nothing else may be added here: a\nfield that varies independently of the bytes (meta, an ingest state, a timestamp) would make\nthat strong tag wrong. The meta tiers are `GET /api/resources/{id}/meta`.",
         "required": [
           "resource_id",
           "markdown"
         ],
         "properties": {
+          "body_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The body token of exactly `markdown` ([`crate::body_token`]): send it as `expect.body` (or\n`If-Match`) on `PATCH /api/resources/{id}` to save over these bytes only. Absent from a\nserver that predates it."
+          },
           "managed_meta": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ManagedMeta",
-                "description": "Typed server-side managed_meta from kb_resource_manifests — the closed\nProperty vocabulary. Only the named `temper-*` keys are represented;\nthere is no catch-all. Used by CLI sync pull to reconstruct complete\nfrontmatter (identity/type/home come from the resource row, not here)."
+                "description": "**Never set by the server**, which answers this read with the body alone (see above). Kept\nfor clients that build a `ContentResponse` locally to carry frontmatter beside a body."
               },
               {
                 "type": "null"
@@ -20275,7 +20302,7 @@
             "description": "The body. For a `verbatim` resource ([`BodyStorage::Verbatim`]) these are the stored bytes\nunchanged; for a `derived` one, a reconstruction from chunks."
           },
           "open_meta": {
-            "description": "Server-side open_meta from kb_resource_manifests. Intentionally\nuntyped — open_meta is the free-form tier. Typed extraction of\nrelationship fields lives in `ResourceRelationships` (see\n`types::graph`), which parses this value on demand and ignores\nanything it doesn't recognize."
+            "description": "**Never set by the server**, for the same reason as `managed_meta`. Intentionally untyped\nwhere a client sets it: open_meta is the free-form tier."
           },
           "resource_id": {
             "$ref": "#/components/schemas/ResourceId"
@@ -22049,17 +22076,17 @@
         ],
         "properties": {
           "current": {
-            "description": "What is there now (`null`: absent)."
+            "description": "What is there now (`null`: absent). On a `body` entry, the current body's token."
           },
           "expected": {
-            "description": "What the caller expected, as it sent it (`null`: absent)."
+            "description": "What the caller expected, as it sent it (`null`: absent). On a `body` entry, the token\nsent, or every token of an `If-Match` list in the order sent."
           },
           "key": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The key the expectation named. Present on every `open` and `managed` entry."
+            "description": "The key the expectation named. Present on every `open` and `managed` entry; never on a\n`body` entry."
           },
           "tier": {
             "$ref": "#/components/schemas/PreconditionTier"
@@ -24631,7 +24658,8 @@
         "description": "Which tier a failed expectation named.",
         "enum": [
           "open",
-          "managed"
+          "managed",
+          "body"
         ]
       },
       "Profile": {
@@ -27617,6 +27645,28 @@
           }
         }
       },
+      "ResourceExpect": {
+        "type": "object",
+        "description": "What a `PATCH /api/resources/{id}` expects to find: the meta tiers of [`MetaExpect`], plus\nthe body.\n\n- **`open` and `managed`** follow every rule of [`MetaExpect`].\n- **`body`** is a body token, exactly as a read answered it (`body_token` on\n  `GET /api/resources/{id}/content`, on `?sections=body`, or on an earlier `PATCH` that wrote\n  the body). The write lands only if the resource's readable body is still exactly those bytes.\n  It guards the body only; a title change on the same request is not guarded by it.\n- **A retried body save that already landed is answered `200`.** When the body expectation\n  fails but the request is a whole-body save carrying nothing but `content` and its bytes\n  already equal the current body, nothing is written and the answer is the current resource\n  and its current token. Any other request whose body expectation fails is a `412`.\n\n`body` exists only here: `PUT /meta`'s [`MetaExpect`] has no such member, so a meta write\ncarrying one is refused (`422`). `If-Match` on `PATCH` is the same guard as `body`; sending\nboth is refused (`400`) unless the header is the one strong tag `body` names.",
+        "properties": {
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The body token of the readable body this write expects to replace."
+          },
+          "managed": {
+            "type": "object",
+            "description": "Managed-tier keys and the value each is expected to hold now (`null`: absent)."
+          },
+          "open": {
+            "type": "object",
+            "description": "Open-tier keys and the value each is expected to hold now (`null`: absent)."
+          }
+        },
+        "additionalProperties": false
+      },
       "ResourceFacetRow": {
         "type": "object",
         "description": "One facet row owned by a **resource**, as read back by `GET /api/resources/{id}/facets`.\n\n**Deliberately not [`EdgeFacetRow`], and not an alias of it.** The two look alike and are not\ninterchangeable: the gates differ (`resources_visible_to` vs `edges_visible_to`), an edge's facets\nfold *with the edge* while a resource's do not, and a resource's `kb_properties` rows are shared\nwith the frontmatter tiers where an edge's are not. Two types that must be able to diverge beat\none type that makes divergence a breaking change.\n\n**Why this carries `created` where [`EdgeFacetRow`] does not.** `facet_set` appends rather than\nupserts, so one logical facet asserted twice leaves two live rows (task\n`019f6d08-2b55-7ee0-b9ac-1959cf4d736b`; 30 resources in production carry 2 or 3). The whole point\nof this read is that a caller can tell that case from a genuinely multi-valued facet, and a\ntimestamp per row is what makes the supersession legible without the read taking a position on\nhow supersession *should* work — a fork this read deliberately does not settle.\n\n**`property_key` rides on the row even though the read is scoped to `\"facet\"`.** It costs one\nfield now and makes widening the read to another property key additive later, rather than a wire\nbreak. The read is scoped rather than general because a resource's other property rows *are* its\nfrontmatter — `get_meta` already serves them — so returning them all would be a second,\ndivergent copy of an existing surface.",
@@ -28057,8 +28107,8 @@
               "expect": {
                 "oneOf": [
                   {
-                    "$ref": "#/components/schemas/MetaExpect",
-                    "description": "What this update expects the resource's meta to hold now, per key (`null`: absent). If any\nexpectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED`\nwith each failed key and its current value. Judged under the resource's writer lock, in\nthe update's own transaction. Absent: the update is unconditional, exactly as before. See\n[`MetaExpect`](crate::types::precondition::MetaExpect) for the rules.\n\n`ts(skip)`-ped like `sources` and `content_block`: a conditional write is a CLI/agent path\nthe SvelteKit UI does not send."
+                    "$ref": "#/components/schemas/ResourceExpect",
+                    "description": "What this update expects the resource to hold now: meta values per key (`null`: absent),\nand the body's token. If any expectation does not hold, nothing is written and the answer\nis `412 PRECONDITION_FAILED` with each failed expectation and what is there now. Judged\nunder the resource's writer lock, in the update's own transaction. Absent: the update is\nunconditional, exactly as before. See\n[`ResourceExpect`](crate::types::precondition::ResourceExpect) for the rules.\n\n`ts(skip)`-ped like `sources` and `content_block`: a conditional write is a CLI/agent path\nthe SvelteKit UI does not send."
                   },
                   {
                     "type": "null"
@@ -28149,6 +28199,13 @@
                 "type": "null"
               }
             ]
+          },
+          "body_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The body token of exactly [`Self::content`] ([`crate::body_token`]), computed over the\nbytes this same read returned: send it as `expect.body` on `PATCH /api/resources/{id}` to\nsave over those bytes only.\n\nPresent beside `content` on a single-resource read that asked for the `body` section, and\non the answer of a `PATCH` that wrote the body, where it is computed inside the write's\nown transaction and describes the whole readable body that write left (a per-block write\nincluded). Absent everywhere else: list and search rows carry `content` without a token,\nso a body read from a list cannot guard a save. Absent from a server that predates it.\n\nOn a write's answer, only this field is the write's own: the rest of the view is read after\nthe commit, so `body_hash`, `bytes_merkle` and `updated` can already describe a later\nwrite. Guard the next save with this token, never with a hash."
           },
           "byte_blocks": {
             "type": [

@@ -706,6 +706,9 @@ async fn fill_sections(
             let read = readback::body_with_byte_identity(pool, profile_id, view.id)
                 .await
                 .map_err(|e| ApiError::from(map_readback_err(e)))?;
+            // The token of exactly the bytes served beside it. This arm runs for a single-resource
+            // read only (the list door refuses `body`), so no list row carries a token.
+            view.body_token = Some(temper_core::body_token(&read.content));
             view.content = Some(read.content);
             view.bytes_merkle = read.bytes_merkle;
             if want_blocks {
@@ -923,7 +926,10 @@ pub async fn get_content_select(
         }
         Err(e) => return Err(ApiError::from(map_readback_err(e))),
     };
+    // The token of exactly these bytes; the meta fields stay unset so that every field of this
+    // response is a function of `markdown` and the URL, which the `ETag` beside it relies on.
     Ok(ContentResponse {
+        body_token: Some(temper_core::body_token(&markdown)),
         resource_id,
         markdown,
         managed_meta: None,

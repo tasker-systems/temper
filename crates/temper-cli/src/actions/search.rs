@@ -294,6 +294,7 @@ mod tests {
 
         let epoch = DateTime::<Utc>::from_timestamp(0, 0).expect("epoch");
         ResourceView {
+            body_token: None,
             id: ResourceId::from(uuid::Uuid::nil()),
             r#ref: String::new(),
             title: "Some Title".to_string(),

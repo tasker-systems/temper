@@ -16,3 +16,6 @@ pub mod redact;
 pub mod refs;
 pub mod types;
 pub mod validation;
+
+/// The body token encoder, at the crate root: the one place a body token is computed.
+pub use types::precondition::body_token;

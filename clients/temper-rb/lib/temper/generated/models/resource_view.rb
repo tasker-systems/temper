@@ -22,6 +22,9 @@ module Temper::Generated
     # Do the bytes read back exactly, or only approximately? `Option` purely for version skew, as with `ingest_state`.
     attr_accessor :body_storage
 
+    # The body token of exactly [`Self::content`] ([`crate::body_token`]), computed over the bytes this same read returned: send it as `expect.body` on `PATCH /api/resources/{id}` to save over those bytes only.  Present beside `content` on a single-resource read that asked for the `body` section, and on the answer of a `PATCH` that wrote the body, where it is computed inside the write's own transaction and describes the whole readable body that write left (a per-block write included). Absent everywhere else: list and search rows carry `content` without a token, so a body read from a list cannot guard a save. Absent from a server that predates it.  On a write's answer, only this field is the write's own: the rest of the view is read after the commit, so `body_hash`, `bytes_merkle` and `updated` can already describe a later write. Guard the next save with this token, never with a hash.
+    attr_accessor :body_token
+
     # The body's block boundaries and per-block byte hashes, in `seq` order: what a client needs to check a whole cached body against [`Self::bytes_merkle`]. The `byte-blocks` section.  Absent when the section was not requested, and absent when it was but the body is not wholly verbatim (exactly when `bytes_merkle` is absent): a `derived` body has no stored bytes to cut it by. It is served under the same visibility gate as `content`, and computed in the same statement as `bytes_merkle` (and as `content`, when the body was requested too), so the boundaries always describe the bytes beside them.
     attr_accessor :byte_blocks
 
@@ -126,6 +129,7 @@ module Temper::Generated
       {
         :'body_hash' => :'body_hash',
         :'body_storage' => :'body_storage',
+        :'body_token' => :'body_token',
         :'byte_blocks' => :'byte_blocks',
         :'bytes_merkle' => :'bytes_merkle',
         :'changed_by_me_at' => :'changed_by_me_at',
@@ -172,6 +176,7 @@ module Temper::Generated
       {
         :'body_hash' => :'String',
         :'body_storage' => :'BodyStorage',
+        :'body_token' => :'String',
         :'byte_blocks' => :'Array<ByteBlock>',
         :'bytes_merkle' => :'String',
         :'changed_by_me_at' => :'Time',
@@ -208,6 +213,7 @@ module Temper::Generated
       Set.new([
         :'body_hash',
         :'body_storage',
+        :'body_token',
         :'byte_blocks',
         :'bytes_merkle',
         :'changed_by_me_at',
@@ -249,6 +255,10 @@ module Temper::Generated
 
       if attributes.key?(:'body_storage')
         self.body_storage = attributes[:'body_storage']
+      end
+
+      if attributes.key?(:'body_token')
+        self.body_token = attributes[:'body_token']
       end
 
       if attributes.key?(:'byte_blocks')
@@ -575,6 +585,7 @@ module Temper::Generated
       self.class == o.class &&
           body_hash == o.body_hash &&
           body_storage == o.body_storage &&
+          body_token == o.body_token &&
           byte_blocks == o.byte_blocks &&
           bytes_merkle == o.bytes_merkle &&
           changed_by_me_at == o.changed_by_me_at &&
@@ -614,7 +625,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [body_hash, body_storage, byte_blocks, bytes_merkle, changed_by_me_at, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_ended, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, reach, ref, title, updated].hash
+      [body_hash, body_storage, body_token, byte_blocks, bytes_merkle, changed_by_me_at, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_ended, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, reach, ref, title, updated].hash
     end
 
     # Builds the object from hash

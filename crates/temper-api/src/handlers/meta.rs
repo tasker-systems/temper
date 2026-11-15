@@ -68,7 +68,10 @@ pub async fn update_meta(
 ) -> ApiResult<Json<ResourceView>> {
     let act = payload.act.into_act_context().map_err(ApiError::from)?;
     let cmd = UpdateResource {
-        expect: payload.expect,
+        // `PUT /meta`'s expectation has no `body` member (an unknown member is a `422`), and
+        // this route honours no `If-Match`: the layer refuses it before the handler runs.
+        expect: payload.expect.map(Into::into),
+        if_match: None,
         resource: ResourceId::from(resource_id),
         // Meta-only path is Property-only (Fork 2): identity changes go through
         // the full update path, never the /meta endpoint.

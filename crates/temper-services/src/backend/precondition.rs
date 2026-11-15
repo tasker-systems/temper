@@ -32,8 +32,8 @@ pub(crate) fn refuse_malformed(
 ) -> Result<(), TemperError> {
     if expect.is_empty() {
         return Err(TemperError::BadRequest(
-            "expect names no key; send at least one expectation under `open` or `managed`, or \
-             omit `expect` for an unconditional write"
+            "expect names no key; send at least one expectation under `open` or `managed` (or, \
+             on PATCH, `body`), or omit `expect` for an unconditional write"
                 .into(),
         ));
     }

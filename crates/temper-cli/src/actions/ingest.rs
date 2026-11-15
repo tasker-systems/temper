@@ -1193,6 +1193,7 @@ mod tests {
     fn test_resource_row() -> temper_core::types::resource_view::ResourceView {
         use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
         temper_core::types::resource_view::ResourceView {
+            body_token: None,
             id: ResourceId(uuid::Uuid::nil()),
             r#ref: String::new(),
             title: "Test".to_string(),

@@ -1327,6 +1327,7 @@ mod tests {
     fn row_titled(title: &str, id: Uuid) -> ResourceView {
         use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
         ResourceView {
+            body_token: None,
             id: ResourceId(id),
             r#ref: String::new(),
             title: title.to_string(),
@@ -1365,6 +1366,7 @@ mod tests {
     /// filename tests are about.
     fn body_only(markdown: &str) -> ContentResponse {
         ContentResponse {
+            body_token: None,
             resource_id: temper_core::types::ids::ResourceId(Uuid::nil()),
             markdown: markdown.to_string(),
             managed_meta: None,

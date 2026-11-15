@@ -2225,8 +2225,24 @@ pub struct UpdateParams<'a> {
     pub format: crate::format::OutputFormat,
     /// Per-act correlation + authorship for the update act (from `--invocation`/`--confidence`/…).
     pub act: temper_core::types::ActInput,
-    /// Meta expectations (`--expect`/`--expect-absent`); `None` is an unconditional update.
-    pub expect: Option<temper_core::types::precondition::MetaExpect>,
+    /// Expectations (`--expect`/`--expect-absent`, and `--expect-body`); `None` is an
+    /// unconditional update.
+    pub expect: Option<temper_core::types::precondition::ResourceExpect>,
+}
+
+/// `resource update`'s expectation: the meta flags' and `--expect-body`'s together, as the one
+/// `expect` the wire carries. `None` when neither was given.
+pub fn update_expect(
+    meta: Option<temper_core::types::precondition::MetaExpect>,
+    body: Option<String>,
+) -> Option<temper_core::types::precondition::ResourceExpect> {
+    match (meta, body) {
+        (None, None) => None,
+        (meta, body) => Some(temper_core::types::precondition::ResourceExpect {
+            body,
+            ..meta.map(Into::into).unwrap_or_default()
+        }),
+    }
 }
 
 /// Build a partial `ManagedMeta` from update CLI flags. Returns `None` if no
@@ -2675,6 +2691,8 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     // the wire (type is no longer a managed_meta key).
     let cmd = UpdateResource {
         expect: params.expect.clone(),
+        // The CLI's body guard is `--expect-body`, carried in `expect`; it sends no header.
+        if_match: None,
         resource: id,
         title: params.title.map(String::from),
         // CLI update has no --slug flag; the server derives the slug from an
@@ -3949,6 +3967,7 @@ mod action_result_tests {
         context: &str,
     ) -> ResourceView {
         ResourceView {
+            body_token: None,
             id: ResourceId(uuid::Uuid::nil()),
             r#ref: String::new(),
             title: title.to_string(),
@@ -4344,6 +4363,7 @@ mod resource_list_render_tests {
     #[test]
     fn render_resource_list_json_passes_wire_type_with_internals() {
         let rows: Vec<ResourceView> = vec![ResourceView {
+            body_token: None,
             id: ResourceId(uuid::Uuid::nil()),
             r#ref: String::new(),
             title: "Test Resource".to_string(),
