@@ -353,18 +353,21 @@ async fn every_response_carries_the_baseline_security_headers() {
 async fn a_response_that_sets_its_own_policy_keeps_it() {
     use axum::routing::get;
 
-    let app = temper_services::transport::apply_base_layers(axum::Router::new().route(
-        "/probe",
-        get(|| async {
-            (
-                [(
-                    axum::http::header::CONTENT_SECURITY_POLICY,
-                    "default-src 'none'; style-src 'unsafe-inline'",
-                )],
-                "probe",
-            )
-        }),
-    ));
+    let app = temper_services::transport::apply_base_layers(
+        axum::Router::new().route(
+            "/probe",
+            get(|| async {
+                (
+                    [(
+                        axum::http::header::CONTENT_SECURITY_POLICY,
+                        "default-src 'none'; style-src 'unsafe-inline'",
+                    )],
+                    "probe",
+                )
+            }),
+        ),
+        temper_services::transport::fallback_handler,
+    );
 
     let response = app
         .oneshot(

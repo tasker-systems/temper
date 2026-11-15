@@ -352,8 +352,9 @@ async fn a_permissive_preflight_is_path_independent(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn head_keeps_the_get_headers(pool: PgPool) {
     let app = allowlisted_app(&pool).await;
-    // Not an unmatched path: its 404 body echoes the method, so `HEAD` and `GET` differ by a byte.
-    for path in ["/api/health", "/api/profile"] {
+    // An unmatched path too: to an anonymous caller it is the uniform refusal, not the 404 whose
+    // body echoes the method.
+    for path in ["/api/health", "/api/profile", "/api/no-such"] {
         let get = send(&app, Method::GET, path, &[]).await;
         let head = send(&app, Method::HEAD, path, &[]).await;
         assert_eq!(head.status, get.status, "HEAD {path}");
@@ -1134,18 +1135,14 @@ async fn the_recovering_request_answers_unavailable_on_a_bearer_door(pool: PgPoo
 
 // ---- The signed-body equaliser: a signed request's body is read alike on every path -------------
 
-/// The representative paths that are not public. A public route answers by its own rules, and an
-/// unmatched one is still the 404 fallback until the declared fallback lands, so the unsigned arms
-/// below assert timing on every path and the status only where a gate refuses.
+/// The representative paths that are not public. A public route answers by its own rules, so the
+/// unsigned arms below assert timing on every path and the status on every other one: a gate's
+/// refusal, or the declared fallback's on an unmatched path.
 fn non_public_paths() -> Vec<String> {
     representative_paths()
         .into_iter()
         .filter(|p| p != "/api/health" && p != "/api/auth/slack/callback")
         .collect()
-}
-
-fn is_unmatched(path: &str) -> bool {
-    path.ends_with("/no-such")
 }
 
 /// The three signature headers as raw request lines, valid in shape and not verifying.
@@ -1230,7 +1227,7 @@ async fn signed_requests_wait_alike(pool: PgPool) {
                 format!("POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{lines}\r\n");
             let line = first_status_line(&app, &head, AT_ONCE).await;
             assert!(line.is_some(), "{path} {what}: must answer at once");
-            if non_public_paths().contains(&path) && !is_unmatched(&path) {
+            if non_public_paths().contains(&path) {
                 assert_eq!(
                     line.as_deref(),
                     Some("HTTP/1.1 401 Unauthorized"),

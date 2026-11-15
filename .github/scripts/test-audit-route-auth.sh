@@ -181,13 +181,45 @@ python3 - "$FIX/mod.rs" <<'PYEOF2'
 import sys
 p = sys.argv[1]
 s = open(p).read()
-old = 'serves: Serves::AppOnly, preconditions: Preconditions::Refused },'
+old = 'serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
 row = [l for l in s.splitlines() if 'key: "webhook_intake_routes"' in l][0]
 assert old in row
 s = s.replace(row, row.replace('Preconditions::Refused', 'Preconditions::Exempt'))
 open(p, "w").write(s)
 PYEOF2
 run_test "webhook_intake_routes preconditions flipped to Exempt: fails" "$FIX" 1 \
+    "table row changed"
+
+# A refused group declared public: an unauthenticated caller would be told the group's answers
+# stand, which the review set never granted.
+FIX="${FIXTURE_DIR}/gated_declared_public"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+row = [l for l in s.splitlines() if 'key: "gated_routes"' in l][0]
+assert 'anonymous: Anonymous::Refused' in row
+s = s.replace(row, row.replace('anonymous: Anonymous::Refused', 'anonymous: Anonymous::Public("x")'))
+open(p, "w").write(s)
+PYEOF2
+run_test "gated_routes declared Anonymous::Public: fails" "$FIX" 1 \
+    "table row changed"
+
+# create_app's fallback no longer looks the caller up: an unmatched path would answer an
+# unauthenticated caller 404 again, naming it unmatched.
+FIX="${FIXTURE_DIR}/fallback_changed"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "const FALLBACK: Fallback = Fallback::LookupThenNotFound;"
+assert old in s
+s = s.replace(old, "const FALLBACK: Fallback = Fallback::Refused;")
+open(p, "w").write(s)
+PYEOF2
+run_test "FALLBACK changed: fails" "$FIX" 1 \
     "table row changed"
 
 # The BrokerAttested arm losing its gate serves the intake unattested.
@@ -792,7 +824,7 @@ python3 - "$FIX/mod.rs" <<'PYEOF'
 import sys
 p = sys.argv[1]
 s = open(p).read()
-marker = "    apply_transport_layers(app, state)\n}\n\n/// The internal/system-only app"
+marker = "    apply_transport_layers(app, state, FALLBACK)\n}\n\n/// The internal/system-only app"
 assert marker in s
 s = s.replace(marker, "    let app = app.layer(from_fn(preconditions::refuse_unhonoured_preconditions));\n" + marker, 1)
 open(p, "w").write(s)

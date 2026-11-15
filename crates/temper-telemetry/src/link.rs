@@ -18,7 +18,7 @@
 //! - **The trust event is the token verifying, not the profile resolving.** temper-api's
 //!   `require_auth` continues past `decode` into `authenticate_token`, which can still refuse a
 //!   deactivated profile; temper-mcp splits those steps across two files. Anchoring on verification
-//!   makes the rule one sentence at all four gates instead of four slightly different sentences, and
+//!   makes the rule one sentence at every gate instead of slightly different sentences per gate, and
 //!   a 401 that is still joined to the caller's trace is *more* debuggable, which is the same
 //!   argument rule 4 makes for keeping extraction on unauthenticated surfaces.
 //! - **Machine principals and humans are treated alike.** A `client_credentials` token from a

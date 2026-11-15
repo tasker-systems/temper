@@ -16,6 +16,7 @@ mod admin;
 mod auth_only;
 mod blob_doors;
 mod embed_internal;
+mod fallback;
 mod gated;
 mod internal;
 mod public;
@@ -110,6 +111,51 @@ enum Preconditions {
     Exempt(&'static str),
 }
 
+/// What an unauthenticated caller may learn from a group. A required field of every row, declared
+/// and never inferred from the tier, so a group cannot become public by omission: the choice is made
+/// at the row, in review, and `tests::anonymous_*` hold it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Anonymous {
+    /// Every answer to an unauthenticated caller is the uniform refusal, an unmounted method
+    /// included.
+    Refused,
+    /// A designated public route: its own answers stand, 200 and 405 with `Allow` included. The
+    /// reason is the review record; the audit script asserts it textually.
+    Public(&'static str),
+}
+
+/// Swagger UI and its spec, mounted only when the operator sets `ENABLE_SWAGGER`, under this prefix
+/// and nowhere else. Public when mounted. A constant beside the table rather than a row, so
+/// [`route_table`] stays free of configuration.
+const SWAGGER: (&str, Anonymous) = (
+    "/api-docs/",
+    Anonymous::Public("operator-enabled API reference"),
+);
+
+/// How an unmatched path answers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fallback {
+    /// Verify the bearer and resolve the profile lookup-only; the uniform refusal without a validly
+    /// signed bearer, and with one the answer a gated route gives that token when it is a refusal
+    /// about the credential, otherwise the 404 (`fallback::lookup_then_not_found`).
+    LookupThenNotFound,
+    /// The uniform refusal, whoever asks (`fallback::refused_prefix`).
+    Refused,
+}
+
+/// [`create_app`]'s fallback. Declared here, beside the table, never inferred.
+const FALLBACK: Fallback = Fallback::LookupThenNotFound;
+
+/// [`create_internal_app`]'s fallback. It serves no bearer route, so there is nothing a bearer could
+/// reach.
+const INTERNAL_FALLBACK: Fallback = Fallback::Refused;
+
+/// Unmatched paths under these prefixes are refused unconditionally on [`create_app`] too. The point
+/// is a uniform answer, not hidden names: the doors are public in `temper_core::internal_sig::DOORS`.
+/// It is also defence in depth for a door added later, covered before its row is written.
+/// `tests::anonymous_refused_prefixes_cover_the_doors_both_ways` keeps it and the doors one set.
+const REFUSED_PREFIXES: &[&str] = &["/internal/"];
+
 /// A group's route declarations. Documented groups ride `OpenApiRouter` and contribute
 /// to the published contract; undocumented groups are plain axum routers and never
 /// enter the spec.
@@ -144,6 +190,10 @@ struct Group {
     body_limit: Option<BodyLimit>,
     serves: Serves,
     preconditions: Preconditions,
+    /// Read by the table tests and asserted textually by the audit script; the outer service and
+    /// the gates enforce it, so nothing at runtime branches on it.
+    #[allow(dead_code)]
+    anonymous: Anonymous,
 }
 
 /// The table. One row per group; the ordering below is the merge order in
@@ -159,15 +209,15 @@ fn route_table() -> Vec<Group> {
     use GroupRoutes::*;
     vec![
         // By-design public: a health check discloses nothing and authenticates nobody.
-        Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("by-design public: mounts no write method, so its own 405 is its answer") },
+        Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("by-design public: mounts no write method, so its own 405 is its answer"), anonymous: Anonymous::Public("liveness probe: published, unauthenticated by design") },
         // Self-service: authenticated, but no system-access gate — a caller managing
         // their own instance is a library caller, not an operator. A person's acts only: the
         // tier refuses a machine before any handler runs.
-        Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },
+        Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
         // The one self-service read a machine keeps: its own profile and entitlements (how an
         // agent learns whether it is approved). Its own group so the machine-admitting AuthOnly
         // tier carries exactly this handler; `/api/profile`'s PATCH sits in `auth_only_routes`.
-        Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },
+        Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
         // Default-deny for all data routes. Addition order (INNER → OUTER, so execution
         // runs outermost-first): require_system_access, require_auth, relay_trust,
         // DefaultBodyLimit. Relay-trust runs BEFORE the auth layers — it rejects nothing
@@ -178,42 +228,42 @@ fn route_table() -> Vec<Group> {
         // The inherited 25 MB ceiling is the OUTER layer so the doors that chose their
         // own limits (the blob rows below, `/api/query` inside the group) stay inner
         // and win on their routes — the network door's ruling 3, design §D4.
-        Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },
+        Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
         // The system-admin surface: the gated stack with the machine refusal, its own row so
         // the operator surface is one auditable set. The tier admits any approved person; the
         // gate that makes these routes admin-only is the `&SystemAdmin` proof each service
         // requires, minted in the handler before dispatch (see `admin.rs` for the membership
         // rule). A machine is refused at the tier, before any lookup.
-        Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },
+        Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
         // The two blob doors, at the gated tier with their own body limits INNER to the
         // tier stack so the decisions they chose win on their routes. The commit door's
         // bound is the config's D7 threshold plus multipart overhead — the transport
         // never fires first over a body the handler would legally accept.
-        Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly, preconditions: Preconditions::Refused },
+        Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
         // The segment door's bound is the platform ceiling the plan numbers pin
         // (4.5 MB), not the config — the staging ceiling is enforced with its own
         // vocabulary in the service.
-        Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused },
+        Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
         // The shape declare POSTs, at the gated tier with their own body limit INNER to the tier
         // stack, so a schema-sized 512 KiB wins over the inherited 25 MiB on these two routes.
         // They share their paths with the list GETs in `gated_routes`; the routers merge by method.
-        Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused },
+        Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
         // The three internal HMAC groups — one scheme, three secrets, three routers.
         // Signature gates mount in BOTH builders; losing one mount is not a downgrade
         // to authenticated-but-broad, it is the group served ungated on that surface.
         // The rate-limit layer rides the RECONCILE pair only (the base wiring applied
         // it there and nowhere else) and sits INNER to the signature so an unsigned
         // caller gets the 401 and never spends the signed caller's budget.
-        Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused },
-        Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused },
-        Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused },
+        Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
+        Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
+        Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
         // The IdP's PKCE redirect target — carries no bearer and no signature by
         // design; its authentication is the code exchange plus the burned state nonce.
-        Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("the IdP PKCE redirect target: GET only, and the IdP sends no precondition") },
+        Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("the IdP PKCE redirect target: GET only, and the IdP sends no precondition"), anonymous: Anonymous::Public("IdP redirect target: a browser arrives unauthenticated; the URL is registered with Slack") },
         // Vercel crons — the CronSecret tier pins the host and checks EMBED_DISPATCH_SECRET as a
         // layer over the group, fail-closed when unset. Served by both builders so the internal
         // function keeps its longer maxDuration for the same paths.
-        Group { key: "embed_internal_routes", tier: Tier::CronSecret, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition") },
+        Group { key: "embed_internal_routes", tier: Tier::CronSecret, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition"), anonymous: Anonymous::Refused },
         // Vercel Connect's webhook intake — the BrokerAttested tier verifies the broker's RS256
         // attestation (a third party's signature against a remote JWKS, not a shared secret)
         // from its headers, as a layer, before the body is read. create_app only: Connect
@@ -221,7 +271,7 @@ fn route_table() -> Vec<Group> {
         // body_limit is None because the door sets its own 25 MiB
         // (GITHUB_MAX_WEBHOOK_BYTES) INSIDE the group fn — the table column is not the
         // whole truth for this one door; the limit is not config-derivable at the table.
-        Group { key: "webhook_intake_routes", tier: Tier::BrokerAttested, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },
+        Group { key: "webhook_intake_routes", tier: Tier::BrokerAttested, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
     ]
 }
 
@@ -378,8 +428,9 @@ pub fn create_app(state: AppState) -> Router {
         // a looser policy is acceptable here and would not be as a shared default.
         const SWAGGER_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'              'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;              frame-ancestors 'none'; base-uri 'none'";
 
-        let swagger: Router<AppState> = SwaggerUi::new("/api-docs/ui")
-            .url("/api-docs/openapi.json", openapi_spec())
+        // Both paths are built from the declared prefix, so the explorer cannot mount outside it.
+        let swagger: Router<AppState> = SwaggerUi::new(format!("{}ui", SWAGGER.0))
+            .url(format!("{}openapi.json", SWAGGER.0), openapi_spec())
             .into();
         app = app.merge(
             temper_services::transport::override_content_security_policy(
@@ -389,7 +440,7 @@ pub fn create_app(state: AppState) -> Router {
         );
     }
 
-    apply_transport_layers(app, state)
+    apply_transport_layers(app, state, FALLBACK)
 }
 
 /// The internal/system-only app — the groups the table marks `Serves::BothBuilders`
@@ -415,14 +466,14 @@ pub fn create_internal_app(state: AppState) -> Router {
         }
     }
 
-    apply_transport_layers(app, state)
+    apply_transport_layers(app, state, INTERNAL_FALLBACK)
 }
 
 /// Apply the shared transport-layer stack (fallback, request decompression, HTTP
 /// tracing), bind `state`, and wrap the result in the service outside routing (CORS, the
 /// request id, the `Allow` rule: `anonymous_surface`). Shared by [`create_app`] and
 /// [`create_internal_app`] so both surfaces observe, trace and answer requests identically.
-fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
+fn apply_transport_layers(app: Router<AppState>, state: AppState, fallback: Fallback) -> Router {
     let cors = temper_services::cors::CorsPolicy::new(&state.config.cors_origins);
 
     // No precondition layer here: it runs inside each group's tier stack (`mount_group`), after
@@ -432,7 +483,15 @@ fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
     // OUTSIDE routing (`anonymous_surface`), because a `Router::layer` runs inside axum's `Allow`
     // stamp and a CORS layer here answers every `OPTIONS` 200 with the path's methods.
     let jwks = state.jwks_store.clone();
-    let inner = temper_services::transport::apply_base_layers(app)
+    let app = match fallback {
+        Fallback::LookupThenNotFound => {
+            temper_services::transport::apply_base_layers(app, fallback::lookup_then_not_found)
+        }
+        Fallback::Refused => {
+            temper_services::transport::apply_base_layers(app, fallback::refused_prefix)
+        }
+    };
+    let inner = app
         .layer(axum::middleware::from_fn(root_span))
         .with_state(state);
     crate::anonymous_surface::wrap(inner, cors, jwks)
@@ -743,5 +802,105 @@ mod tests {
                 wrong.header
             );
         }
+    }
+
+    // ---- Anonymous: what an unauthenticated caller may learn, declared per row ----------------
+
+    fn public_keys() -> BTreeSet<&'static str> {
+        route_table()
+            .into_iter()
+            .filter(|g| matches!(g.anonymous, Anonymous::Public(_)))
+            .map(|g| g.key)
+            .collect()
+    }
+
+    // FAILS IF: a group becomes public without this reviewed set changing with it, or a public
+    // row's reason is empty. Swagger is the one public surface outside the table, by ruling.
+    #[test]
+    fn anonymous_public_is_the_reviewed_set() {
+        assert_eq!(
+            public_keys(),
+            BTreeSet::from(["public_routes", "slack_link_public_routes"])
+        );
+        for group in route_table() {
+            if let Anonymous::Public(reason) = group.anonymous {
+                assert!(!reason.trim().is_empty(), "{}: no reason", group.key);
+            }
+        }
+        let Anonymous::Public(reason) = SWAGGER.1 else {
+            panic!("Swagger is public when mounted");
+        };
+        assert!(!reason.trim().is_empty());
+        assert_eq!(SWAGGER.0, "/api-docs/");
+    }
+
+    // FAILS IF: a tier that gates nothing is declared refused (its answers would contradict the
+    // row), or a public row carries a gate (a bearer, signature, cron-secret or attestation route
+    // would be declared public while it refuses).
+    #[test]
+    fn anonymous_public_exactly_on_the_ungated_tiers() {
+        for group in route_table() {
+            let ungated = matches!(group.tier, Tier::Public | Tier::SelfGated);
+            assert_eq!(
+                matches!(group.anonymous, Anonymous::Public(_)),
+                ungated,
+                "{}: tier {:?} is declared {:?}",
+                group.key,
+                group.tier,
+                group.anonymous
+            );
+        }
+    }
+
+    // FAILS IF: an `/internal/` route is mounted without being a signature door, or a door is not
+    // under a refused prefix. The doors are mounted by string literal (`internal.rs`), so drift
+    // between the literals and `DOORS` fails here, in both directions.
+    #[test]
+    fn anonymous_refused_prefixes_cover_the_doors_both_ways() {
+        use temper_core::internal_sig::DOORS;
+        for door in DOORS {
+            assert!(
+                fallback::under_refused_prefix(door),
+                "{door} is not under a refused prefix"
+            );
+        }
+        // Every route file in the directory, read at test time, so a new file cannot be left out.
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/routes");
+        let sources: Vec<String> = std::fs::read_dir(dir)
+            .expect("routes dir")
+            .map(|entry| entry.expect("entry").path())
+            .filter(|path| {
+                path.extension().is_some_and(|e| e == "rs")
+                    && path.file_name().is_some_and(|n| n != "mod.rs")
+            })
+            .map(|path| std::fs::read_to_string(path).expect("route file"))
+            .collect();
+        assert!(sources.len() >= 10, "found {} route files", sources.len());
+        let mounted: BTreeSet<String> = sources
+            .iter()
+            .flat_map(|source| {
+                route_code(source.as_str())
+                    .split('"')
+                    .skip(1)
+                    .step_by(2)
+                    .filter(|literal| fallback::under_refused_prefix(literal))
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let doors: BTreeSet<String> = DOORS.iter().map(|d| d.to_string()).collect();
+        assert_eq!(
+            mounted, doors,
+            "routes mounted under a refused prefix vs DOORS"
+        );
+    }
+
+    // FAILS IF: either builder's fallback stops being declared, or `create_app` stops looking the
+    // caller up first. The answers themselves are held by `tests/declared_fallback_test.rs`.
+    #[test]
+    fn anonymous_the_fallbacks_are_declared() {
+        assert_eq!(FALLBACK, Fallback::LookupThenNotFound);
+        assert_eq!(INTERNAL_FALLBACK, Fallback::Refused);
+        assert_eq!(REFUSED_PREFIXES, &["/internal/"]);
     }
 }

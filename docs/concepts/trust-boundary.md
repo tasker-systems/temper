@@ -113,14 +113,14 @@ is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFU
 
 | status | code | means | caller does | retry |
 |---|---|---|---|---|
-| 401 | `UNAUTHORIZED` | `Unauthorized: authentication required`: the credential was missing, malformed, invalid or expired (signature, issuer, audience, expiry), on every door alike; the answer does not say which | refresh the token, re-check its audience against discovery, and fix the header if it is not a Bearer | once |
+| 401 | `UNAUTHORIZED` | `Unauthorized: authentication required`: no verified credential. It was missing, malformed, invalid or expired (signature, issuer, audience, expiry), a signature or secret was refused, or the path matches no route; on every path alike, and the answer does not say which | refresh the token, re-check its audience against discovery, and fix the header if it is not a Bearer | once |
 | 401 | `UNAUTHORIZED` | `Unauthorized: Authentication service unavailable`: the instance cannot currently verify credentials (its JWKS fetch is failing); every unauthenticated refusal says this while it lasts | back off | yes |
-| 401 | `UNAUTHORIZED` | account deactivated | stop; contact operator | no |
-| 401 | `UNAUTHORIZED` | machine client not registered — message names the exact provision command | hand the `client_id` to an operator | no |
+| 401 | `UNAUTHORIZED` | account deactivated; a validly signed token is required to see this | stop; contact operator | no |
+| 401 | `UNAUTHORIZED` | machine client not registered — message names the exact provision command; a validly signed token is required to see this | hand the `client_id` to an operator | no |
 | 403 | `SYSTEM_ACCESS_REQUIRED` | authentic, no approved standing; `details.refusal.kind` says which | **human:** `request-access`. **machine:** an admin must approve | no |
 | 403 | `FORBIDDEN` | refused, deliberately message-less (no capability disclosure) | obtain the grant out of band | no |
 | 403 | `FORBIDDEN_DETAIL` | refused, message names the capability | obtain it | no |
-| 404 | `NOT_FOUND` | absent or masked (a probe is not an existence oracle) | infer nothing either way | no |
+| 404 | `NOT_FOUND` | absent or masked (a probe is not an existence oracle). An unmatched path answers it only to a caller with a validly signed token; an unauthenticated caller gets the 401 above | infer nothing either way | no |
 | 400 | `PRECONDITION_NOT_HONOURED` | a write carried `If-Match`, `If-None-Match` or `If-Unmodified-Since` on a route that does not evaluate it; nothing was applied. Answered only to a caller the route already admits: an unauthenticated or refused caller gets the answer it gets without the header | resend without the header to write unconditionally | no |
 | 400 | `PLAN_REFUSED` | composition invalid; `details.refusals[]` lists every reason | repair all in one round trip | no |
 | 400, 413, 415, 422 | `UNREADABLE_PLAN` | the body is not a readable composition (malformed JSON, wrong content type, over the door's limit, a wrong type); no `details`, and the message repeats at most 1024 bytes of what failed | fix the body; there is no plan to refuse yet | no |
@@ -140,6 +140,17 @@ whatever was wrong with the credential: the status, the body, the security heade
 headers for the caller's `Origin`, and an `x-request-id` minted for the request. The operator's
 log line for it, `auth error`, carries that request id and the real cause, so a caller who quotes
 the id can be helped without the answer saying anything.
+
+An unmatched path is answered the same way. Without a validly signed bearer it is that refusal.
+With one, it is the 404 `No route matches …`, whether or not the token's identity has a profile,
+unless a gated route would refuse the same token for itself (a deactivated account, an unregistered
+or revoked machine, an email that cannot be resolved), which keeps that answer. Resolving the caller
+never creates a profile; like sign-in, it may refresh an auth link, attach a verified email's link
+to the profile that holds it, or touch a registered machine's last-seen time. Under `/internal/` (however many leading slashes, or the bare
+`/internal`), where no bearer route lives, every unmatched path is the refusal whoever asks. The
+cost of the bearer check on an unmatched path is one token verification and one profile lookup,
+plus the email lookup (and possibly one call to the identity provider's `/userinfo`) when the token
+carries no email claim and no link is cached. Reaching any of it takes a validly signed token.
 
 "Unavailable" is server-wide state, not a per-path answer. Each instance keeps one bearer key
 store. When its keys are stale, every refusal it gives joins one shared refresh of that store,
