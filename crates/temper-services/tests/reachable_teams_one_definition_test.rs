@@ -17,6 +17,10 @@
 //! an ancestor reaches every member beneath it. `team_ancestors` is itself a `WITH RECURSIVE` walk,
 //! run once per direct team.
 //!
+//! Since migration `20261129000010` the authority computes the same set in one walk,
+//! `team_ancestors_of(ARRAY(<effective teams>))`, of which `team_ancestors` is also a wrapper. The
+//! gate below therefore recognises the walk named or inlined (see [`INLINED_WALK`]).
+//!
 //! Measured 2026-08-04 against the live schema, that expression was **hand-copied verbatim into
 //! nine functions** — byte-identical once normalized for whitespace and parameter name, two of them
 //! merely naming the CTE `member_teams` instead of `reachable_teams`. Not drifted. Nine copies in
@@ -164,6 +168,54 @@ const REACH_FORMS: (&str, &str) = ("%profile_effective_teams%", "%kb_team_member
 const ROLE_GATED_REACH: &str = "profile_authoring_teams";
 const ANCESTOR_WALK: &str = "%team_ancestors%";
 
+/// The walk itself, stated once (migration `20261129000010`): `team_ancestors_of(uuid[])`, of which
+/// `team_ancestors` and [`AUTHORITATIVE`] are both wrappers. Excluded from the scan as the
+/// primitive, alongside `team_ancestors`.
+const WALK_PRIMITIVE: &str = "team_ancestors_of";
+
+/// The walk half of the gate is a disjunction, **named or inlined**, for the same reason the reach
+/// half is. Once the up-walk had one home (`team_ancestors_of`), the natural copy of the closure is
+/// that function's recursive body seeded from `kb_team_members`. It names neither
+/// `team_ancestors` nor `team_ancestors_of`, so a gate keyed only to [`ANCESTOR_WALK`] could not
+/// see it. An inlined walk is a `WITH RECURSIVE` over `kb_teams_parents`.
+const INLINED_WALK: (&str, &str) = ("%WITH RECURSIVE%", "%kb_teams_parents%");
+
+/// The one function the inlined-walk half flags that is not a copy: the SAML group-mapping door
+/// walks DOWN the DAG (`tp.child_id` from `tp.parent_id`) to find the teams beneath a mapping, and
+/// counts `kb_team_members` separately, for a confirmation prompt. It never expands a profile's
+/// memberships upward, so it is not reach.
+const DOWNWARD_WALK: &str = "_admin_saml_group_mapping_write";
+
+/// The gate's catalog scan, shared by the witness and by the decoy test so the two cannot drift:
+/// every `public` function that walks the team DAG upward (by name or inlined) over a profile's own
+/// memberships (called or inlined), other than the primitives and the named exclusions above.
+async fn structural_copies(pool: &PgPool) -> sqlx::Result<Vec<String>> {
+    let (calls_pet, inlines_pet) = REACH_FORMS;
+    let (recursive, parents) = INLINED_WALK;
+    sqlx::query_scalar(
+        "SELECT p.proname \
+           FROM pg_proc p \
+           JOIN pg_namespace n ON n.oid = p.pronamespace \
+           CROSS JOIN LATERAL (SELECT pg_get_functiondef(p.oid) AS def) d \
+          WHERE n.nspname = 'public' AND p.prokind = 'f' \
+            AND p.proname NOT IN ($1, 'profile_effective_teams', 'team_ancestors', $2, $3, $4) \
+            AND (d.def LIKE $5 OR (d.def ILIKE $6 AND d.def LIKE $7)) \
+            AND (d.def LIKE $8 OR d.def LIKE $9) \
+          ORDER BY 1",
+    )
+    .bind(AUTHORITATIVE)
+    .bind(WALK_PRIMITIVE)
+    .bind(ROLE_GATED_REACH)
+    .bind(DOWNWARD_WALK)
+    .bind(ANCESTOR_WALK)
+    .bind(recursive)
+    .bind(parents)
+    .bind(calls_pet)
+    .bind(inlines_pet)
+    .fetch_all(pool)
+    .await
+}
+
 // =================================================================================================
 // Tier 1 — the clause-1 witness. Fails against pre-extraction state.
 // =================================================================================================
@@ -186,27 +238,9 @@ const ANCESTOR_WALK: &str = "%team_ancestors%";
 /// does not, one of the two is wrong and the test says so rather than quietly preferring either.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_reachable_teams_expression_has_exactly_one_home(pool: PgPool) -> sqlx::Result<()> {
-    let (calls_pet, inlines_pet) = REACH_FORMS;
-
-    // The gate: alias-blind, and blind to whether `profile_effective_teams` is called or inlined.
-    let copies: Vec<String> = sqlx::query_scalar(
-        "SELECT p.proname \
-           FROM pg_proc p \
-           JOIN pg_namespace n ON n.oid = p.pronamespace \
-           CROSS JOIN LATERAL (SELECT pg_get_functiondef(p.oid) AS def) d \
-          WHERE n.nspname = 'public' AND p.prokind = 'f' \
-            AND p.proname NOT IN ($1, 'profile_effective_teams', 'team_ancestors', $5) \
-            AND d.def LIKE $2 \
-            AND (d.def LIKE $3 OR d.def LIKE $4) \
-          ORDER BY 1",
-    )
-    .bind(AUTHORITATIVE)
-    .bind(ANCESTOR_WALK)
-    .bind(calls_pet)
-    .bind(inlines_pet)
-    .bind(ROLE_GATED_REACH)
-    .fetch_all(&pool)
-    .await?;
+    // The gate: alias-blind, blind to whether `profile_effective_teams` is called or inlined, and
+    // blind to whether the up-walk is named or inlined.
+    let copies = structural_copies(&pool).await?;
 
     assert!(
         copies.is_empty(),
@@ -286,20 +320,22 @@ async fn the_authoritative_relation_exists_and_is_principal_parameterized(
 /// not read this file, with whatever aliases they happen to pick. That claim needs evidence, or it
 /// is just a comment.
 ///
-/// So: plant decoys and assert the gate names them. **Two** decoys, because the gate has been wrong
-/// in two different ways and each correction needs its own standing evidence:
+/// So: plant decoys and assert the gate names them. **Four** decoys, because the gate has been wrong
+/// in three different ways and each correction needs its own standing evidence:
 ///
 /// 1. **Alias-renamed** — shares no alias with the nine originals, so a gate keyed to `e`/`a`
 ///    cannot see it.
 /// 2. **Inlined reach** — inlines `profile_effective_teams`'s body rather than calling it, so a
 ///    gate requiring that *name* cannot see it. Found by adversarial review after the first
 ///    correction shipped, and planted here so the second correction cannot silently regress.
+/// 3. **Seeded primitive** — calls the walk primitive `team_ancestors_of` with a membership array.
+/// 4. **Inlined walk** — restates the up-walk's recursion itself, naming no walk function. The
+///    walk got a single home in `20261129000010`, which made this the natural copy; the walk half
+///    of the gate became a disjunction then.
 ///
 /// Runs in the test's own database, so the decoys die with it.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_gate_catches_a_copy_written_with_different_aliases(pool: PgPool) -> sqlx::Result<()> {
-    let (calls_pet, inlines_pet) = REACH_FORMS;
-
     sqlx::query(
         "CREATE OR REPLACE FUNCTION decoy_tenth_copy(p_profile uuid) \
            RETURNS TABLE(team_id uuid) LANGUAGE sql STABLE AS \
@@ -324,19 +360,37 @@ async fn the_gate_catches_a_copy_written_with_different_aliases(pool: PgPool) ->
     .execute(&pool)
     .await?;
 
-    let structural: Vec<String> = sqlx::query_scalar(
-        "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
-           CROSS JOIN LATERAL (SELECT pg_get_functiondef(p.oid) AS def) d \
-          WHERE n.nspname = 'public' AND p.prokind = 'f' \
-            AND p.proname NOT IN ($1, 'profile_effective_teams', 'team_ancestors') \
-            AND d.def LIKE $2 AND (d.def LIKE $3 OR d.def LIKE $4)",
+    // Decoy 3: the closure seeded through the walk primitive, from memberships. It names
+    // `team_ancestors_of`, never `team_ancestors(`, so it is caught by the named half's substring
+    // only because the primitive's name extends the old one: asserted, not assumed.
+    sqlx::query(
+        "CREATE OR REPLACE FUNCTION decoy_seeded_primitive(p_profile uuid) \
+           RETURNS TABLE(team_id uuid) LANGUAGE sql STABLE AS \
+         $$ SELECT w.team_id \
+              FROM team_ancestors_of(ARRAY(SELECT m.team_id FROM kb_team_members m \
+                                            WHERE m.profile_id = p_profile)) w $$",
     )
-    .bind(AUTHORITATIVE)
-    .bind(ANCESTOR_WALK)
-    .bind(calls_pet)
-    .bind(inlines_pet)
-    .fetch_all(&pool)
+    .execute(&pool)
     .await?;
+
+    // Decoy 4: the walk itself INLINED, seeded from memberships. It names neither walk function,
+    // so only the inlined-walk half ([`INLINED_WALK`]) can see it. This is the copy a single home
+    // for the walk makes natural, and the gate was blind to it until 20261129000010.
+    sqlx::query(
+        "CREATE OR REPLACE FUNCTION decoy_inlined_walk(p_profile uuid) \
+           RETURNS TABLE(team_id uuid) LANGUAGE sql STABLE AS \
+         $$ WITH RECURSIVE climb AS ( \
+                SELECT m.team_id FROM kb_team_members m JOIN kb_teams t ON t.id = m.team_id \
+                 WHERE m.profile_id = p_profile AND t.is_active \
+                UNION \
+                SELECT l.parent_id FROM kb_teams_parents l JOIN climb ON l.child_id = climb.team_id \
+                  JOIN kb_teams k ON k.id = l.parent_id AND k.is_active) \
+            SELECT team_id FROM climb $$",
+    )
+    .execute(&pool)
+    .await?;
+
+    let structural = structural_copies(&pool).await?;
 
     assert!(
         structural.contains(&"decoy_tenth_copy".to_string()),
@@ -348,6 +402,17 @@ async fn the_gate_catches_a_copy_written_with_different_aliases(pool: PgPool) ->
         "the structural gate did NOT catch a copy that INLINES profile_effective_teams — it caught \
          {structural:?}. This is the exact hole adversarial review found on 2026-08-04: a gate that \
          requires the NAME is blind to the body."
+    );
+    assert!(
+        structural.contains(&"decoy_seeded_primitive".to_string()),
+        "the structural gate did NOT catch a copy seeding team_ancestors_of from memberships — it \
+         caught {structural:?}."
+    );
+    assert!(
+        structural.contains(&"decoy_inlined_walk".to_string()),
+        "the structural gate did NOT catch a copy that INLINES the up-walk — it caught \
+         {structural:?}. The walk half must see a WITH RECURSIVE over kb_teams_parents, not only \
+         the walk's name."
     );
 
     // And the half that proves the strengthening was necessary rather than decorative: the
