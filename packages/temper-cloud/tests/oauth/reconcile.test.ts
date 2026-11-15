@@ -8,7 +8,7 @@ import {
   signRequestV2,
   TIMESTAMP_HEADER,
 } from "../../src/oauth/reconcile.js";
-import { classifyInternalCallFailure } from "../../src/oauth/reconcile-health.js";
+import { classifyInternalCallFailure, SubjectRefused } from "../../src/oauth/reconcile-health.js";
 
 const payload = {
   provider: "saml:acme",
@@ -116,6 +116,21 @@ describe("reconcileMemberships", () => {
       (e: unknown) => e,
     );
     expect(classifyInternalCallFailure(err)).toEqual({ cause: "unauthorized", detail: "HTTP 401" });
+  });
+
+  // FAILS IF: a machine-shaped subject is sent to the reconcile door. The API refuses it 401 behind
+  // a valid signature, which on the channel would read as a wrong secret.
+  it("a machine-shaped subject is refused locally and nothing is sent", async () => {
+    vi.stubEnv("INTERNAL_RECONCILE_URL", "https://api.internal/internal/saml/reconcile");
+    vi.stubEnv("INTERNAL_RECONCILE_SECRET", "s3cr3t");
+    const fetchMock = vi.fn(async () => new Response("no", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const err = await reconcileMemberships({ ...payload, external_user_id: "m2m@clients" }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(SubjectRefused);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   // FAILS IF: a deployment behind a path prefix a proxy strips stops reaching the API. The door is
