@@ -113,9 +113,8 @@ is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFU
 
 | status | code | means | caller does | retry |
 |---|---|---|---|---|
-| 401 | `UNAUTHORIZED` | missing or malformed Bearer | fix the header | no |
-| 401 | `UNAUTHORIZED` | invalid or expired token — signature, issuer, audience, expiry | refresh; re-check audience against discovery | once |
-| 401 | `UNAUTHORIZED` | auth service unavailable (JWKS fetch) | back off | yes |
+| 401 | `UNAUTHORIZED` | `Unauthorized: authentication required`: the credential was missing, malformed, invalid or expired (signature, issuer, audience, expiry), on every door alike; the answer does not say which | refresh the token, re-check its audience against discovery, and fix the header if it is not a Bearer | once |
+| 401 | `UNAUTHORIZED` | `Unauthorized: Authentication service unavailable`: the instance cannot currently verify credentials (its JWKS fetch is failing); every unauthenticated refusal says this while it lasts | back off | yes |
 | 401 | `UNAUTHORIZED` | account deactivated | stop; contact operator | no |
 | 401 | `UNAUTHORIZED` | machine client not registered — message names the exact provision command | hand the `client_id` to an operator | no |
 | 403 | `SYSTEM_ACCESS_REQUIRED` | authentic, no approved standing; `details.refusal.kind` says which | **human:** `request-access`. **machine:** an admin must approve | no |
@@ -132,6 +131,37 @@ is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFU
 MCP renders these as JSON-RPC errors with prose — no status, no `code`, no `details`: a
 caller fault the agent can repair (a refused or unreadable plan, a refused search) as `-32602`,
 the terminal auth refusals as `-32600`, everything else as `-32603`. An integrator writing a service targets HTTP; MCP is an agent-runtime target.
+
+### What an unauthenticated caller can learn
+
+Nothing but what the public routes answer. A refusal before identity is established is the same
+bytes on every path, whatever the door (bearer, signature, cron secret, broker attestation) and
+whatever was wrong with the credential: the status, the body, the security headers, the CORS
+headers for the caller's `Origin`, and an `x-request-id` minted for the request. The operator's
+log line for it, `auth error`, carries that request id and the real cause, so a caller who quotes
+the id can be helped without the answer saying anything.
+
+"Unavailable" is server-wide state, not a per-path answer. Each instance keeps one bearer key
+store, and every refusal it gives starts a background refresh of that store when its keys are
+stale, so an instance whose routes never verify a bearer still learns of an outage, and recovers
+without bearer traffic. While the store is failing, a bearer request is refused at once rather
+than waiting on the fetch.
+
+The residues, stated so nobody has to rediscover them:
+
+- **The moment of the change.** The state moves when a refresh completes, and a refresh is started
+  by a request. On a cold instance, and at the moment its keys pass their TTL, the first refusals
+  are answered before any refresh has failed, and a bearer request then waits for the fetch (up
+  to the client's five-second timeout). After the endpoint recovers, an instance answers
+  "unavailable" until its next refusal, past the failed-refresh backoff, refetches.
+- **Each instance on its own.** Instances, including the separate functions of a split deployment,
+  do not share the store. During an outage one may report it while another has not yet tried.
+- **Timing.** The refusal itself never waits on a fetch once the store is failing, but the work
+  before it differs by door (a signature is checked against a body, a bearer against a key), and
+  no attempt is made to equalise that.
+
+Each needs a real outage of the identity provider's key endpoint, which an unauthenticated caller
+cannot cause.
 
 ## The machine-principal sharp edge
 
