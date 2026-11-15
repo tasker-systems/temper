@@ -169,8 +169,8 @@ The residues, stated so nobody has to rediscover them:
   the request: with no origins configured every answer carries `vary: origin`; with an allowlist,
   `vary: origin, access-control-request-headers` and `access-control-expose-headers:
   link,x-request-id`; in permissive mode (`*`), `access-control-allow-origin: *` and
-  `access-control-expose-headers: *`, with no `vary`. These are tower-http's bytes, the same layer
-  the MCP surface runs, so a caller can tell the three configurations apart and nothing more.
+  `access-control-expose-headers: *`, with no `vary`. These are tower-http's bytes, so a caller can
+  tell the three configurations apart and nothing more.
 - **The cost of a signed caller's mistyped path.** A validly signed token on an unmatched path
   costs one token verification and one profile lookup, plus the email lookup (and possibly one call
   to the identity provider's `/userinfo`) when the token carries no email claim and no link is
@@ -238,13 +238,14 @@ The residues, stated so nobody has to rediscover them:
 
 ## The error contract
 
-Every error response carries `{"error":{"code":"…","message":"…","details"?:…}}`. The `code`
+Every error response with a body carries `{"error":{"code":"…","message":"…","details"?:…}}`
+(the 405 and 415 below have none). The `code`
 is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFUSED`.
 
 | status | code | means | caller does | retry |
 |---|---|---|---|---|
 | 401 | `UNAUTHORIZED` | `Unauthorized: authentication required`: no verified credential. It was missing, malformed, invalid or expired (signature, issuer, audience, expiry), a signature or secret was refused, or the path matches no route; on every path alike, and the answer does not say which | refresh the token, re-check its audience against discovery, and fix the header if it is not a Bearer | once |
-| 401 | `UNAUTHORIZED` | `Unauthorized: Authentication service unavailable`: the instance cannot currently verify credentials (its JWKS fetch is failing); server-wide: while it holds, every unauthenticated request gets it, whatever the path | back off | yes |
+| 401 | `UNAUTHORIZED` | `Unauthorized: Authentication service unavailable`: the instance cannot currently verify credentials (its JWKS fetch is failing); server-wide: while it holds, every refusal before identity says this, whatever the path | back off | yes |
 | 401 | `UNAUTHORIZED` | account deactivated; a validly signed token is required to see this | stop; contact operator | no |
 | 401 | `UNAUTHORIZED` | machine client not registered — message names the exact provision command; a validly signed token is required to see this | hand the `client_id` to an operator | no |
 | 403 | `SYSTEM_ACCESS_REQUIRED` | authentic, no approved standing; `details.refusal.kind` says which | **human:** `request-access`. **machine:** an admin must approve | no |

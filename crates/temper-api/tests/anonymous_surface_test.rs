@@ -323,12 +323,32 @@ fn all_paths() -> Vec<String> {
     paths.into_iter().collect()
 }
 
+/// Slack account linking, configured: what turns on the link-state door and the callback's flow.
+fn slack_link_config() -> temper_services::config::SlackLinkConfig {
+    temper_services::config::SlackLinkConfig {
+        client_id: "slack-link-client".to_string(),
+        hmac_secret: "link-secret".to_string(),
+        public_base_url: "https://temper.example".to_string(),
+        vault_key: temper_services::services::grant_crypto::VaultKey::from_base64(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        )
+        .expect("a 32-byte key"),
+        retired_vault_keys: Default::default(),
+    }
+}
+
+/// Every door's secret set, so each door is refused by its gate, not as disabled.
+fn configure_doors(config: &mut temper_services::config::ApiConfig) {
+    config.internal_reconcile_secret = Some("reconcile-secret".to_string());
+    config.slack_mint_secret = Some("mint-secret".to_string());
+    config.embed_dispatch_secret = Some("dispatch-secret".to_string());
+    config.slack_link = Some(slack_link_config());
+}
+
 async fn allowlisted_app(pool: &PgPool) -> common::TestApp {
     common::setup_test_app_with_config(pool.clone(), |config| {
         config.cors_origins = vec![ORIGIN.to_string()];
-        config.internal_reconcile_secret = Some("reconcile-secret".to_string());
-        config.slack_mint_secret = Some("mint-secret".to_string());
-        config.embed_dispatch_secret = Some("dispatch-secret".to_string());
+        configure_doors(config);
     })
     .await
 }
@@ -1317,7 +1337,7 @@ async fn signed_requests_wait_alike(pool: PgPool) {
                 format!("POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{lines}\r\n");
             let line = first_status_line(&app, &head, AT_ONCE).await;
             assert!(line.is_some(), "{path} {what}: must answer at once");
-            if non_public_paths().contains(&path) {
+            if !PUBLIC.contains(&path.as_str()) {
                 assert_eq!(
                     line.as_deref(),
                     Some("HTTP/1.1 401 Unauthorized"),
@@ -1654,7 +1674,7 @@ struct Probe {
     method: Method,
     path: String,
     headers: Headers,
-    body: Option<Vec<u8>>,
+    body: Option<bytes::Bytes>,
 }
 
 impl Probe {
@@ -1669,7 +1689,7 @@ impl Probe {
 
     fn label(&self) -> String {
         let names: Vec<&str> = self.headers.iter().map(|(n, _)| *n).collect();
-        let body = self.body.as_ref().map(Vec::len);
+        let body = self.body.as_ref().map(bytes::Bytes::len);
         format!("{} {} {names:?} body {body:?}", self.method, self.path)
     }
 }
@@ -1747,6 +1767,24 @@ fn assert_refusals_any_method(answers: &[(String, Answer)], expected: &Answer) {
     }
 }
 
+/// Every answer's CORS headers are exactly `expected`: tower-http's bytes for the configuration and
+/// the request's `Origin`, pinned absolutely.
+fn assert_cors(answers: &[(String, Answer)], expected: &[(&str, &str)]) {
+    let expected: BTreeMap<String, String> = expected
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .collect();
+    for (what, answer) in answers {
+        assert_eq!(cors_headers(answer), expected, "{what}");
+    }
+}
+
+/// An allowlist's CORS headers, with no `Origin` or a foreign one.
+const LIST_CORS: [(&str, &str); 2] = [
+    ("access-control-expose-headers", "link,x-request-id"),
+    ("vary", "origin, access-control-request-headers"),
+];
+
 /// Every request id in `answers` is distinct.
 fn assert_request_ids_distinct(answers: &[(String, Answer)]) {
     let mut seen = std::collections::BTreeSet::new();
@@ -1759,14 +1797,32 @@ fn assert_request_ids_distinct(answers: &[(String, Answer)]) {
     }
 }
 
-/// A public route answers for itself: never the refusal.
+/// A public route answers for itself, by its own rules: `GET` and `HEAD` are served (health's JSON,
+/// the callback's HTML page), and every other method is the route's own 405 with `Allow`.
 fn assert_public_answers_for_itself(answers: &[(String, Answer)]) {
     for (what, answer) in answers {
         assert_request_id_format(what, answer);
-        assert_ne!(
-            answer.status, 401,
-            "{what}: a public route answered the refusal: {answer:?}"
-        );
+        let served = what.starts_with("GET ") || what.starts_with("HEAD ");
+        if served {
+            assert_eq!(answer.status, 200, "{what}: {answer:?}");
+            let expected = if what.contains("/api/health") {
+                "application/json"
+            } else {
+                "text/html; charset=utf-8"
+            };
+            assert_eq!(
+                answer.header("content-type"),
+                Some(expected),
+                "{what}: {answer:?}"
+            );
+        } else {
+            assert_eq!(answer.status, 405, "{what}: {answer:?}");
+            assert_eq!(
+                answer.header("allow"),
+                Some("GET,HEAD"),
+                "{what}: {answer:?}"
+            );
+        }
     }
 }
 
@@ -1827,7 +1883,7 @@ const FOUR_METHODS: [Method; 4] = [Method::GET, Method::POST, Method::PUT, Metho
 enum Factor {
     Headers(Headers),
     Query(&'static str),
-    Body(Headers, Vec<u8>),
+    Body(Headers, bytes::Bytes),
 }
 
 impl Factor {
@@ -1915,16 +1971,16 @@ fn sweep_b_extras() -> Vec<(&'static str, Factor)> {
             "a corrupt gzip body",
             Factor::Body(
                 vec![("content-encoding", "gzip".to_string())],
-                b"notgzip".to_vec(),
+                bytes::Bytes::from_static(b"notgzip"),
             ),
         ),
         (
             "a body over 2 MiB",
-            Factor::Body(vec![], vec![b'x'; 2 * 1024 * 1024 + 1]),
+            Factor::Body(vec![], vec![b'x'; 2 * 1024 * 1024 + 1].into()),
         ),
         (
             "a signed 70 KiB body",
-            Factor::Body(bad_signature(), vec![b'x'; 70 * 1024]),
+            Factor::Body(bad_signature(), vec![b'x'; 70 * 1024].into()),
         ),
     ]
 }
@@ -1964,6 +2020,7 @@ async fn sweep_b_one_factor_at_a_time(pool: PgPool) {
             without_framing(&mut answers);
         }
         assert_refusals(&answers, &u401());
+        assert_cors(&answers, &LIST_CORS);
         assert!(
             answers.iter().all(|(_, a)| a.header("allow").is_none()),
             "{name}: Allow rode a refusal"
@@ -1980,10 +2037,11 @@ async fn sweep_b_one_factor_at_a_time(pool: PgPool) {
     }
 
     // `Content-Encoding: foo`: one pinned 415 on every path, mounted or not, never with `Allow`.
-    let (gated, _) = sweep_b_probes(&Factor::Headers(vec![(
+    let (mut gated, public) = sweep_b_probes(&Factor::Headers(vec![(
         "content-encoding",
         "foo".to_string(),
     )]));
+    gated.extend(public);
     let answers = send_all(&app, gated).await;
     assert_refusals(&answers, &unsupported_encoding());
 
@@ -1993,18 +2051,9 @@ async fn sweep_b_one_factor_at_a_time(pool: PgPool) {
     let (gated, public) = sweep_b_probes(&origin);
     let answers = send_all(&app, gated).await;
     assert_refusals(&answers, &u401());
-    for (what, answer) in &answers {
-        assert_eq!(
-            answer.header("access-control-allow-origin"),
-            Some(ORIGIN),
-            "{what}"
-        );
-        assert_eq!(
-            answer.header("access-control-expose-headers"),
-            Some("link,x-request-id"),
-            "{what}"
-        );
-    }
+    let mut readable = LIST_CORS.to_vec();
+    readable.push(("access-control-allow-origin", ORIGIN));
+    assert_cors(&answers, &readable);
     assert_public_answers_for_itself(&send_all(&app, public).await);
 
     // With a preflight's headers: `OPTIONS` is the pinned preflight on every path, public ones
@@ -2034,18 +2083,23 @@ async fn sweep_b_one_factor_at_a_time(pool: PgPool) {
     let (gated, _) = sweep_b_probes(&Factor::Headers(vec![("origin", FOREIGN.to_string())]));
     let answers = send_all(&app, gated).await;
     assert_refusals(&answers, &u401());
-    assert!(answers
-        .iter()
-        .all(|(_, a)| a.header("access-control-allow-origin").is_none()));
+    assert_cors(&answers, &LIST_CORS);
 
     // The CORS configuration: none, and permissive. The refusal's bytes do not move; its CORS
     // headers are one set per configuration, never per path.
-    for origins in [vec![], vec!["*".to_string()]] {
+    for (origins, cors) in [
+        (vec![], &[("vary", "origin")][..]),
+        (
+            vec!["*".to_string()],
+            &[
+                ("access-control-allow-origin", "*"),
+                ("access-control-expose-headers", "*"),
+            ][..],
+        ),
+    ] {
         let other = common::setup_test_app_with_config(pool.clone(), |config| {
             config.cors_origins = origins.clone();
-            config.internal_reconcile_secret = Some("reconcile-secret".to_string());
-            config.slack_mint_secret = Some("mint-secret".to_string());
-            config.embed_dispatch_secret = Some("dispatch-secret".to_string());
+            configure_doors(config);
         })
         .await;
         for factor in [
@@ -2055,6 +2109,7 @@ async fn sweep_b_one_factor_at_a_time(pool: PgPool) {
             let (gated, public) = sweep_b_probes(&factor);
             let answers = send_all(&other, gated).await;
             assert_refusals(&answers, &u401());
+            assert_cors(&answers, cors);
             assert_public_answers_for_itself(&send_all(&other, public).await);
         }
     }
@@ -2070,6 +2125,9 @@ async fn sweep_b_a_failing_key_store_is_unavailable_everywhere(pool: PgPool) {
         state.jwks_store = std::sync::Arc::new(temper_services::state::JwksKeyStore::new(
             "http://127.0.0.1:1/.well-known/jwks.json".to_string(),
         ));
+        let mut config = (*state.config).clone();
+        configure_doors(&mut config);
+        state.config = std::sync::Arc::new(config);
     })
     .await;
     let primed = send(
@@ -2179,16 +2237,7 @@ async fn sweep_c_unsigned_expect_continue_is_uniform(pool: PgPool) {
 async fn the_slack_callback_does_not_say_how_it_is_configured(pool: PgPool) {
     let unconfigured = common::setup_test_app_with_config(pool.clone(), |_| {}).await;
     let configured = common::setup_test_app_with_config(pool.clone(), |config| {
-        config.slack_link = Some(temper_services::config::SlackLinkConfig {
-            client_id: "slack-link-client".to_string(),
-            hmac_secret: "link-secret".to_string(),
-            public_base_url: "https://temper.example".to_string(),
-            vault_key: temper_services::services::grant_crypto::VaultKey::from_base64(
-                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-            )
-            .expect("a 32-byte key"),
-            retired_vault_keys: Default::default(),
-        });
+        config.slack_link = Some(slack_link_config());
     })
     .await;
     let unknown = send(
