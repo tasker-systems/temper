@@ -115,7 +115,21 @@ async fn an_unmatched_path_outside_the_families_is_the_uniform_refusal() {
                     reference_type,
                     "{label}"
                 );
+                // axum stamps `Allow` only on a matched route's method fallback, so this holds by
+                // construction; it pins the property temper-api's refusal has, not this fix.
                 assert!(response.headers().get(header::ALLOW).is_none(), "{label}");
+                for name in [
+                    "x-content-type-options",
+                    "x-frame-options",
+                    "referrer-policy",
+                    "strict-transport-security",
+                    "content-security-policy",
+                ] {
+                    assert!(
+                        response.headers().get(name).is_some(),
+                        "{label}: the refusal carries the security header {name}"
+                    );
+                }
                 assert!(
                     response.headers().get(header::WWW_AUTHENTICATE).is_none(),
                     "{label}: the MCP challenge belongs to /mcp, not to a refused path"
@@ -130,7 +144,8 @@ async fn an_unmatched_path_outside_the_families_is_the_uniform_refusal() {
 /// Inside the discovery and OAuth families an unmatched path keeps the structured 404, including
 /// the probes MCP clients make before falling back to the root metadata.
 ///
-/// Bite: `NOT_FOUND_PREFIXES` emptied (each becomes the 401).
+/// Pinned behaviour (the 404 is what they answered before the change); it bites if
+/// `NOT_FOUND_PREFIXES` is emptied, when each becomes the 401.
 #[tokio::test]
 async fn an_unmatched_path_inside_the_families_keeps_its_404() {
     for uri in [
@@ -170,7 +185,8 @@ async fn the_mcp_door_keeps_its_challenge() {
     }
 }
 
-/// The designated public routes answer for themselves, unchanged.
+/// The designated public routes answer for themselves, unchanged. Pinned rather than a witness of
+/// the fix: they answered the same before it.
 #[tokio::test]
 async fn the_public_routes_answer_for_themselves() {
     for (method, uri) in [

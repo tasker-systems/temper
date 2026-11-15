@@ -171,8 +171,9 @@ macro_rules! root_span {
             // detector — a span field rather than an event so it is exported at no extra volume.
             // Stays empty on the MCP surface, which presents the credential rather than checks it.
             relay_trust = $crate::tracing::field::Empty,
-            // Filled by the MCP edge's JWT check when it refuses: why, from a closed vocabulary
-            // (`expired`, `invalid_audience`, …). Stays empty on success and on the API surface.
+            // Filled by the MCP edge when it refuses: its JWT check, why, from a closed vocabulary
+            // (`expired`, `invalid_audience`, …), and its fallback, `unmatched_path`. Stays empty
+            // on success and on the API surface.
             auth_failure = $crate::tracing::field::Empty,
             // Filled by temper-api from the id its outer service minted for the request (and
             // returned as `x-request-id`): the key an operator joins a caller's report on. Random,

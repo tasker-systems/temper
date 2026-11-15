@@ -205,7 +205,8 @@ pub const NOT_FOUND_PREFIXES: &[&str] = &["/.well-known/", "/oauth/"];
 /// route a bearer could reach there.
 ///
 /// Matching is on bytes, as routing is: `/OAUTH/x` and `/.Well-Known/x` are outside the families
-/// and refused.
+/// and refused. An undecodable `Content-Encoding` never reaches here: decompression answers it the
+/// `415` first, as on temper-api.
 async fn unmatched(request: axum::extract::Request) -> axum::response::Response {
     use axum::response::IntoResponse;
     use temper_services::error::{ApiError, UnauthCause};
@@ -217,10 +218,11 @@ async fn unmatched(request: axum::extract::Request) -> axum::response::Response 
     {
         return temper_services::transport::fallback_handler(request).await;
     }
-    // On the root span, in the closed vocabulary `require_mcp_auth`'s refusals use: this surface
-    // has no outer service to log the refusal's cause.
-    tracing::Span::current().record("auth_failure", "unmatched_path");
-    ApiError::Unauthenticated(UnauthCause::UnmatchedPath).into_response()
+    // On the root span's `auth_failure`, in the refusal's own cause vocabulary: this surface has no
+    // outer service to log the cause, as temper-api's does.
+    let cause = UnauthCause::UnmatchedPath;
+    tracing::Span::current().record("auth_failure", cause.as_str());
+    ApiError::Unauthenticated(cause).into_response()
 }
 
 /// The `mcp_request` root span, and the end of its life.

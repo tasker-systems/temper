@@ -16,8 +16,17 @@ fallback). /mcp keeps its edge 401 with WWW-Authenticate; discovery, /oauth/regi
 Who observes it: a caller of a path no MCP client uses, such as the function's own edge path
 /api/mcp, or a case variant of a door (/MCP, /OAUTH/register) if the platform matches routes
 without regard to case. Those were the MCP 404 and are now the 401 temper-api gives the same
-caller, so an unauthenticated caller can no longer tell them from temper-api's paths. No
-first-party client calls them; the documented MCP URL is /mcp.
+caller, with the same status and body. Some answers still differ (no x-request-id on MCP, its
+CORS exposed headers, every OPTIONS 200 without the security headers, no "unavailable" swap
+while its key store is failing), as docs/concepts/trust-boundary.md declares. An undecodable
+Content-Encoding is the 415 before the fallback, as on the API. No
+first-party client calls them; the documented MCP URL is /mcp. A deployment whose TEMPER_MCP_URL
+still names /api/mcp already got a 404 there; it now gets "authentication required" even with a
+valid bearer, which is a wrong URL, not a bad token.
+
+This supersedes one sentence of unmatched-path-uniform-to-anonymous, which is in this window: its
+"The MCP surface keeps its own 404 for an unmatched path" now holds only under /.well-known/ and
+/oauth/.
 
 Why behavioral: no shape moved; the status and body of one class of answer changed. Review-owned.
 

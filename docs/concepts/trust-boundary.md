@@ -135,14 +135,20 @@ The public routes are:
     the API's, whoever asks. `/mcp` and everything under it but `/mcp/health` keep the gate's
     `401` with `WWW-Authenticate`, which is how an MCP client finds the authorization server.
   - **The MCP function's headers.** It has no service outside routing, so its answers carry no
-    `x-request-id`, and its CORS layer answers every `OPTIONS` itself, `200` on every path alike
+    `x-request-id` (and, for an allowlisted origin, expose only `link`, where the API also
+    exposes `x-request-id`), and its CORS layer answers every `OPTIONS` itself, `200` on every path alike
     (with `Allow` only on its public routes), where the API routes a non-preflight `OPTIONS` to the
-    refusal. While its key store is failing, `/mcp` answers a bearer `503` and its other refusals
-    stay the refusal. These sort the MCP function's paths from the API's; `vercel.json` already says which
+    refusal; its preflight answers carry none of the security headers, which the API's do. While
+    its key store is failing, `/mcp` answers a bearer `503` and its other answers do not change,
+    where the API answers every refusal "unavailable". Like the API, it answers an
+    undecodable `Content-Encoding` the `415` before anything else, and on `/mcp` a body over the
+    door's limit is the `413` before the gate. These sort the MCP function's paths from the API's; `vercel.json` already says which
     paths those are.
   - **Case.** If the platform matches routes without regard to case, a case variant of a door
-    reaches that door's function. Every router here matches bytes, so the variant either reaches a
-    public door or gets the refusal;
+    reaches that door's function. Every router here matches bytes, so the variant gets what its
+    byte-exact spelling would get there: a public door's own answer, the family's `404` (for
+    example `/.well-known/OAUTH-PROTECTED-RESOURCE`), the `/mcp` gate's challenge (`/mcp/HEALTH`),
+    or the refusal;
 - the API reference under `/api-docs/`, only when an operator enables it, so whether it answers
   says whether it is enabled.
 
@@ -189,7 +195,8 @@ The residues, stated so nobody has to rediscover them:
   `vary: origin, access-control-request-headers` and `access-control-expose-headers:
   link,x-request-id`; in permissive mode (`*`), `access-control-allow-origin: *` and
   `access-control-expose-headers: *`, with no `vary`. These are tower-http's bytes, so a caller can
-  tell the three configurations apart and nothing more.
+  tell the three configurations apart and nothing more. (The MCP function's allowlist exposes only
+  `link`; see the MCP function's headers above.)
 - **The cost of a signed caller's mistyped path.** A validly signed token on an unmatched path
   costs one token verification and one profile lookup, plus the email lookup (and possibly one call
   to the identity provider's `/userinfo`) when the token carries no email claim and no link is
