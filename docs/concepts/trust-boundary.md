@@ -182,6 +182,14 @@ The residues, stated so nobody has to rediscover them:
   with a healthy identity provider, so a bearer door can answer one request a minute more slowly
   than a door that verifies no bearer. The refetch is what lets a newly rotated signing key verify
   without waiting out the cache.
+- **A signed request's body is read before routing, on every path.** A request carrying all three
+  `X-Temper-*` signature headers has its body read, up to 64 KiB, before the server decides which
+  door it reached, so a declared body that never arrives waits on every path alike, and
+  `Expect: 100-continue` is answered `100 Continue` on every path alike. Over 64 KiB, or
+  unreadable, it is the refusal on every path, the public routes included. There is no deadline on
+  that read: a caller who never sends the body holds its own connection, as it already could at a
+  signature door. A platform or proxy in front that buffers bodies or answers `Expect` itself
+  changes what the caller sees, the same way on every path.
 - **Timing between doors.** Outside the refresh, the work before a refusal differs by door (a
   signature is checked against its body, a bearer against a key), and no attempt is made to
   equalise that.

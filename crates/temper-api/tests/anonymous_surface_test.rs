@@ -1131,3 +1131,214 @@ async fn the_recovering_request_answers_unavailable_on_a_bearer_door(pool: PgPoo
     .await;
     assert_eq!(without_cors(&next), u401(), "after recovery");
 }
+
+// ---- The signed-body equaliser: a signed request's body is read alike on every path -------------
+
+/// The representative paths that are not public. A public route answers by its own rules, and an
+/// unmatched one is still the 404 fallback until the declared fallback lands, so the unsigned arms
+/// below assert timing on every non-public path and the status only where a gate refuses.
+fn non_public_paths() -> Vec<String> {
+    representative_paths()
+        .into_iter()
+        .filter(|p| p != "/api/health" && p != "/api/auth/slack/callback")
+        .collect()
+}
+
+fn is_unmatched(path: &str) -> bool {
+    path.ends_with("/no-such")
+}
+
+/// The three signature headers as raw request lines, valid in shape and not verifying.
+fn signature_lines() -> String {
+    bad_signature()
+        .into_iter()
+        .map(|(n, v)| format!("{n}: {v}\r\n"))
+        .collect()
+}
+
+// FAILS IF: a signed request's body is read on some paths and not others. A declared body that
+// never arrives would then stall only where a signature gate reads it, which names the doors.
+// Unsigned, nothing reads it before refusing, so every path answers at once.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn signed_requests_wait_alike(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    let bound = std::time::Duration::from_millis(500);
+    for path in non_public_paths() {
+        let signed = format!(
+            "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{}\r\n",
+            signature_lines()
+        );
+        assert_eq!(
+            first_status_line(&app, &signed, bound).await,
+            None,
+            "{path}: a signed request with a declared body must wait for it"
+        );
+        let unsigned = format!("POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n\r\n");
+        let line = first_status_line(&app, &unsigned, bound).await;
+        assert!(
+            line.is_some(),
+            "{path}: an unsigned request must answer at once"
+        );
+        if !is_unmatched(&path) {
+            assert_eq!(
+                line.as_deref(),
+                Some("HTTP/1.1 401 Unauthorized"),
+                "{path}: unsigned"
+            );
+        }
+    }
+}
+
+// FAILS IF: `Expect: 100-continue` on a signed request draws `100 Continue` on some paths and the
+// refusal on others: the first line would name the paths whose gate reads the body.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn signed_expect_continue_is_uniform(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    let wait = std::time::Duration::from_millis(1500);
+    let mut lines = BTreeMap::new();
+    for path in non_public_paths() {
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 10\r\nexpect: 100-continue\r\n{}\r\n",
+            signature_lines()
+        );
+        lines.insert(path, first_status_line(&app, &head, wait).await);
+    }
+    let first = lines.values().next().cloned().flatten();
+    assert_eq!(first.as_deref(), Some("HTTP/1.1 100 Continue"));
+    for (path, line) in &lines {
+        assert_eq!(line, &lines.values().next().cloned().unwrap(), "{path}");
+    }
+}
+
+// FAILS IF: a signed body over the cap is refused only where a gate reads it, or is refused with
+// anything but the uniform 401, or a public route lets it through. Declared and chunked alike.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_70_kib_signed_body_is_u401_everywhere(pool: PgPool) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let app = allowlisted_app(&pool).await;
+    let body = "x".repeat(70 * 1024);
+    let mut answers = Vec::new();
+    for path in representative_paths() {
+        let mut declared = app.client.post(app.url(&path)).body(body.clone());
+        for (n, v) in bad_signature() {
+            declared = declared.header(n, v);
+        }
+        answers.push((
+            path.clone(),
+            answer_of(declared.send().await.expect("sent")).await,
+        ));
+
+        // Chunked: no declared length, so the cap is met while reading.
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\
+             transfer-encoding: chunked\r\n{}\r\n{:x}\r\n",
+            signature_lines(),
+            body.len()
+        );
+        let mut stream = tokio::net::TcpStream::connect(app.addr)
+            .await
+            .expect("connect");
+        stream.write_all(head.as_bytes()).await.expect("write head");
+        // The server may answer and close before the whole chunk is written.
+        let _ = stream.write_all(body.as_bytes()).await;
+        let _ = stream.write_all(b"\r\n0\r\n\r\n").await;
+        let mut raw = Vec::new();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read_to_end(&mut raw),
+        )
+        .await;
+        let raw = String::from_utf8_lossy(&raw);
+        assert!(
+            raw.starts_with("HTTP/1.1 401 Unauthorized"),
+            "{path} chunked: {raw}"
+        );
+        assert!(raw.ends_with(&u401().body), "{path} chunked: {raw}");
+    }
+    assert_refusals(&answers, &u401());
+}
+
+/// A resolve request signed with the test app's reconcile secret.
+fn signed_resolve() -> (String, Vec<(&'static str, String)>) {
+    let body = format!(
+        r#"{{"external_user_id":"eq-{}","email":"eq@example.test","email_verified":true}}"#,
+        Uuid::new_v4().simple()
+    );
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let nonce = Uuid::new_v4().simple().to_string();
+    let signature = temper_core::internal_sig::sign_v2(
+        b"reconcile-secret",
+        "POST",
+        temper_core::internal_sig::DOOR_PRINCIPAL_RESOLVE,
+        now,
+        &nonce,
+        body.as_bytes(),
+    );
+    let headers = vec![
+        (temper_core::internal_sig::TIMESTAMP_HEADER, now.to_string()),
+        (temper_core::internal_sig::NONCE_HEADER, nonce),
+        (temper_core::internal_sig::SIGNATURE_V2_HEADER, signature),
+        ("content-type", "application/json".to_string()),
+    ];
+    (body, headers)
+}
+
+// FAILS IF: the equaliser loses or alters a signed body on its way to the gate, or an admitted
+// caller that asks to continue is not continued. Either breaks every real signer.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_signed_request_reaches_its_handler_with_and_without_expect(pool: PgPool) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let app = allowlisted_app(&pool).await;
+
+    let (body, headers) = signed_resolve();
+    let mut request = app
+        .client
+        .post(app.url("/internal/principal/resolve"))
+        .body(body);
+    for (n, v) in headers {
+        request = request.header(n, v);
+    }
+    let answer = answer_of(request.send().await.expect("sent")).await;
+    assert_eq!(answer.status, 200, "{answer:?}");
+    assert!(answer.body.contains("profile_id"), "{answer:?}");
+
+    let (body, headers) = signed_resolve();
+    let lines: String = headers
+        .iter()
+        .map(|(n, v)| format!("{n}: {v}\r\n"))
+        .collect();
+    let head = format!(
+        "POST /internal/principal/resolve HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\
+         content-length: {}\r\nexpect: 100-continue\r\n{lines}\r\n",
+        body.len()
+    );
+    let mut stream = tokio::net::TcpStream::connect(app.addr)
+        .await
+        .expect("connect");
+    stream.write_all(head.as_bytes()).await.expect("write head");
+    let mut buf = vec![0u8; 64];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+        .await
+        .expect("continued in time")
+        .expect("read");
+    assert!(
+        String::from_utf8_lossy(&buf[..n]).starts_with("HTTP/1.1 100 Continue"),
+        "{:?}",
+        String::from_utf8_lossy(&buf[..n])
+    );
+    stream.write_all(body.as_bytes()).await.expect("write body");
+    let mut rest = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        stream.read_to_end(&mut rest),
+    )
+    .await
+    .expect("answered in time")
+    .expect("read");
+    let rest = String::from_utf8_lossy(&rest);
+    assert!(rest.contains("HTTP/1.1 200 OK"), "{rest}");
+    assert!(rest.contains("profile_id"), "{rest}");
+}

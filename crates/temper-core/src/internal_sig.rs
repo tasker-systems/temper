@@ -68,6 +68,13 @@ pub const DOORS: [&str; 4] = [
     DOOR_SLACK_MINT,
 ];
 
+/// Cap on a signed request's body, in bytes. The payloads are small (a membership list for the
+/// reconcile, a single opaque principal for a link intent), and a real one of either is well under
+/// a kilobyte, so 64 KiB is generous while bounding the read. One constant for both sides of the
+/// read: temper-api's outer service buffers every signed request to it before routing, and the
+/// signature gates read the buffered body under the same cap.
+pub const MAX_BODY_BYTES: usize = 64 * 1024;
+
 /// Maximum accepted clock skew (seconds) between signer and verifier. A request
 /// whose timestamp is further than this from "now" (in either direction) is
 /// rejected as stale, which is what makes a captured request non-replayable.

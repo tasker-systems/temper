@@ -14,14 +14,21 @@
 //! **What it does, in order:**
 //! 1. Mints the request id ([`RequestId`]) and plants it for the root span. An inbound
 //!    `x-request-id` is never adopted or echoed; it is kept, bounded, only as a span field.
-//! 2. Answers a CORS preflight from an admitted origin, identically on every path, with the
+//! 2. Buffers the body of every request carrying all three `X-Temper-*` signature headers, up to
+//!    [`MAX_BODY_BYTES`], on every path, before routing ([`equalise_signed_body`]). A signature
+//!    cannot be checked without the body, so the signature gates read it before they decide; read
+//!    there and nowhere else, the read itself told a prober which paths are doors (a declared
+//!    `Content-Length` with no body stalled only there, and `Expect: 100-continue` got its `100`
+//!    only there). Read here, every path waits alike and continues alike for the same request.
+//!    Over the cap, or unreadable, it is the uniform refusal (`hmac_body`) on every path alike.
+//! 3. Answers a CORS preflight from an admitted origin, identically on every path, with the
 //!    security headers the per-endpoint layers would have added. Every other `OPTIONS` is routed
 //!    like any other method, so it meets the route's own gate.
-//! 3. Adds the CORS actual-response headers (which depend only on `Origin`) to everything else,
+//! 4. Adds the CORS actual-response headers (which depend only on `Origin`) to everything else,
 //!    the routed `OPTIONS` included. The layer would *answer* a routed `OPTIONS` rather than add
 //!    headers to it, so for that one method the headers are taken from the layer's answer to a
 //!    `GET` carrying the same request headers ([`CorsHeadersOnly`]).
-//! 4. While the bearer key store is failing, answers every pre-identity refusal (a response marked
+//! 5. While the bearer key store is failing, answers every pre-identity refusal (a response marked
 //!    [`PreIdentityRefusal`]) with the "authentication service unavailable" bytes instead, whatever
 //!    its path or cause. Unavailability is server-wide state: answered only where a bearer is
 //!    verified, it would tell a prober which paths verify one. Every such refusal first joins the
@@ -29,7 +36,7 @@
 //!    [`JwksKeyStore::REFRESH_WAIT`] from the request's arrival whatever its door, so an instance
 //!    whose routes never verify a bearer still learns of an outage, a failing store recovers
 //!    without bearer traffic, and the refresh runs inside a live request.
-//! 5. Sets `x-request-id`, and removes `Allow` from every response that is not a 405.
+//! 6. Sets `x-request-id`, and removes `Allow` from every response that is not a 405.
 //!
 //! The strip is keyed "unless 405", never "on 401": request decompression wraps every tier gate,
 //! so an undecodable `Content-Encoding` is a 415 before any gate runs, and on an unmounted method
@@ -42,14 +49,18 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use axum::body::Body;
 use axum::extract::Request;
-use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use tower::{Layer as _, Service, ServiceExt as _};
 
+use temper_core::internal_sig::{
+    MAX_BODY_BYTES, NONCE_HEADER, SIGNATURE_V2_HEADER, TIMESTAMP_HEADER,
+};
 use temper_services::cors::{Cors, CorsPolicy};
-use temper_services::error::{unavailable_response, PreIdentityRefusal};
+use temper_services::error::{unavailable_response, ApiError, PreIdentityRefusal, UnauthCause};
 use temper_services::state::JwksKeyStore;
 use temper_services::transport::{insert_security_headers, RequestId, REQUEST_ID_HEADER};
 
@@ -131,7 +142,28 @@ impl AnonymousSurface {
             request.extensions_mut().insert(inbound);
         }
 
-        let Ok(mut response) = if self
+        // Before routing decides which gate runs, so the read cannot depend on the path.
+        let request = match equalise_signed_body(request).await {
+            Ok(request) => request,
+            Err(headers) => {
+                // Refused before routing, so no endpoint layer adds what a routed refusal carries:
+                // the security headers and the CORS actual-response headers are added here.
+                let mut refusal = ApiError::Unauthenticated(UnauthCause::HmacBody).into_response();
+                insert_security_headers(refusal.headers_mut());
+                let mut view = Request::new(Body::empty());
+                *view.method_mut() = Method::GET;
+                *view.headers_mut() = headers;
+                let Ok(cors) = self.headers_only.clone().oneshot(view).await;
+                for (name, value) in cors.headers() {
+                    refusal.headers_mut().append(name, value.clone());
+                }
+                return self
+                    .finish_refusal(refusal, &id, entered, was_failing)
+                    .await;
+            }
+        };
+
+        let Ok(response) = if self
             .cors
             .is_admitted_preflight(request.method(), request.headers())
         {
@@ -140,10 +172,14 @@ impl AnonymousSurface {
             // Answered before routing, so before any span: this event is the line its request id
             // joins to.
             tracing::debug!(request_id = id.as_str(), "cors preflight answered");
-            self.preflight.oneshot(request).await.map(|mut response| {
-                insert_security_headers(response.headers_mut());
-                response
-            })
+            self.preflight
+                .clone()
+                .oneshot(request)
+                .await
+                .map(|mut response| {
+                    insert_security_headers(response.headers_mut());
+                    response
+                })
         } else if request.method() == Method::OPTIONS {
             // Not a preflight this instance answers: an ordinary request. Routed without the CORS
             // layer, which would otherwise answer it 200 before routing could, then given the
@@ -151,18 +187,34 @@ impl AnonymousSurface {
             let mut view = Request::new(axum::body::Body::empty());
             *view.method_mut() = Method::GET;
             *view.headers_mut() = request.headers().clone();
-            let Ok(cors) = self.headers_only.oneshot(view).await;
-            self.inner.oneshot(request).await.map(|mut response| {
-                // The empty answer carries nothing but what the layer added.
-                for (name, value) in cors.headers() {
-                    response.headers_mut().append(name, value.clone());
-                }
-                response
-            })
+            let Ok(cors) = self.headers_only.clone().oneshot(view).await;
+            self.inner
+                .clone()
+                .oneshot(request)
+                .await
+                .map(|mut response| {
+                    // The empty answer carries nothing but what the layer added.
+                    for (name, value) in cors.headers() {
+                        response.headers_mut().append(name, value.clone());
+                    }
+                    response
+                })
         } else {
-            self.actual.oneshot(request).await
+            self.actual.clone().oneshot(request).await
         };
+        self.finish_refusal(response, &id, entered, was_failing)
+            .await
+    }
 
+    /// Every answer's tail: a pre-identity refusal joins the key store's refresh, is logged, and is
+    /// swapped while the store is failing; then [`finish`].
+    async fn finish_refusal(
+        &self,
+        mut response: Response,
+        id: &RequestId,
+        entered: tokio::time::Instant,
+        was_failing: bool,
+    ) -> Response {
         if let Some(PreIdentityRefusal(cause)) = response.extensions().get().copied() {
             // Join the store's refresh if its keys are stale, until the same deadline from the
             // request's arrival for every door (a bearer lookup that already waited has used it
@@ -188,8 +240,47 @@ impl AnonymousSurface {
                 response = unavailable_if_refused(response);
             }
         }
-        finish(&mut response, &id);
+        finish(&mut response, id);
         response
+    }
+}
+
+/// Whether a request carries all three signature headers. Presence only: whether they parse is the
+/// gate's question, and a gate is not reached before routing.
+fn carries_signature(headers: &HeaderMap) -> bool {
+    [TIMESTAMP_HEADER, NONCE_HEADER, SIGNATURE_V2_HEADER]
+        .iter()
+        .all(|name| headers.contains_key(*name))
+}
+
+/// The signed-body equaliser: a request carrying the signature headers has its body read into
+/// memory, up to [`MAX_BODY_BYTES`], and put back as a buffered body; any other request passes
+/// untouched, and its body is read (or not) by whatever it reaches.
+///
+/// The request is the only input, never its path, so every path waits for the same body and sends
+/// `100 Continue` for the same request. A declared length over the cap is refused without reading
+/// it; a body that turns out larger, or cannot be read, is refused when it does. The refusal hands
+/// back the request's headers, which the caller needs for its CORS answer.
+///
+/// It adds no read a caller could not already force: any signed request reached a door's gate and
+/// was read to this same cap there.
+async fn equalise_signed_body(request: Request) -> Result<Request, HeaderMap> {
+    if !carries_signature(request.headers()) {
+        return Ok(request);
+    }
+    let declared_over = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .is_some_and(|len| len > MAX_BODY_BYTES as u64);
+    let (parts, body) = request.into_parts();
+    if declared_over {
+        return Err(parts.headers);
+    }
+    match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
+        Ok(bytes) => Ok(Request::from_parts(parts, Body::from(bytes))),
+        Err(_) => Err(parts.headers),
     }
 }
 

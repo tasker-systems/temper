@@ -26,15 +26,12 @@ use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 
-use temper_core::internal_sig::{DOORS, NONCE_HEADER, SIGNATURE_V2_HEADER, TIMESTAMP_HEADER};
+use temper_core::internal_sig::{
+    DOORS, MAX_BODY_BYTES, NONCE_HEADER, SIGNATURE_V2_HEADER, TIMESTAMP_HEADER,
+};
 use temper_services::error::{ApiError, UnauthCause};
 use temper_services::services::internal_sig_service::{self, SignedRequest};
 use temper_services::state::AppState;
-
-/// Cap on the buffered body, for BOTH gates. The payloads are small — a membership list for
-/// reconcile, a single opaque principal for a link intent — and a real one of either is well
-/// under a kilobyte, so 64 KiB is generous while bounding the read.
-const MAX_BODY_BYTES: usize = 64 * 1024;
 
 /// The current unix time in seconds, saturating to 0 before the epoch (unreachable in practice).
 fn now_secs() -> i64 {
@@ -113,6 +110,9 @@ async fn buffer_signed_request(request: Request<Body>, label: &str) -> Result<Bu
         return Err(ApiError::Unauthenticated(UnauthCause::HmacMissingHeaders));
     }
 
+    // Already in memory for every request that reached a door signed: the outer service buffered it
+    // before routing (`anonymous_surface`), so this read never touches the socket. It stays a
+    // bounded read, under the same cap, so a gate reached any other way still bounds what it reads.
     let body = axum::body::to_bytes(body, MAX_BODY_BYTES)
         .await
         .map_err(|_| {
