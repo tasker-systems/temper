@@ -9,7 +9,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use sqlx::PgPool;
 use temper_core::internal_sig::{self, DOOR_SLACK_MINT};
-use temper_services::error::ApiError;
+use temper_services::error::{ApiError, UnauthCause};
 use temper_services::services::internal_sig_service::SignedRequest;
 use temper_services::services::slack_mint_service::verify_mint_request;
 
@@ -82,8 +82,11 @@ async fn a_link_secret_signature_cannot_mint_a_proof() {
     .await
     .expect_err("a link-secret signature must not mint a proof");
     assert!(
-        matches!(err, ApiError::Unauthorized(_)),
-        "wrong secret must be Unauthorized, got {err:?}",
+        matches!(
+            err,
+            ApiError::Unauthenticated(UnauthCause::HmacBadSignature)
+        ),
+        "wrong secret must be the uniform pre-identity refusal, got {err:?}",
     );
 }
 
@@ -101,7 +104,13 @@ async fn a_stale_timestamp_is_refused() {
     )
     .await
     .expect_err("a stale timestamp must be refused");
-    assert!(matches!(err, ApiError::Unauthorized(_)), "got {err:?}");
+    assert!(
+        matches!(
+            err,
+            ApiError::Unauthenticated(UnauthCause::HmacBadSignature)
+        ),
+        "got {err:?}"
+    );
 }
 
 /// The original construction is no longer a mint credential, whatever its freshness.
@@ -117,7 +126,13 @@ async fn the_original_construction_is_refused() {
     )
     .await
     .expect_err("the original construction must be refused");
-    assert!(matches!(err, ApiError::Unauthorized(_)), "got {err:?}");
+    assert!(
+        matches!(
+            err,
+            ApiError::Unauthenticated(UnauthCause::HmacBadSignature)
+        ),
+        "got {err:?}"
+    );
 }
 
 /// A well-signed request whose principal is malformed is a 400, NOT a 401 — the shape error must
