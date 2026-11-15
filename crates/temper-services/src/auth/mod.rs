@@ -170,6 +170,11 @@ async fn claims_from_token(
     }
 }
 
+/// The refusal [`authenticate_caller_existing_only`] gives a validly signed identity that maps to
+/// no temper profile. Named so a caller can tell it from a machine-credential refusal without
+/// matching on prose.
+pub const NO_EXISTING_PROFILE: &str = "no existing temper profile for this identity";
+
 /// **The token path, LOOKUP-ONLY.** A verified JWT ⇒ an *existing* profile, or a refusal.
 ///
 /// Same seam as [`authenticate_token`] — it takes raw claims and the bearer, and builds the
@@ -203,8 +208,8 @@ pub(crate) async fn authenticate_token_existing_only(
             // person in unrelated systems, and this is a narrow account-link refusal, not a hot path:
             // it stays correlatable to its request through the root span's trace context, and the
             // Slack side identifies the caller for the rare triage that needs it. Decided 2026-08-01.
-            tracing::info!("slack link: refused (no existing temper profile)");
-            AuthzError::Refused("no existing temper profile for this identity")
+            tracing::info!("lookup-only authentication: refused (no existing temper profile)");
+            AuthzError::Refused(NO_EXISTING_PROFILE)
         })?;
 
     gate_resolved_profile(&state.pool, profile, &claims).await

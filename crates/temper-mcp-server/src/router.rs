@@ -157,6 +157,7 @@ pub fn build_router(
             .merge(registration_routes)
             .merge(health)
             .merge(mcp_routes),
+        temper_services::transport::fallback_handler,
     )
     // HTTP root span, mirroring temper-api's `apply_transport_layers`. Until this landed, MCP
     // requests had NO root span at all — every MCP log line was parentless, on the surface that

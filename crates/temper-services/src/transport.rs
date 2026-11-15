@@ -297,13 +297,17 @@ pub const ARTIFACT_READ_CANDIDATE_BYTES: usize = 4_096;
 /// state why, as every door above does.
 pub const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 
-/// Apply the layers that sit **below** a surface's root span: the fallback handler, request
+/// Apply the layers that sit **below** a surface's root span: the surface's fallback, request
 /// decompression, the request-body ceiling, and the baseline response headers.
+///
+/// The fallback is the surface's to choose. MCP answers an unmatched path with
+/// [`fallback_handler`]'s 404; temper-api answers it through a declared fallback that refuses an
+/// unauthenticated caller with the uniform 401 (`routes::Fallback` there).
 ///
 /// Call this first, then add the surface's own root span and its CORS layer:
 ///
 /// ```ignore
-/// apply_base_layers(app)
+/// apply_base_layers(app, fallback_handler)
 ///     .layer(axum::middleware::from_fn(root_span))
 ///     .layer(temper_services::cors::cors_layer(&config.cors_origins))
 /// ```
@@ -311,12 +315,14 @@ pub const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// Ordering matters and is preserved from the stack this was extracted from: decompression runs
 /// innermost, so the body an extractor sees — and therefore any `DefaultBodyLimit` guarding it —
 /// is measured in decompressed bytes.
-pub fn apply_base_layers<S>(app: Router<S>) -> Router<S>
+pub fn apply_base_layers<S, H, T>(app: Router<S>, fallback: H) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
+    H: axum::handler::Handler<T, S>,
+    T: 'static,
 {
     let app = app
-        .fallback(fallback_handler)
+        .fallback(fallback)
         .layer(RequestDecompressionLayer::new())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES));
 

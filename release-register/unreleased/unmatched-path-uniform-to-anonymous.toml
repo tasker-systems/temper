@@ -1,0 +1,22 @@
+title    = "An unmatched path is the uniform 401 to an unauthenticated caller, and the 404 only to a signed one"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "internal"]
+status   = "signal-only"
+body = '''
+What changed: a path no route matches now answers a caller without a validly signed bearer the
+uniform pre-identity 401 (the same bytes a gated route gives), not the 404 "No route matches …". A
+caller with a validly signed bearer still gets the 404, whether or not its identity has a profile;
+the fallback resolves the caller lookup-only and never provisions one. A deactivated caller keeps
+"account is deactivated", and a refused machine credential keeps its own message. The cause is
+logged as unmatched_path on the "auth error" line with the request id.
+
+Under /internal/ every unmatched path is the uniform 401 whoever asks, bearer or not, on both the
+main app and the internal function (refused_prefix). The internal function answers every path it
+does not serve that way.
+
+Unchanged: status codes and code strings in the contract; only their conditions moved. The MCP
+surface keeps its own 404 for an unmatched path. Authenticated clients (CLI, SDKs, UI proxy, MCP
+relay) still get 404 for a wrong path; temper-ts with an expired token on a wrong path re-mints
+once on the 401, then gets the 404.
+'''

@@ -101,64 +101,8 @@ pub async fn require_auth(
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, ApiError> {
-    // 1. Extract "Authorization: Bearer <token>"
-    let token = extract_bearer_token(&request)?;
-
-    // 2. Get the decoding key this token names in its `kid` (and its algorithm family) from the
-    //    JWKS store (cached; an unrecognised `kid` refreshes once before being refused).
-    let vk = state
-        .jwks_store
-        .get_decoding_key_for_token(&token)
-        .await
-        .map_err(|e| match e {
-            // A `kid` naming no key this instance trusts is a fact about the TOKEN, and it takes
-            // the same refusal as any other bad token — the one `decode` produces three lines
-            // down, so the two are indistinguishable on the wire. Telling this caller the service
-            // is unavailable would send a client whose signing key just rotated away to retry
-            // later instead of to authenticate again.
-            //
-            // `debug!`, not `error!`: the whole input is caller-written, so an error-level line
-            // here is a log-volume lever anyone can pull, on every route this middleware covers.
-            KeyLookupError::UnknownKid(kid) => {
-                // `kid` is read from an unverified token header — attacker-chosen
-                // content at attacker-chosen length. Bounded.
-                tracing::debug!(kid = %temper_services::error::bounded(&kid), "token names an unpublished kid");
-                ApiError::Unauthenticated(UnauthCause::InvalidToken)
-            }
-            // Rendered like every other pre-identity refusal. "Unavailable" is answered by the
-            // service outside routing, for every such refusal at once, while the key store says it
-            // is failing: answered here alone, it would tell a prober which paths verify a bearer.
-            e => {
-                // Once the store is failing, any caller can repeat this with a garbage bearer: the
-                // outage is reported where the store marks it, not once per such request.
-                if state.jwks_store.is_failing() {
-                    tracing::debug!("JWKS key retrieval failed: {e}");
-                } else {
-                    tracing::error!("JWKS key retrieval failed: {e}");
-                }
-                ApiError::Unauthenticated(UnauthCause::AuthUnavailable)
-            }
-        })?;
-
-    // 3. Decode and verify the JWT. The allow-list is scoped to exactly the
-    //    loaded key's algorithm (see `JwksKeyStore::validation`), and the accepted
-    //    audience set is the ONE definition both doors share — the API audience and
-    //    the MCP surface's RFC 8707 resource audience, deduped when they collapse.
-    //    A token naming either audience names this instance (see
-    //    `AuthConfig::accepted_audiences`); door choice is never an authorization
-    //    input.
-    let issuer = &state.config.auth.issuer;
-    let audiences = state.config.auth.accepted_audiences();
-    let validation = state
-        .jwks_store
-        .validation(issuer, &audiences, vk.algorithm);
-
-    let token_data: TokenData<temper_services::auth::RawJwtClaims> =
-        decode(&token, &vk.key, &validation).map_err(|e| {
-            tracing::debug!("JWT verification failed: {e}");
-            ApiError::Unauthenticated(UnauthCause::InvalidToken)
-        })?;
-    let raw = token_data.claims;
+    // 1–3. Extract the bearer, look its key up, decode and verify it.
+    let (token, raw) = verify_bearer(&state, request.headers()).await?;
 
     // 3b. The token verified, so this caller is one of ours: join its trace by *link*, never by
     //     parenting (decision `019f95ff` rule 2). Deliberately here rather than after
@@ -223,10 +167,80 @@ pub async fn require_auth(
     Ok(next.run(request).await)
 }
 
+/// Steps 1–3 of [`require_auth`]: extract `Authorization: Bearer <token>`, look up the key it
+/// names, then decode and verify it. Returns the token and its verified claims, or the pre-identity
+/// refusal for why it failed.
+///
+/// The one implementation, shared with the declared fallback (`routes::fallback`), so the two
+/// cannot disagree about which bearers verify.
+pub(crate) async fn verify_bearer(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Result<(String, temper_services::auth::RawJwtClaims), ApiError> {
+    // 1. Extract "Authorization: Bearer <token>"
+    let token = extract_bearer_token(headers)?;
+
+    // 2. Get the decoding key this token names in its `kid` (and its algorithm family) from the
+    //    JWKS store (cached; an unrecognised `kid` refreshes once before being refused).
+    let vk = state
+        .jwks_store
+        .get_decoding_key_for_token(&token)
+        .await
+        .map_err(|e| match e {
+            // A `kid` naming no key this instance trusts is a fact about the TOKEN, and it takes
+            // the same refusal as any other bad token — the one `decode` produces three lines
+            // down, so the two are indistinguishable on the wire. Telling this caller the service
+            // is unavailable would send a client whose signing key just rotated away to retry
+            // later instead of to authenticate again.
+            //
+            // `debug!`, not `error!`: the whole input is caller-written, so an error-level line
+            // here is a log-volume lever anyone can pull, on every route this middleware covers.
+            KeyLookupError::UnknownKid(kid) => {
+                // `kid` is read from an unverified token header — attacker-chosen
+                // content at attacker-chosen length. Bounded.
+                tracing::debug!(kid = %temper_services::error::bounded(&kid), "token names an unpublished kid");
+                ApiError::Unauthenticated(UnauthCause::InvalidToken)
+            }
+            // Rendered like every other pre-identity refusal. "Unavailable" is answered by the
+            // service outside routing, for every such refusal at once, while the key store says it
+            // is failing: answered here alone, it would tell a prober which paths verify a bearer.
+            e => {
+                // Once the store is failing, any caller can repeat this with a garbage bearer: the
+                // outage is reported where the store marks it, not once per such request.
+                if state.jwks_store.is_failing() {
+                    tracing::debug!("JWKS key retrieval failed: {e}");
+                } else {
+                    tracing::error!("JWKS key retrieval failed: {e}");
+                }
+                ApiError::Unauthenticated(UnauthCause::AuthUnavailable)
+            }
+        })?;
+
+    // 3. Decode and verify the JWT. The allow-list is scoped to exactly the
+    //    loaded key's algorithm (see `JwksKeyStore::validation`), and the accepted
+    //    audience set is the ONE definition both doors share — the API audience and
+    //    the MCP surface's RFC 8707 resource audience, deduped when they collapse.
+    //    A token naming either audience names this instance (see
+    //    `AuthConfig::accepted_audiences`); door choice is never an authorization
+    //    input.
+    let issuer = &state.config.auth.issuer;
+    let audiences = state.config.auth.accepted_audiences();
+    let validation = state
+        .jwks_store
+        .validation(issuer, &audiences, vk.algorithm);
+
+    let token_data: TokenData<temper_services::auth::RawJwtClaims> =
+        decode(&token, &vk.key, &validation).map_err(|e| {
+            tracing::debug!("JWT verification failed: {e}");
+            ApiError::Unauthenticated(UnauthCause::InvalidToken)
+        })?;
+    let raw = token_data.claims;
+    Ok((token, raw))
+}
+
 /// Extract a Bearer token from the `Authorization` header.
-fn extract_bearer_token(request: &Request<Body>) -> Result<String, ApiError> {
-    let header = request
-        .headers()
+fn extract_bearer_token(headers: &axum::http::HeaderMap) -> Result<String, ApiError> {
+    let header = headers
         .get(axum::http::header::AUTHORIZATION)
         .ok_or(ApiError::Unauthenticated(UnauthCause::MissingBearer))?;
 

@@ -282,11 +282,15 @@ pub enum UnauthCause {
     /// The webhook intake's broker attestation did not verify, named no live connection, or was
     /// replayed.
     IntakeUnattested,
+    /// A path no route matches, from a caller with no validly signed bearer.
+    UnmatchedPath,
+    /// A path under a refused prefix (`/internal/`) that no route matches, from any caller.
+    RefusedPrefix,
 }
 
 impl UnauthCause {
     /// Every cause, for the test that their responses are byte-identical.
-    pub const ALL: [UnauthCause; 11] = [
+    pub const ALL: [UnauthCause; 13] = [
         UnauthCause::MissingBearer,
         UnauthCause::BadScheme,
         UnauthCause::InvalidToken,
@@ -298,6 +302,8 @@ impl UnauthCause {
         UnauthCause::CronDisabled,
         UnauthCause::CronBadSecret,
         UnauthCause::IntakeUnattested,
+        UnauthCause::UnmatchedPath,
+        UnauthCause::RefusedPrefix,
     ];
 
     /// The fixed string logged as `cause`.
@@ -314,6 +320,8 @@ impl UnauthCause {
             UnauthCause::CronDisabled => "cron_disabled",
             UnauthCause::CronBadSecret => "cron_bad_secret",
             UnauthCause::IntakeUnattested => "intake_unattested",
+            UnauthCause::UnmatchedPath => "unmatched_path",
+            UnauthCause::RefusedPrefix => "refused_prefix",
         }
     }
 }
