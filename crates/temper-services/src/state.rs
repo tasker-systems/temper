@@ -128,7 +128,16 @@ impl std::fmt::Display for KeyLookupError {
 
 /// Fetches RSA and EdDSA/Ed25519 public keys from a JWKS endpoint, caches them,
 /// and provides them for JWT verification.
+///
+/// A handle: clones share one cache, so a refresh can run on a spawned task ([`Self::poke`])
+/// without the request that asked for it waiting on the fetch.
+#[derive(Clone)]
 pub struct JwksKeyStore {
+    shared: Arc<Shared>,
+}
+
+/// The store's state, behind the handle's `Arc` so a background refresh can own a reference.
+struct Shared {
     url: String,
     client: reqwest::Client,
     cache: RwLock<Option<CachedKeys>>,
@@ -181,13 +190,16 @@ pub struct JwksKeyStore {
     /// slower stale one is still in flight, and that one's later failure must not mark a cache that
     /// is fresh.
     refresh_generation: std::sync::atomic::AtomicU64,
+    /// Whether a background refresh started by [`JwksKeyStore::poke`] is still running. At most one
+    /// runs at a time, so a flood of refusals is one spawned task, not one per request.
+    poke_in_flight: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for JwksKeyStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JwksKeyStore")
-            .field("url", &self.url)
-            .field("ttl", &self.ttl)
+            .field("url", &self.shared.url)
+            .field("ttl", &self.shared.ttl)
             .finish_non_exhaustive()
     }
 }
@@ -253,16 +265,7 @@ impl JwksKeyStore {
     /// The cache TTL defaults to 1 hour.
     pub fn new(url: String) -> Self {
         Self {
-            url,
-            client: jwks_http_client(),
-            cache: RwLock::new(None),
-            ttl: Duration::from_secs(3600),
-            stale_refresh_gate: tokio::sync::Mutex::new(None),
-            failed_refresh_backoff: Duration::from_secs(5),
-            unknown_kid_gate: tokio::sync::Mutex::new(None),
-            unknown_kid_refresh_interval: Duration::from_secs(60),
-            failing: std::sync::atomic::AtomicBool::new(false),
-            refresh_generation: std::sync::atomic::AtomicU64::new(0),
+            shared: Arc::new(Shared::new(url)),
         }
     }
 
@@ -275,6 +278,134 @@ impl JwksKeyStore {
     /// `test-db` here so the sibling crates' test harnesses build it too.
     #[cfg(any(test, feature = "test-harness"))]
     pub fn with_static_key(key: DecodingKey, algorithm: Algorithm) -> Self {
+        Self {
+            shared: Arc::new(Shared::with_static_key(key, algorithm)),
+        }
+    }
+
+    /// The tolerance applied to the `exp`/`nbf` window, in seconds; see `validation`.
+    ///
+    /// Public because whatever remembers a verified token must remember it for as long as this
+    /// store would still accept it: until `exp` **plus** this leeway (`broker::vercel_connect`'s
+    /// replay key).
+    pub const CLOCK_SKEW_LEEWAY_SECONDS: u64 = Shared::CLOCK_SKEW_LEEWAY_SECONDS;
+
+    /// Return the `VerificationKey` (key + its algorithm) that `token` names in its `kid` header,
+    /// refreshing from the JWKS endpoint if the cache is absent, expired, or does not hold that key.
+    ///
+    /// **While the store is failing, an absent or expired cache answers at once.** The refusal is
+    /// `Unavailable`, and a refresh is started in the background ([`Self::poke`]) rather than
+    /// awaited. Otherwise every bearer request during an outage would wait out the fetch timeout,
+    /// and a slow refusal is one a prober can tell from the instant refusal every door without a
+    /// bearer gives. Before the store is known to be failing (a cold process, or the moment the
+    /// TTL lapses) the request still waits for the fetch: there is no outage to report yet.
+    pub async fn get_decoding_key_for_token(
+        &self,
+        token: &str,
+    ) -> Result<VerificationKey, KeyLookupError> {
+        self.shared
+            .get_decoding_key_for_token(token, || self.poke())
+            .await
+    }
+
+    /// Start a refresh on a spawned task if the cache is absent or past its TTL, and return at
+    /// once. Non-blocking and single-flight: while one poke's refresh runs, further pokes do
+    /// nothing, and the refresh itself honours the failed-refresh backoff, so a stream of pokes
+    /// against a dead endpoint is at most one fetch per backoff window.
+    ///
+    /// The outer service calls this on every pre-identity refusal, before it asks
+    /// [`Self::is_failing`]. That is what makes "unavailable" server-wide state on an instance whose
+    /// routes never verify a bearer (the internal surface keeps its own store): without it, that
+    /// store would never try a refresh, never fail, and answer the uniform refusal through an
+    /// outage the bearer surface reports. It is also how a failing store recovers with no bearer
+    /// traffic at all.
+    ///
+    /// Must be called inside a Tokio runtime.
+    pub fn poke(&self) {
+        use std::sync::atomic::Ordering;
+        if !self.shared.cache_is_stale() {
+            return;
+        }
+        if self
+            .shared
+            .poke_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let shared = Arc::clone(&self.shared);
+        tokio::spawn(async move {
+            if let Err(e) = shared.refresh_stale().await {
+                tracing::debug!("background JWKS refresh failed: {e}");
+            }
+            shared.poke_in_flight.store(false, Ordering::Release);
+        });
+    }
+
+    /// Build a `Validation` for the given issuer and audience; see the inner doc on why both
+    /// `iss` and `aud` are required and the allow-list is single-family.
+    pub fn validation(&self, issuer: &str, audiences: &[&str], algorithm: Algorithm) -> Validation {
+        self.shared.validation(issuer, audiences, algorithm)
+    }
+
+    /// Fetch the JWKS endpoint, parse every usable key, and store them in the cache. A success
+    /// clears the failing mark.
+    pub async fn refresh(&self) -> Result<(), String> {
+        self.shared.refresh().await
+    }
+
+    /// Whether the key store is failing: the cache could not be used and the most recent refresh
+    /// for that reason failed (with no success since it began), however long ago. Only a
+    /// successful refresh clears it. Lock-free, so a refusal path can ask it without waiting on a
+    /// fetch in flight.
+    ///
+    /// An unknown `kid` against a fresh cache never sets it: the cache still verifies, and the
+    /// caller chose the `kid`.
+    ///
+    /// **Residuals** (declared in `docs/concepts/trust-boundary.md`). Transitions are driven by
+    /// requests: a refresh is tried when a bearer is verified against a stale cache or when a
+    /// refusal pokes the store, so on a cold process, and at the moment the TTL lapses, the first
+    /// refusal is answered before any refresh has failed. Each process (each serverless function)
+    /// learns of an outage on its own.
+    pub fn is_failing(&self) -> bool {
+        self.shared.is_failing()
+    }
+
+    /// Mutable access to the tuning fields, for tests that shorten a TTL or a backoff, or point the
+    /// store elsewhere. Only before the handle is shared.
+    #[cfg(test)]
+    fn tune(&mut self) -> &mut Shared {
+        Arc::get_mut(&mut self.shared).expect("tuned before the store is shared")
+    }
+}
+
+impl Shared {
+    fn new(url: String) -> Self {
+        Self {
+            url,
+            client: jwks_http_client(),
+            cache: RwLock::new(None),
+            ttl: Duration::from_secs(3600),
+            stale_refresh_gate: tokio::sync::Mutex::new(None),
+            failed_refresh_backoff: Duration::from_secs(5),
+            unknown_kid_gate: tokio::sync::Mutex::new(None),
+            unknown_kid_refresh_interval: Duration::from_secs(60),
+            failing: std::sync::atomic::AtomicBool::new(false),
+            refresh_generation: std::sync::atomic::AtomicU64::new(0),
+            poke_in_flight: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Create a key store pre-loaded with a static key and its algorithm.
+    /// Intended for tests that do not have network access to a real JWKS endpoint.
+    ///
+    /// Gated to test builds: test-shape machinery in the public production surface would
+    /// silently let a future caller wire a static-key trust root without it looking like
+    /// a test edit (the `from_lookup` precedent for this crate's own from_env parse).
+    /// `test-db` here so the sibling crates' test harnesses build it too.
+    #[cfg(any(test, feature = "test-harness"))]
+    fn with_static_key(key: DecodingKey, algorithm: Algorithm) -> Self {
         let cached = CachedKeys {
             // No `kid`: a static key answers for every token, which is what a test harness wants
             // and what `select_key`'s unnamed-document arm already does.
@@ -299,6 +430,7 @@ impl JwksKeyStore {
             unknown_kid_refresh_interval: Duration::from_secs(60),
             failing: std::sync::atomic::AtomicBool::new(false),
             refresh_generation: std::sync::atomic::AtomicU64::new(0),
+            poke_in_flight: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -308,9 +440,10 @@ impl JwksKeyStore {
     /// Takes the whole token rather than a `kid` so the header parse lives here once. Four call
     /// sites verify tokens; a `decode_header` copied into each of them is four chances to disagree
     /// about what an absent or malformed header means.
-    pub async fn get_decoding_key_for_token(
+    async fn get_decoding_key_for_token(
         &self,
         token: &str,
+        poke: impl FnOnce(),
     ) -> Result<VerificationKey, KeyLookupError> {
         // A header this store cannot parse is not this function's refusal to make: fall through
         // with no `kid` and let `decode` reject the token — it re-parses the same bytes and fails
@@ -346,6 +479,14 @@ impl JwksKeyStore {
             Next::Serve(vk) => return Ok(vk),
             // Nothing in the cache may be served, so this must refresh before it can answer, and a
             // failure is the endpoint's rather than the token's.
+            // Failing already: say so now, and let a background refresh find out whether the
+            // endpoint is back, rather than hold this request for the fetch.
+            Next::Stale if self.is_failing() => {
+                poke();
+                return Err(KeyLookupError::Unavailable(
+                    "JWKS endpoint failing; refreshing in the background".to_string(),
+                ));
+            }
             Next::Stale => self
                 .refresh_stale()
                 .await
@@ -457,7 +598,7 @@ impl JwksKeyStore {
     /// Public because whatever remembers a verified token must remember it for as long as this
     /// store would still accept it: until `exp` **plus** this leeway (`broker::vercel_connect`'s
     /// replay key).
-    pub const CLOCK_SKEW_LEEWAY_SECONDS: u64 = 60;
+    const CLOCK_SKEW_LEEWAY_SECONDS: u64 = 60;
 
     /// Build a `Validation` for the given issuer and audience, with an allow-list scoped to exactly
     /// `algorithm` (the loaded key's family).
@@ -484,7 +625,7 @@ impl JwksKeyStore {
     ///
     /// `iss` is required for the same reason: the issuer match has the same present-only semantics,
     /// so a claims-minimal token signed by any key in the trusted JWKS would otherwise walk in.
-    pub fn validation(&self, issuer: &str, audiences: &[&str], algorithm: Algorithm) -> Validation {
+    fn validation(&self, issuer: &str, audiences: &[&str], algorithm: Algorithm) -> Validation {
         let mut v = Validation::new(algorithm);
         v.algorithms = vec![algorithm];
         v.leeway = Self::CLOCK_SKEW_LEEWAY_SECONDS;
@@ -496,7 +637,7 @@ impl JwksKeyStore {
 
     /// Fetch the JWKS endpoint, parse **every** usable RSA/OKP-Ed25519 key with the `kid` that
     /// names it, and store them in the cache.
-    pub async fn refresh(&self) -> Result<(), String> {
+    async fn refresh(&self) -> Result<(), String> {
         let response = self
             .client
             .get(&self.url)
@@ -565,19 +706,16 @@ impl JwksKeyStore {
         }
     }
 
-    /// Whether the key store is failing: the cache could not be used and the most recent refresh
-    /// for that reason failed (with no success since it began), however long ago. Only a successful refresh clears it. Lock-free, so a
-    /// refusal path can ask it without waiting on a fetch in flight.
-    ///
-    /// An unknown `kid` against a fresh cache never sets it: the cache still verifies, and the
-    /// caller chose the `kid`.
-    ///
-    /// **Residuals.** The flag changes only when a request that verifies a bearer drives a refresh,
-    /// so its transitions are request-driven: at the moment the TTL lapses (or on a cold process)
-    /// before any refresh has been tried, and after the endpoint recovers until a bearer request
-    /// refreshes, a bearer request can see the state change before a signature-door request does.
-    /// Each needs a real outage, which the caller cannot cause.
-    pub fn is_failing(&self) -> bool {
+    /// Whether the cache holds nothing this store may serve: absent, or past its TTL. Lock-free
+    /// (a contended cache lock reads as fresh, so a poke never waits; the holder is a refresh).
+    fn cache_is_stale(&self) -> bool {
+        match self.cache.try_read() {
+            Ok(guard) => !matches!(guard.as_ref(), Some(c) if c.fetched_at.elapsed() < self.ttl),
+            Err(_) => false,
+        }
+    }
+
+    fn is_failing(&self) -> bool {
         self.failing.load(std::sync::atomic::Ordering::Acquire)
     }
 }
@@ -796,7 +934,7 @@ mod tests {
             .await
             .expect("key-1 loads");
         assert!(
-            store.ttl >= Duration::from_secs(3600),
+            store.shared.ttl >= Duration::from_secs(3600),
             "the TTL must be long enough that expiry cannot explain a pass"
         );
 
@@ -1027,7 +1165,7 @@ mod tests {
         let server = jwks_server(vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)]).await;
         let mut store = JwksKeyStore::new(format!("{}/.well-known/jwks.json", server.uri()));
         // A TTL of zero makes every read stale, which is the condition under test.
-        store.ttl = Duration::ZERO;
+        store.tune().ttl = Duration::ZERO;
 
         let token = sign_with(Some("key-1"), TEST_PRIVATE_PEM);
         store
@@ -1157,17 +1295,104 @@ mod tests {
 
         let server = jwks_server(vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)]).await;
         let mut store = JwksKeyStore::new("http://127.0.0.1:1/.well-known/jwks.json".to_string());
-        store.failed_refresh_backoff = Duration::ZERO;
+        store.tune().failed_refresh_backoff = Duration::ZERO;
         let _ = store.get_decoding_key_for_token(&token).await;
         assert!(store.is_failing());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(store.is_failing(), "the mark outlives the backoff window");
-        store.url = format!("{}/.well-known/jwks.json", server.uri());
+        store.tune().url = format!("{}/.well-known/jwks.json", server.uri());
+        // Failing, so the lookup answers at once and the refresh runs behind it.
+        assert!(store.get_decoding_key_for_token(&token).await.is_err());
+        until(|| !store.is_failing()).await;
         store
             .get_decoding_key_for_token(&token)
             .await
             .expect("the endpoint is back");
         assert!(!store.is_failing(), "a successful refresh clears the mark");
+    }
+
+    /// Wait (bounded) for a background refresh to change what the store reports.
+    async fn until(done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() {
+            assert!(
+                Instant::now() < deadline,
+                "the background refresh never landed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    // FAILS IF: a stale lookup on a failing store waits for the fetch (a hanging JWKS would hold
+    // every bearer refusal for the client timeout, a timing the doors without a bearer never show),
+    // or answers without starting the refresh that lets the store recover.
+    #[tokio::test]
+    async fn a_failing_store_answers_a_stale_lookup_at_once() {
+        let token = sign_with(Some("key-1"), TEST_PRIVATE_PEM);
+        let mut store = JwksKeyStore::new("http://127.0.0.1:1/.well-known/jwks.json".to_string());
+        store.tune().failed_refresh_backoff = Duration::ZERO;
+        let _ = store.get_decoding_key_for_token(&token).await;
+        assert!(store.is_failing());
+        let hanging = slow_jwks_server(
+            vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)],
+            Duration::from_millis(1500),
+        )
+        .await;
+        store.tune().url = format!("{}/.well-known/jwks.json", hanging.uri());
+
+        let started = Instant::now();
+        let answer = store.get_decoding_key_for_token(&token).await;
+        assert!(
+            matches!(answer, Err(KeyLookupError::Unavailable(_))),
+            "a failing store reports the outage"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "the refusal waited for the fetch: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            store
+                .shared
+                .poke_in_flight
+                .load(std::sync::atomic::Ordering::Acquire),
+            "the refresh was started behind the refusal"
+        );
+        until(|| !store.is_failing()).await;
+    }
+
+    // FAILS IF: a store no bearer ever reaches (the internal surface's) never learns of an outage
+    // when poked, or a failing one never recovers without a bearer, or a poke on a fresh cache
+    // fetches.
+    #[tokio::test]
+    async fn a_poke_alone_marks_and_recovers_the_store() {
+        let mut store = JwksKeyStore::new("http://127.0.0.1:1/.well-known/jwks.json".to_string());
+        store.tune().failed_refresh_backoff = Duration::ZERO;
+        store.poke();
+        until(|| store.is_failing()).await;
+
+        let server = jwks_server(vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)]).await;
+        // The spawned task has let go of the store (tuning needs it unshared).
+        until(|| Arc::strong_count(&store.shared) == 1).await;
+        store.tune().url = format!("{}/.well-known/jwks.json", server.uri());
+        store.poke();
+        until(|| !store.is_failing()).await;
+
+        let fetched = server.received_requests().await.unwrap_or_default().len();
+        // The spawned task has let go of the store (tuning needs it unshared).
+        until(|| Arc::strong_count(&store.shared) == 1).await;
+        store.poke();
+        assert!(
+            !store
+                .shared
+                .poke_in_flight
+                .load(std::sync::atomic::Ordering::Acquire),
+            "a poke on a fresh cache starts nothing"
+        );
+        assert_eq!(
+            server.received_requests().await.unwrap_or_default().len(),
+            fetched
+        );
     }
 
     // FAILS IF: an unknown `kid` against a fresh cache marks the store failing, even when the
@@ -1181,7 +1406,7 @@ mod tests {
             .await
             .expect("the cache is primed");
         // The endpoint goes away; the cache is still fresh.
-        store.url = "http://127.0.0.1:1/.well-known/jwks.json".to_string();
+        store.tune().url = "http://127.0.0.1:1/.well-known/jwks.json".to_string();
         let _ = store
             .get_decoding_key_for_token(&sign_with(Some("nope"), TEST_PRIVATE_PEM))
             .await;
@@ -1194,19 +1419,22 @@ mod tests {
     fn a_failure_overtaken_by_a_success_does_not_mark_the_store() {
         let store = JwksKeyStore::new("http://127.0.0.1:1/.well-known/jwks.json".to_string());
         let started = store
+            .shared
             .refresh_generation
             .load(std::sync::atomic::Ordering::Acquire);
         // A refresh succeeds while the stale one is in flight.
         store
+            .shared
             .refresh_generation
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        store.mark_failing_unless_refreshed_since(started);
+        store.shared.mark_failing_unless_refreshed_since(started);
         assert!(!store.is_failing());
         // With nothing in between, the failure marks the store.
         let started = store
+            .shared
             .refresh_generation
             .load(std::sync::atomic::Ordering::Acquire);
-        store.mark_failing_unless_refreshed_since(started);
+        store.shared.mark_failing_unless_refreshed_since(started);
         assert!(store.is_failing());
     }
 
@@ -1289,6 +1517,7 @@ mod tests {
         let store = JwksKeyStore::with_static_key(dec, Algorithm::EdDSA);
         // The cache should be populated immediately.
         let guard = store
+            .shared
             .cache
             .try_read()
             .expect("lock should not be contended");

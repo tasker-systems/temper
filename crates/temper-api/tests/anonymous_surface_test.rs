@@ -827,3 +827,230 @@ async fn intake_refuses_before_the_body(pool: PgPool) {
         );
     }
 }
+
+// ---- The key store's outage state is server-wide, bounded and self-healing ----------------------
+
+/// What the test's JWKS endpoint does with a fetch.
+#[derive(Clone, Copy, Debug)]
+enum KeyEndpoint {
+    /// Answer 500.
+    Refuse,
+    /// Serve a one-key document.
+    Serve,
+    /// Accept the connection and never answer: the fetch runs into the client's timeout.
+    Hang,
+}
+
+/// A JWKS endpoint the test switches between behaviours. Returns its URL.
+async fn key_endpoint(mode: std::sync::Arc<std::sync::Mutex<KeyEndpoint>>) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // RFC 8037's example Ed25519 public key: any well-formed key will do, nothing verifies with it.
+    const DOCUMENT: &str = r#"{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"k","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}"#;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind the key endpoint");
+    let addr = listener.local_addr().expect("its address");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mode = *mode.lock().expect("mode lock");
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = socket.read(&mut buf).await;
+                let reply = match mode {
+                    KeyEndpoint::Refuse => {
+                        "HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                            .to_string()
+                    }
+                    KeyEndpoint::Serve => format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{DOCUMENT}",
+                        DOCUMENT.len()
+                    ),
+                    KeyEndpoint::Hang => {
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                        return;
+                    }
+                };
+                let _ = socket.write_all(reply.as_bytes()).await;
+            });
+        }
+    });
+    format!("http://{addr}/.well-known/jwks.json")
+}
+
+/// Serve an already-built router (the internal surface) the way the harness serves `create_app`.
+async fn serve(router: axum::Router, pool: PgPool) -> common::TestApp {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("address");
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("serve");
+    });
+    common::TestApp {
+        addr,
+        pool,
+        client: reqwest::Client::new(),
+    }
+}
+
+/// The public app with its bearer key store pointed at `url`.
+async fn app_with_key_endpoint(pool: &PgPool, url: String) -> common::TestApp {
+    common::setup_test_app_with_state(pool.clone(), |state| {
+        state.jwks_store = std::sync::Arc::new(temper_services::state::JwksKeyStore::new(url));
+    })
+    .await
+}
+
+/// Re-send `request` until its answer (CORS aside) is `expected`, within `within`. The store's
+/// state changes on a background refresh, so the first answers may still be the old state's.
+async fn until_answered<F, Fut>(
+    expected: &Answer,
+    within: std::time::Duration,
+    request: F,
+) -> Answer
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Answer>,
+{
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        let answer = request().await;
+        if &without_cors(&answer) == expected {
+            return answer;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "never answered {expected:?}; last {answer:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// A signature-door refusal, which never reaches the bearer key store.
+async fn signed_refusal(app: &common::TestApp, path: &str) -> Answer {
+    let mut request = app.client.post(app.url(path)).body("{}");
+    for (n, v) in bad_signature() {
+        request = request.header(n, v);
+    }
+    answer_of(request.send().await.expect("sent")).await
+}
+
+// FAILS IF: an instance whose routes never verify a bearer (the internal surface, which keeps its
+// own key store in a deployment that splits it out) answers the uniform refusal through an outage
+// the bearer surface reports "unavailable" for: the outage would tell a prober which function
+// served the path.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_internal_app_no_bearer_reaches_still_reports_the_outage(pool: PgPool) {
+    let mut state = common::test_state_with_config(pool.clone(), |_| {}).await;
+    // Nothing listens on port 1, and nothing in this app ever verifies a bearer.
+    state.jwks_store = std::sync::Arc::new(temper_services::state::JwksKeyStore::new(
+        "http://127.0.0.1:1/.well-known/jwks.json".to_string(),
+    ));
+    let app = serve(temper_api::create_internal_app(state), pool).await;
+
+    // Refusals alone poke the store, and the failed refresh flips what every refusal answers.
+    until_answered(&unavailable(), std::time::Duration::from_secs(5), || {
+        signed_refusal(&app, "/internal/slack/mint")
+    })
+    .await;
+    let mut answers = Vec::new();
+    for path in ["/internal/slack/mint", "/internal/saml/reconcile"] {
+        answers.push((
+            format!("bad signature to {path}"),
+            signed_refusal(&app, path).await,
+        ));
+        answers.push((
+            format!("no signature to {path}"),
+            send(&app, Method::POST, path, &[]).await,
+        ));
+    }
+    assert_refusals(&answers, &unavailable());
+}
+
+// FAILS IF: a JWKS endpoint that accepts and never answers holds a refusal for the fetch: a door
+// without a bearer while the refresh it poked is in flight, or a bearer request once the store is
+// failing. Either delay is a timing a prober could tell apart from the instant refusal.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_hanging_key_endpoint_never_holds_a_refusal(pool: PgPool) {
+    let mode = std::sync::Arc::new(std::sync::Mutex::new(KeyEndpoint::Hang));
+    let app = app_with_key_endpoint(&pool, key_endpoint(mode).await).await;
+    let bound = std::time::Duration::from_millis(500);
+
+    // A door without a bearer pokes the store and is answered without waiting on that refresh.
+    let started = std::time::Instant::now();
+    let first = send(&app, Method::GET, "/api/profile", &[]).await;
+    assert!(started.elapsed() < bound, "held {:?}", started.elapsed());
+    assert_eq!(without_cors(&first), u401(), "nothing has failed yet");
+    let started = std::time::Instant::now();
+    let during = signed_refusal(&app, "/internal/slack/mint").await;
+    assert!(
+        started.elapsed() < bound,
+        "held behind the hanging refresh: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(without_cors(&during), u401());
+
+    // The background fetch runs into the client timeout, and the store is failing.
+    until_answered(&unavailable(), std::time::Duration::from_secs(15), || {
+        send(&app, Method::GET, "/api/profile", &[])
+    })
+    .await;
+
+    // From then on a bearer is answered at once too, though its refresh would hang.
+    for _ in 0..3 {
+        let started = std::time::Instant::now();
+        let answer = send(
+            &app,
+            Method::GET,
+            "/api/profile",
+            &[("authorization", "Bearer garbage")],
+        )
+        .await;
+        assert!(
+            started.elapsed() < bound,
+            "a bearer refusal waited for the fetch: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(without_cors(&answer), unavailable());
+    }
+}
+
+// FAILS IF: a failing store recovers only when a bearer drives a refresh: with no bearer traffic
+// (a signature door's callers, a prober) the instance would answer "unavailable" for as long as the
+// outage's last bearer left it, after the endpoint is back.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_failing_store_recovers_with_no_bearer(pool: PgPool) {
+    let mode = std::sync::Arc::new(std::sync::Mutex::new(KeyEndpoint::Refuse));
+    let app = app_with_key_endpoint(&pool, key_endpoint(mode.clone()).await).await;
+    until_answered(&unavailable(), std::time::Duration::from_secs(5), || {
+        signed_refusal(&app, "/internal/slack/mint")
+    })
+    .await;
+
+    *mode.lock().expect("mode lock") = KeyEndpoint::Serve;
+    // Past the failed-refresh backoff, a refusal's poke refetches and the store is healthy.
+    until_answered(&u401(), std::time::Duration::from_secs(15), || {
+        signed_refusal(&app, "/internal/slack/mint")
+    })
+    .await;
+    let answers = vec![
+        (
+            "bearer".to_string(),
+            send(
+                &app,
+                Method::GET,
+                "/api/profile",
+                &[("authorization", "Bearer garbage")],
+            )
+            .await,
+        ),
+        (
+            "no bearer".to_string(),
+            send(&app, Method::GET, "/api/profile", &[]).await,
+        ),
+    ];
+    assert_refusals(&answers, &u401());
+}

@@ -24,7 +24,10 @@
 //! 4. While the bearer key store is failing, answers every pre-identity refusal (a response marked
 //!    [`PreIdentityRefusal`]) with the "authentication service unavailable" bytes instead, whatever
 //!    its path or cause. Unavailability is server-wide state: answered only where a bearer is
-//!    verified, it would tell a prober which paths verify one.
+//!    verified, it would tell a prober which paths verify one. Every such refusal first pokes the
+//!    store ([`JwksKeyStore::poke`]: a background refresh if the cache is stale, never a wait), so
+//!    an instance whose routes never verify a bearer still learns of an outage, and a failing
+//!    store recovers without bearer traffic.
 //! 5. Sets `x-request-id`, and removes `Allow` from every response that is not a 405.
 //!
 //! The strip is keyed "unless 405", never "on 401": request decompression wraps every tier gate,
@@ -84,7 +87,8 @@ struct AnonymousSurface {
     /// CORS around an empty answer: the actual-response headers for a routed `OPTIONS`.
     headers_only: Cors<CorsHeadersOnly>,
     cors: Arc<CorsPolicy>,
-    /// Read only through `is_failing`, for the unavailable swap.
+    /// Poked on every pre-identity refusal, then read through `is_failing` for the unavailable
+    /// swap.
     jwks: Arc<JwksKeyStore>,
 }
 
@@ -155,6 +159,9 @@ impl AnonymousSurface {
         };
 
         if let Some(PreIdentityRefusal(cause)) = response.extensions().get().copied() {
+            // Non-blocking: at most a spawned refresh. The answer below uses what the store knows
+            // now, so this refusal is never held for a fetch.
+            self.jwks.poke();
             let unavailable = self.jwks.is_failing();
             // The one line an operator joins a caller's quoted `x-request-id` to. Emitted here, not
             // under the root span, so it carries the id whatever the log filter does to spans.
