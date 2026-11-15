@@ -393,7 +393,7 @@ pub fn create_app(state: AppState) -> Router {
 }
 
 /// The internal/system-only app — the groups the table marks `Serves::BothBuilders`
-/// (the signature-gated pairs and the self-gated crons) with the same transport layers
+/// (the signature-gated pairs and the `CronSecret` crons) with the same transport layers
 /// as [`create_app`], but none of the public/auth/gated API and no Swagger.
 ///
 /// This exists so Vercel can serve these paths from a **separate function**
@@ -649,6 +649,16 @@ mod tests {
         assert_eq!(callback.matches("route(").count(), 1);
     }
 
+    // FAILS IF: the webhook intake's group gains a route or a method without review. The audit's
+    // baseline is keyed on group and handler, so a second path to the same handler would pass it;
+    // the `BrokerAttested` layer would gate that path, but the intake is reviewed as one POST door.
+    #[test]
+    fn the_intake_is_one_post_route() {
+        let intake = route_code(include_str!("webhook_intake.rs"));
+        assert_eq!(mounted_methods(&intake), BTreeSet::from(["post("]));
+        assert_eq!(intake.matches("route(").count(), 1);
+    }
+
     /// Every `(METHOD, route template)` a `Refused`, documented group mounts, read from the group's
     /// own OpenAPI half (no state, no database).
     fn refused_documented_operations() -> BTreeSet<(String, String)> {
@@ -684,7 +694,7 @@ mod tests {
     }
 
     // FAILS IF: an entry in `HONOURED` names an exempt route (not policed, so the entry is a no-op
-    // that reads as a promise), the webhook intake (whose check consults no entry), a misspelt
+    // that reads as a promise), the webhook intake (undocumented, so no entry may name it), a misspelt
     // template, a method the route does not mount, or a header the layer does not police.
     #[test]
     fn every_honoured_entry_names_a_route_a_refused_group_mounts() {

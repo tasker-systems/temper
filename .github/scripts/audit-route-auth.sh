@@ -49,7 +49,10 @@
 # Its gate, like the cron doors' (CronSecret), is a tier LAYER, not a call in the handler: a layer
 # wraps the method router's fallback and every extractor, so no 405-with-Allow, no extractor 400 and
 # no body read answers an unattested caller before the gate does. Both get tier-stack assertions
-# below, and the baseline diff (c) still fails a second route added to either group until reviewed.
+# below. The baseline diff (c) fails a second handler added to either group until reviewed; it is
+# keyed on group and handler, so a second path to the same handler is caught instead by the route
+# pins in temper-api (the cron group's nine paths in embed_internal's tests, the intake's one POST
+# in routes::tests::the_intake_is_one_post_route).
 #
 # On slack_mint_internal_routes specifically: it is a THIRD signature group rather than a route on
 # slack_link_internal_routes because the keys must differ. Link-state answers "is this principal
@@ -807,6 +810,19 @@ if [[ -n "$ALIASED" ]]; then
   printf '%s\n' "$ALIASED" | sed 's/^/  /' >&2
   fail=1
 fi
+
+# (g) The cron and intake handlers check nothing themselves: their gate is the tier layer of the
+# one group that mounts them. Mounted from any other routes file, a handler would be served under
+# that file's gate, or none, so each handler those two groups name is named in no other.
+for gated in embed_internal.rs webhook_intake.rs; do
+  for handler in $(grep -Eo 'handlers::[a-z_]+::[a-z_]+' "$ROUTES/$gated" | sort -u); do
+    ELSEWHERE="$(grep -ln "$handler" "$ROUTES"/*.rs | grep -v "/$gated\$" || true)"
+    if [[ -n "$ELSEWHERE" ]]; then
+      echo "audit-route-auth: FAIL — $handler (gated by $gated's tier) is also named in: $ELSEWHERE" >&2
+      fail=1
+    fi
+  done
+done
 
 if [[ "$fail" == "0" ]]; then
   echo "audit-route-auth: OK — $(printf '%s\n' "$REVIEW_CURRENT" | grep -c .) reviewed unauth routes; $(printf '%s\n' "$ALL" | grep -Ec "^($AUTH_COVERED)"$'\t') auth-covered; table rows and wiring present."

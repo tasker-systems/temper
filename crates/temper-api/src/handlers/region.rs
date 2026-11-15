@@ -35,8 +35,6 @@ pub async fn dispatch(
     State(state): State<AppState>,
     Query(q): Query<RegionDispatchQuery>,
 ) -> ApiResult<Json<RegionDispatchSummary>> {
-    // Fail-closed when unconfigured: no secret ⇒ endpoint disabled.
-
     let summary = region_service::dispatch_tick(&state.pool, q.cap).await?;
     tracing::info!(
         claimed = summary.claimed,

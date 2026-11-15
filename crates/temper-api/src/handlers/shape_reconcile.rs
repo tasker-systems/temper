@@ -37,7 +37,6 @@ pub async fn dispatch(
     State(state): State<AppState>,
     Query(q): Query<ShapeReconcileQuery>,
 ) -> ApiResult<Json<ShapeReconcileSummary>> {
-    // Fail-closed when unconfigured: no secret ⇒ endpoint disabled.
     // A `cap` below 1 is the caller's fault, refused as the auditor door refuses it; above the
     // ceiling the service clamps it.
     validate_cap(q.cap.map(i64::from))?;

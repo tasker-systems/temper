@@ -40,10 +40,10 @@ pub struct ApiConfig {
     /// Shared secret gating the internal embed-dispatch drain endpoint (issue #299), called by the
     /// Vercel cron. `None` disables the endpoint (a deployment with no drain configured).
     pub embed_dispatch_secret: Option<String>,
-    /// The one host the self-gated cron doors answer on: this deployment's own generated URL,
-    /// which Vercel exposes as `VERCEL_URL` and which Vercel Cron invokes. Every other host —
-    /// the public production alias, a custom domain, the UI's `/api` proxy — gets a 404 before
-    /// the bearer is examined, so on a Vercel deployment exposing its system environment
+    /// The one host the cron doors (the `CronSecret` tier) answer on: this deployment's own
+    /// generated URL, which Vercel exposes as `VERCEL_URL` and which Vercel Cron invokes. Every
+    /// other host — the public production alias, a custom domain, the UI's `/api` proxy — gets the
+    /// uniform pre-identity 401 before the bearer is examined, so on a Vercel deployment exposing its system environment
     /// variables the secret is not the only control between the internet and a door that drains
     /// erasure deletes.
     ///

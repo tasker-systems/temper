@@ -85,8 +85,10 @@ crons are configured**. `vercel.json` declares twelve:
 | every 5 minutes | `/api/shape/reconcile` | Shape reconciliation: an artifact committed before its family's shape was declared, or rehomed under another shape, never gains a verdict and reads `declared_not_yet_checked`. |
 
 On Vercel these doors answer only on the deployment's own generated URL, which is the host
-Vercel Cron calls (`VERCEL_URL`). Your public domain answers them `404`, so a cron pointed at the
-public domain from outside Vercel never runs. Keep **Automatically expose System Environment
+Vercel Cron calls (`VERCEL_URL`). Your public domain answers them `401`, the same refusal as a
+wrong secret, so a cron pointed at the public domain from outside Vercel never runs. The API's
+`auth error` log line tells the two apart: its `cause` is `cron_wrong_host` for the host and
+`cron_bad_secret` for the secret. Keep **Automatically expose System Environment
 Variables** on in the project settings: without `VERCEL_URL` the pin falls away and the bearer
 secret is the only gate.
 

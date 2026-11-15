@@ -114,7 +114,7 @@ pub async fn receive(
         );
     }
 
-    // 3. Read the provider's own event name. `provider` comes from the signed `trigger` claim, so
+    // Read the provider's own event name. `provider` comes from the signed `trigger` claim, so
     //    the dispatch is attested.
     //
     //    A provider with a rule whose header is absent is a FAILURE, not a refusal: the event name
@@ -126,7 +126,7 @@ pub async fn receive(
     //    makes that assumption fail loudly on the first real forward rather than quietly.
     let event_type = provider_event_type(&verified.provider, &headers)?;
 
-    // 4. Hand over, recording the attestation in the same transaction as the event: it is
+    // Hand over, recording the attestation in the same transaction as the event: it is
     //    recorded exactly when a receipt lands, and a receipt that fails or is cut off never
     //    records it. Connect sends one attestation for every delivery in a burst, so a repeat
     //    within `ATTESTATION_REPEAT_WINDOW_SECS` of the first lands; a later one is a replay.

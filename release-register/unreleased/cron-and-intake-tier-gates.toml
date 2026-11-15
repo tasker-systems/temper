@@ -28,11 +28,14 @@ Who observes it: an unauthenticated caller of a cron door or the intake gets the
 every method, query and body. Vercel Cron (the pinned host, the secret, GET or POST) and Vercel
 Connect (an attested POST) are unchanged.
 
-This supersedes one sentence of precondition-refusal-after-authentication, which is in this
+This supersedes two statements of precondition-refusal-after-authentication, which is in this
 window, so the release carries only this behaviour. Its "on the public host the cron host pin's
 404 is again the answer to a header-bearing request" no longer holds: the cron doors are now the
-CronSecret tier, and a cron door on the public host gets the uniform 401, header or not.
-Everything else in that entry stands.
+CronSecret tier, and a cron door on the public host gets the uniform 401, header or not. And its
+"checked in the handler: the webhook intake, right after its broker attestation verifies and
+before anything is resolved or written" no longer holds: the intake is now in the refused set,
+answered by the route table's layer after the BrokerAttested gate admits the caller and resolves
+its connection, and before anything is written. Everything else in that entry stands.
 
 Why behavioral: no shape moved and openapi.json is unchanged (none of these doors is documented).
 Review-owned.

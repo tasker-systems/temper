@@ -157,6 +157,68 @@ PYEOF
 run_test "CronSecret arm without require_cron_secret: fails" "$FIX" 1 \
     "'cron_secret::require_cron_secret' not applied by apply_tier"
 
+# The intake back to SelfGated: the attestation would be checked in the handler again, after the
+# method router's 405-with-Allow, the body read and `100 Continue` had answered an unattested caller.
+FIX="${FIXTURE_DIR}/intake_tier_flip"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'key: "webhook_intake_routes", tier: Tier::BrokerAttested'
+assert old in s
+s = s.replace(old, 'key: "webhook_intake_routes", tier: Tier::SelfGated')
+open(p, "w").write(s)
+PYEOF2
+run_test "webhook_intake_routes tier flipped back to SelfGated: fails" "$FIX" 1 \
+    "table row changed"
+
+# The intake marked Exempt: an attested caller's precondition header would reach a handler that
+# honours none, unrefused.
+FIX="${FIXTURE_DIR}/intake_precondition_exempt"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'serves: Serves::AppOnly, preconditions: Preconditions::Refused },'
+row = [l for l in s.splitlines() if 'key: "webhook_intake_routes"' in l][0]
+assert old in row
+s = s.replace(row, row.replace('Preconditions::Refused', 'Preconditions::Exempt'))
+open(p, "w").write(s)
+PYEOF2
+run_test "webhook_intake_routes preconditions flipped to Exempt: fails" "$FIX" 1 \
+    "table row changed"
+
+# The BrokerAttested arm losing its gate serves the intake unattested.
+FIX="${FIXTURE_DIR}/intake_gate_dropped"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "            broker_attested::require_broker_attestation,\n"
+assert old in s
+s = s.replace(old, "            relay_trust::require_relay_trust,\n")
+open(p, "w").write(s)
+PYEOF2
+run_test "BrokerAttested arm without require_broker_attestation: fails" "$FIX" 1 \
+    "'broker_attested::require_broker_attestation' not applied by apply_tier"
+
+# A cron handler mounted from another group would be served under that group's gate, not the
+# CronSecret tier's.
+FIX="${FIXTURE_DIR}/cron_handler_elsewhere"
+copy_module "$FIX"
+python3 - "$FIX/public.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s += "\n// fixture\nfn _stray() { let _ = crate::handlers::region::dispatch; }\n"
+open(p, "w").write(s)
+PYEOF2
+run_test "a cron handler named in another routes file: fails" "$FIX" 1 \
+    "handlers::region::dispatch (gated by embed_internal.rs's tier) is also named in"
+
 # --- (d) a builder that stops consuming the table must fail ---
 # The internal function assembling its own router is a parallel wiring path the row pins
 # cannot see; the mount-from-table assertion is what catches it.
@@ -630,8 +692,9 @@ PYEOF2
 done
 
 # --- (p) the precondition designation and placement ---
-# A self-gated cron row marked Refused would answer an anonymous caller 400 before its own gate; a
-# gated row marked Exempt would drop a client's precondition unrefused. The designation is part of
+# A cron row marked Refused would change what the admitted cron caller gets for a precondition
+# header (the crons are exempt by ruling); a gated row marked Exempt would drop a client's
+# precondition unrefused. The designation is part of
 # the pinned row, so either flip is a row change.
 FIX="${FIXTURE_DIR}/precondition_designation_flip"
 copy_module "$FIX"

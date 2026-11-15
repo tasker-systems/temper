@@ -110,3 +110,55 @@ async fn without_a_cron_host_the_bearer_alone_gates(pool: PgPool) {
         );
     }
 }
+
+// FAILS IF: a cron door refuses the caller it exists for (the pinned host with the secret), so a
+// gate that refused everything would pass the refusal tests above. `warm` is left out: admitted,
+// it loads the ONNX embedder, which a test should not; its gate is the same tier layer.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_pinned_host_with_the_secret_is_admitted(pool: PgPool) {
+    let app = common::setup_test_app_with_config(pool, |c| {
+        c.cron_host = Some(PINNED.to_string());
+        c.embed_dispatch_secret = Some(SECRET.to_string());
+    })
+    .await;
+    for door in cron_doors().into_iter().filter(|d| *d != "/api/embed/warm") {
+        let (code, body) = answer(&app, door, PINNED, Some(SECRET)).await;
+        assert_ne!(
+            code,
+            StatusCode::UNAUTHORIZED,
+            "{door} refused its caller: {body}"
+        );
+    }
+}
+
+// FAILS IF: HEAD or a non-preflight OPTIONS on a cron door off the pinned host answers anything
+// but the refusal (a 405 with the path's `Allow`, or a 200 from a method fallback).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn head_and_options_off_the_pinned_host_are_refused(pool: PgPool) {
+    let app = common::setup_test_app_with_config(pool, |c| {
+        c.cron_host = Some(PINNED.to_string());
+        c.embed_dispatch_secret = Some(SECRET.to_string());
+    })
+    .await;
+    for door in cron_doors() {
+        for method in [reqwest::Method::HEAD, reqwest::Method::OPTIONS] {
+            let response = app
+                .client
+                .request(method.clone(), app.url(door))
+                .header(reqwest::header::HOST, "temperkb.io")
+                .bearer_auth(SECRET)
+                .send()
+                .await
+                .expect("request");
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {door} off the pinned host"
+            );
+            assert!(
+                response.headers().get("allow").is_none(),
+                "{method} {door} carries Allow"
+            );
+        }
+    }
+}
