@@ -509,6 +509,7 @@ async fn allow_rides_only_a_405(pool: PgPool) {
         Some("GET,HEAD,POST"),
         "{admitted:?}"
     );
+    assert_eq!(admitted.body, "", "the 405 has no body: {admitted:?}");
 }
 
 // FAILS IF: a response lacks `x-request-id`, two requests share one, or the id is taken from the
@@ -2169,4 +2170,37 @@ async fn sweep_c_unsigned_expect_continue_is_uniform(pool: PgPool) {
             "{path}"
         );
     }
+}
+
+// FAILS IF: the Slack link callback, a public route, tells an unauthenticated caller how the
+// instance is configured: an instance with no account linking must answer a code and state
+// exactly as a configured one answers a state it does not know (AR-10).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_slack_callback_does_not_say_how_it_is_configured(pool: PgPool) {
+    let unconfigured = common::setup_test_app_with_config(pool.clone(), |_| {}).await;
+    let configured = common::setup_test_app_with_config(pool.clone(), |config| {
+        config.slack_link = Some(temper_services::config::SlackLinkConfig {
+            client_id: "slack-link-client".to_string(),
+            hmac_secret: "link-secret".to_string(),
+            public_base_url: "https://temper.example".to_string(),
+            vault_key: temper_services::services::grant_crypto::VaultKey::from_base64(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            )
+            .expect("a 32-byte key"),
+            retired_vault_keys: Default::default(),
+        });
+    })
+    .await;
+    let path = format!(
+        "/api/auth/slack/callback?code=abc&state={}",
+        Uuid::new_v4().simple()
+    );
+    let expired = send(&configured, Method::GET, &path, &[]).await;
+    assert_eq!(expired.status, 200, "{expired:?}");
+    assert!(
+        expired.body.contains("That link has expired"),
+        "{expired:?}"
+    );
+    let answer = send(&unconfigured, Method::GET, &path, &[]).await;
+    assert_eq!(answer.without_request_id(), expired.without_request_id());
 }

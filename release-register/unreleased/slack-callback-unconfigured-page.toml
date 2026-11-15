@@ -1,0 +1,17 @@
+title    = "The Slack link callback answers an unconfigured instance with the expired-link page"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+What changed: GET /api/auth/slack/callback, a public route, carrying a code and a state on an
+instance with no Slack account linking configured, now renders the page an expired or replayed
+link gets ("That link has expired or was already used. Mention @temper again to get a fresh
+one."), not "Account linking is not configured on this instance." The page no longer tells an
+unauthenticated caller how the instance is configured. The cause is logged at warn as "slack
+link: rejected (account linking is not configured on this instance)".
+
+Who observes it: an operator diagnosing a link flow that never succeeds, who now reads the cause
+from temper-api's log, not from the page (docs/playbooks/slack-mentions.md, Troubleshooting). A
+user on a configured instance sees no change.
+'''
