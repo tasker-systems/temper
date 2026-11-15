@@ -285,7 +285,8 @@ pub enum UnauthCause {
     /// The webhook intake's broker attestation did not verify, named no live connection, or was
     /// replayed.
     IntakeUnattested,
-    /// A path no route matches, from a caller with no validly signed bearer.
+    /// A path no route matches: on temper-api from a caller with no validly signed bearer, on
+    /// temper-mcp outside its discovery and OAuth families from any caller.
     UnmatchedPath,
     /// A path under a refused prefix (`/internal/`) that no route matches, from any caller.
     RefusedPrefix,

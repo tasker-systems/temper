@@ -81,7 +81,7 @@ vercel env add SLACK_SIGNING_SECRET production
 The account link and the answers need four more. `TEMPER_API_URL` is the temper API this agent
 asks about each mentioning user's link state and asks for their access token (e.g.
 `https://temperkb.io`); `TEMPER_MCP_URL` is the MCP endpoint the model's tools call (e.g.
-`https://temperkb.io/api/mcp`); `SLACK_LINK_SECRET` and `SLACK_MINT_SECRET` are the shared HMAC
+`https://temperkb.io/mcp`); `SLACK_LINK_SECRET` and `SLACK_MINT_SECRET` are the shared HMAC
 secrets gating `POST /internal/slack/link-state` and `POST /internal/slack/mint`:
 
 ```bash

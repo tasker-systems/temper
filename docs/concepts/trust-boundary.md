@@ -118,12 +118,31 @@ The public routes are:
   instance with no Slack linking configured) with one page, so its page does not say how the
   instance is configured (its timing can; see the residues);
 - the discovery and OAuth doors the Node and MCP functions serve: `/.well-known/*`, `/oauth/*`,
-  `/mcp` and `/mcp/*`. On the Vercel deployment each of those functions is also reachable at its
-  own path under `/api/` (`/api/oauth/*`, `/api/auth/cli-callback`, `/api/auth/mcp-callback`,
-  `/api/mcp`; the two API functions, `/api/axum` and `/api/internal`, too), because `vercel.json` serves the function files before its rewrites. These
-  functions answer for themselves, not with this page's refusal: the MCP function answers a path
-  it does not serve under its prefixes with its own `404`, so a caller can tell those prefixes are
-  MCP's. Their answers are outside what this page holds the API to;
+  `/mcp` and `/mcp/*`. Their answers are their own, not this page's refusal. The rest of that
+  public, auth-establishing surface, stated so nobody has to rediscover it:
+  - **The `/api/` aliases.** `vercel.json` serves the function files before its rewrites, so each
+    function is also reachable at its own path under `/api/`. The OAuth functions answer there as
+    they do at their doors (`/api/oauth/*`). `/api/auth/cli-callback` and `/api/auth/mcp-callback`
+    have no other path: they are the redirect URIs registered with the identity provider. The
+    API and MCP functions' own paths (`/api/axum`, `/api/internal`, `/api/mcp`) are unmatched in
+    their routers and answer the refusal.
+  - **`/build-marker.txt`**, the static file the build writes because Vercel's build refuses an
+    empty output directory (`scripts/vercel-build.sh`). It says the project has no static output.
+  - **The MCP function's unmatched paths.** Under `/.well-known/` and `/oauth/` it answers its
+    structured `404`: RFC 8615 makes that the answer for a name a server does not publish, and MCP
+    clients probe `/.well-known/oauth-protected-resource/mcp` and the OpenID configuration and
+    fall back on it. Anywhere else, such as `/api/mcp`, it answers the refusal, the same bytes as
+    the API's, whoever asks. `/mcp` and everything under it but `/mcp/health` keep the gate's
+    `401` with `WWW-Authenticate`, which is how an MCP client finds the authorization server.
+  - **The MCP function's headers.** It has no service outside routing, so its answers carry no
+    `x-request-id`, and its CORS layer answers every `OPTIONS` itself, `200` on every path alike
+    (with `Allow` only on its public routes), where the API routes a non-preflight `OPTIONS` to the
+    refusal. While its key store is failing, `/mcp` answers a bearer `503` and its other refusals
+    stay the refusal. These sort the MCP function's paths from the API's; `vercel.json` already says which
+    paths those are.
+  - **Case.** If the platform matches routes without regard to case, a case variant of a door
+    reaches that door's function. Every router here matches bytes, so the variant either reaches a
+    public door or gets the refusal;
 - the API reference under `/api-docs/`, only when an operator enables it, so whether it answers
   says whether it is enabled.
 

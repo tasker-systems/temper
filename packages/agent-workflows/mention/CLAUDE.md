@@ -426,7 +426,7 @@ which is why parsing is never necessary.
 > reason `lib/mcp-auth.ts` exists: a module-load throw makes a plain `import` fail in a test
 > process. A colliding deployment is therefore caught on its first mention, not at deploy, which is
 > acceptable only because a correctly-paired temper-api will not have booted.
-| `TEMPER_MCP_URL`       | temper-mcp endpoint the connection's tools call, e.g. `https://temperkb.io/api/mcp`. Same `https`-off-loopback rule as `TEMPER_API_URL`; a plaintext value fails the module load. |
+| `TEMPER_MCP_URL`       | temper-mcp endpoint the connection's tools call, e.g. `https://temperkb.io/mcp`. Same `https`-off-loopback rule as `TEMPER_API_URL`; a plaintext value fails the module load. |
 
 The first five are read at request time (`agent/lib/link.ts`'s `requireEnv`), so an unset one
 throws on the first mention rather than at deploy. `TEMPER_MCP_URL` is the exception: it is read at

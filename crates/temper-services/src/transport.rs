@@ -300,9 +300,10 @@ pub const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// Apply the layers that sit **below** a surface's root span: the surface's fallback, request
 /// decompression, the request-body ceiling, and the baseline response headers.
 ///
-/// The fallback is the surface's to choose. MCP answers an unmatched path with
-/// [`fallback_handler`]'s 404; temper-api answers it through a declared fallback that refuses an
-/// unauthenticated caller with the uniform 401 (`routes::Fallback` there).
+/// The fallback is the surface's to choose. temper-api answers an unmatched path through a declared
+/// fallback that refuses an unauthenticated caller with the uniform 401 (`routes::Fallback` there).
+/// MCP answers [`fallback_handler`]'s 404 under its discovery and OAuth families and the uniform
+/// 401 everywhere else (`router::unmatched` there).
 ///
 /// Call this first, then add the surface's own root span and its CORS layer:
 ///
