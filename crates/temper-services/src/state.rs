@@ -190,18 +190,19 @@ struct Shared {
     /// slower stale one is still in flight, and that one's later failure must not mark a cache that
     /// is fresh.
     refresh_generation: std::sync::atomic::AtomicU64,
-    /// Whether a background refresh started by [`JwksKeyStore::poke`] is still running. At most one
-    /// runs at a time, so a flood of refusals is one spawned task, not one per request.
-    poke_in_flight: std::sync::atomic::AtomicBool,
-    /// The id of the most recently started poke refresh (1, 2, …).
-    poke_started: std::sync::atomic::AtomicU64,
+    /// The poke refresh's state in one word: the id of the most recent one (1, 2, …) shifted left
+    /// by one, with the low bit set while it runs. At most one runs at a time, so a flood of
+    /// refusals is one spawned task, not one per request. One atomic, so a joiner reads "running"
+    /// and "which one" together: read apart, a joiner could see a refresh just claimed but still
+    /// carrying the previous id, find that id already done, and stop waiting at once.
+    poke_flight: std::sync::atomic::AtomicU64,
     /// The id of the most recently finished poke refresh, however it finished: what a request
     /// joining a refresh waits on, for that refresh's own id. Ids rather than a bare "something
     /// finished", so the end of an earlier refresh never wakes a request waiting on a later one.
     poke_done: tokio::sync::watch::Sender<u64>,
 }
 
-/// Clears `poke_in_flight` and announces the end of a poke's refresh when the task ends, by
+/// Marks a poke's refresh finished and announces its end when the task ends, by
 /// return, panic or cancellation alike. A flag left set would make every later poke a no-op, and a
 /// failing store would then never refresh again.
 struct PokeFinished(Arc<Shared>, u64);
@@ -213,8 +214,8 @@ impl Drop for PokeFinished {
         // id already done, rather than waiting on a flight that has ended.
         self.0.poke_done.send_modify(|done| *done = (*done).max(id));
         self.0
-            .poke_in_flight
-            .store(false, std::sync::atomic::Ordering::SeqCst);
+            .poke_flight
+            .store(id << 1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -365,8 +366,9 @@ impl JwksKeyStore {
             return true;
         }
         self.poke();
-        if self.shared.poke_in_flight.load(Ordering::SeqCst) {
-            let flight = self.shared.poke_started.load(Ordering::SeqCst);
+        let state = self.shared.poke_flight.load(Ordering::SeqCst);
+        if state & 1 == 1 {
+            let flight = state >> 1;
             let mut done = self.shared.poke_done.subscribe();
             let _ = tokio::time::timeout_at(deadline, done.wait_for(|d| *d >= flight)).await;
         }
@@ -392,15 +394,19 @@ impl JwksKeyStore {
         if !self.shared.cache_is_stale() {
             return;
         }
+        let idle = self.shared.poke_flight.load(Ordering::SeqCst);
+        if idle & 1 == 1 {
+            return;
+        }
+        let id = (idle >> 1) + 1;
         if self
             .shared
-            .poke_in_flight
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .poke_flight
+            .compare_exchange(idle, (id << 1) | 1, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
             return;
         }
-        let id = self.shared.poke_started.fetch_add(1, Ordering::SeqCst) + 1;
         let finished = PokeFinished(Arc::clone(&self.shared), id);
         tokio::spawn(async move {
             if let Err(e) = finished.0.refresh_stale().await {
@@ -432,9 +438,8 @@ impl JwksKeyStore {
     ///
     /// **Residuals** (declared in `docs/concepts/trust-boundary.md`). Transitions are driven by
     /// requests: a refresh is tried when a bearer is verified against a stale cache or when a
-    /// refusal joins one, so on a cold process, and at the moment the TTL lapses, the refusals
-    /// answered before a slow or hanging fetch gives up are answered before any refresh has
-    /// failed. Each process (each serverless function) learns of an outage on its own.
+    /// refusal joins one, and a request that joined one waits for it to end. Each process (each
+    /// serverless function) learns of an outage on its own.
     pub fn is_failing(&self) -> bool {
         self.shared.is_failing()
     }
@@ -460,8 +465,7 @@ impl Shared {
             unknown_kid_refresh_interval: Duration::from_secs(60),
             failing: std::sync::atomic::AtomicBool::new(false),
             refresh_generation: std::sync::atomic::AtomicU64::new(0),
-            poke_in_flight: std::sync::atomic::AtomicBool::new(false),
-            poke_started: std::sync::atomic::AtomicU64::new(0),
+            poke_flight: std::sync::atomic::AtomicU64::new(0),
             poke_done: tokio::sync::watch::Sender::new(0),
         }
     }
@@ -499,8 +503,7 @@ impl Shared {
             unknown_kid_refresh_interval: Duration::from_secs(60),
             failing: std::sync::atomic::AtomicBool::new(false),
             refresh_generation: std::sync::atomic::AtomicU64::new(0),
-            poke_in_flight: std::sync::atomic::AtomicBool::new(false),
-            poke_started: std::sync::atomic::AtomicU64::new(0),
+            poke_flight: std::sync::atomic::AtomicU64::new(0),
             poke_done: tokio::sync::watch::Sender::new(0),
         }
     }
@@ -526,8 +529,11 @@ impl Shared {
         enum Next {
             Serve(VerificationKey),
             /// Fresh cache, but nothing in it answers for this `kid`. The key may have been
-            /// published since the last fetch — this is the rotation case.
-            UnknownKid,
+            /// published since the last fetch — this is the rotation case. Carries whether the
+            /// cache was fetched for this request, which no refetch could improve on.
+            UnknownKid {
+                fetched_since_asked: bool,
+            },
             /// Absent or expired cache: there is nothing to select from until it is refreshed.
             Stale,
         }
@@ -543,7 +549,9 @@ impl Shared {
                             key: c.key.clone(),
                             algorithm: c.algorithm,
                         }),
-                        None => Next::UnknownKid,
+                        None => Next::UnknownKid {
+                            fetched_since_asked: cached.fetched_at >= asked,
+                        },
                     }
                 }
                 _ => Next::Stale,
@@ -552,19 +560,25 @@ impl Shared {
 
         match next {
             Next::Serve(vk) => return Ok(vk),
-            // Nothing in the cache may be served, so this must refresh before it can answer, and a
-            // failure is the endpoint's rather than the token's.
             // The handle already joined a refresh for its bounded wait; a cache still unusable
             // after it is an outage, or a fetch still in flight, and either is the endpoint's
             // rather than the token's. Never wait here for the fetch's own timeout.
             Next::Stale => {
                 return Err(KeyLookupError::Unavailable(if self.is_failing() {
-                    "JWKS endpoint failing; refreshing in the background".to_string()
+                    "JWKS endpoint failing".to_string()
                 } else {
                     "JWKS refresh still in flight".to_string()
                 }))
             }
-            Next::UnknownKid => {
+            // The document was fetched after this request began: it is the newest there is, and a
+            // second fetch would only stack another wait onto a request that already waited for
+            // one. The `kid` is unpublished.
+            Next::UnknownKid {
+                fetched_since_asked: true,
+            } => {}
+            Next::UnknownKid {
+                fetched_since_asked: false,
+            } => {
                 // Best-effort. The cache still holds usable keys, so a JWKS blip must not be
                 // reported as a fetch failure for a token whose `kid` may simply not exist.
                 if let Err(e) = self.refresh_for_unknown_kid().await {
@@ -794,6 +808,11 @@ impl Shared {
             Ok(guard) => !matches!(guard.as_ref(), Some(c) if c.fetched_at.elapsed() < self.ttl),
             Err(_) => false,
         }
+    }
+
+    #[cfg(test)]
+    fn poke_running(&self) -> bool {
+        self.poke_flight.load(std::sync::atomic::Ordering::SeqCst) & 1 == 1
     }
 
     fn is_failing(&self) -> bool {
@@ -1432,10 +1451,7 @@ mod tests {
             "the fetch ended, and failed, inside the lookup"
         );
         assert!(
-            !store
-                .shared
-                .poke_in_flight
-                .load(std::sync::atomic::Ordering::SeqCst),
+            !store.shared.poke_running(),
             "nothing is left running after the request"
         );
     }
@@ -1463,21 +1479,17 @@ mod tests {
     #[tokio::test]
     async fn the_end_of_an_earlier_refresh_does_not_release_a_later_waiter() {
         let store = JwksKeyStore::new("http://127.0.0.1:1/.well-known/jwks.json".to_string());
-        // An earlier flight has ended.
-        store.shared.poke_done.send_modify(|d| *d = 1);
+        // Flight 2 is running, held by hand so it never ends during the wait; flight 1 has not
+        // announced its end yet.
         store
             .shared
-            .poke_started
-            .store(1, std::sync::atomic::Ordering::SeqCst);
-        // Flight 2 is in flight (held by hand, so it never ends during the wait).
-        store
-            .shared
-            .poke_in_flight
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        store
-            .shared
-            .poke_started
-            .store(2, std::sync::atomic::Ordering::SeqCst);
+            .poke_flight
+            .store((2 << 1) | 1, std::sync::atomic::Ordering::SeqCst);
+        let late = Arc::clone(&store.shared);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            late.poke_done.send_modify(|d| *d = 1);
+        });
         let started = Instant::now();
         let usable = store
             .refresh_within(tokio::time::Instant::now() + Duration::from_millis(300))
@@ -1487,6 +1499,26 @@ mod tests {
             started.elapsed() >= Duration::from_millis(300),
             "released by flight 1's end after {:?}",
             started.elapsed()
+        );
+    }
+
+    // FAILS IF: a cold lookup naming an unpublished `kid` fetches twice, stacking an unknown-kid
+    // refetch onto the stale refresh it already waited for (a bearer door would wait two fetches
+    // where every other door waits one).
+    #[tokio::test]
+    async fn an_unknown_kid_on_a_cold_cache_is_one_fetch() {
+        let server = jwks_server(vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)]).await;
+        let store = JwksKeyStore::new(format!("{}/.well-known/jwks.json", server.uri()));
+        let answer = store
+            .get_decoding_key_for_token(&sign_with(Some("nope"), TEST_PRIVATE_PEM))
+            .await;
+        assert!(
+            matches!(answer, Err(KeyLookupError::UnknownKid(_))),
+            "{answer:?}"
+        );
+        assert_eq!(
+            server.received_requests().await.unwrap_or_default().len(),
+            1
         );
     }
 
@@ -1525,10 +1557,7 @@ mod tests {
         until(|| Arc::strong_count(&store.shared) == 1).await;
         store.poke();
         assert!(
-            !store
-                .shared
-                .poke_in_flight
-                .load(std::sync::atomic::Ordering::Acquire),
+            !store.shared.poke_running(),
             "a poke on a fresh cache starts nothing"
         );
         assert_eq!(

@@ -27,7 +27,9 @@ every pre-identity refusal joins one shared refresh of the store, whatever its d
 it from the request's arrival until a little past the JWKS fetch's five-second timeout; a bearer
 lookup joins the same refresh the same way. So an instance whose routes verify no bearer, such as
 a separately deployed internal function, learns of an outage too, a failing store recovers without
-bearer traffic, and every refresh ends inside a request that is waiting on it. A request that
+bearer traffic, and a refresh normally ends inside a request waiting on it. While a key endpoint
+hangs, every refusal is held for about five seconds, a cost per unauthenticated request stated with
+the other residues. A request that
 arrived while the store was failing, or whose wait ended with no usable keys, is answered with the
 unavailable body (temper-mcp answers 503) whatever its door, so a valid bearer refused during an
 outage is told to retry rather than that its credential was rejected. The store logs
@@ -58,7 +60,8 @@ across every gate kind and credential shape, with the reconcile, mint and cron s
 unset;
 a_failing_key_store_makes_every_refusal_unavailable,
 an_internal_app_no_bearer_reaches_still_reports_the_outage,
-a_hanging_key_endpoint_holds_every_refusal_alike, a_failing_store_recovers_with_no_bearer),
+a_hanging_key_endpoint_holds_every_refusal_alike, a_failing_store_recovers_with_no_bearer,
+the_recovering_request_answers_unavailable_on_a_bearer_door),
 crates/temper-api/tests/auth_error_log_test.rs, every_pre_identity_cause_renders_the_same_bytes
 in temper-services' error module, the sticky failure flag's tests in temper-services' state module,
 and the_uniform_pre_identity_401_maps_to_reauthentication in temper-mcp. Release relevance:

@@ -959,23 +959,52 @@ async fn a_hanging_key_endpoint_holds_every_refusal_alike(pool: PgPool) {
     check("failing, fetch hanging again", &pair(&app).await, fetch);
 }
 
-// FAILS IF: a failing store recovers only when a bearer drives a refresh: with no bearer traffic
-// (a signature door's callers, a prober) the instance would answer "unavailable" for as long as the
-// outage's last bearer left it, after the endpoint is back.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_failing_store_recovers_with_no_bearer(pool: PgPool) {
+/// An app whose key endpoint refuses until the store is failing, then serves again, with the
+/// failed-refresh backoff waited out. No bearer is sent on the way.
+async fn failed_then_recovered(pool: &PgPool) -> common::TestApp {
     let mode = std::sync::Arc::new(std::sync::Mutex::new(KeyEndpoint::Refuse));
-    let app = app_with_key_endpoint(&pool, key_endpoint(mode.clone()).await).await;
+    let app = app_with_key_endpoint(pool, key_endpoint(mode.clone()).await).await;
     until_answered(&unavailable(), std::time::Duration::from_secs(5), || {
         signed_refusal(&app, "/internal/slack/mint")
     })
     .await;
-
     *mode.lock().expect("mode lock") = KeyEndpoint::Serve;
-    // Past the failed-refresh backoff, the next refusal refetches and the store is healthy. That
-    // first request arrived while the store was failing, so it still answers "unavailable", and
-    // alike on a bearer door, whose own lookup is what runs the refresh, and any other.
     tokio::time::sleep(std::time::Duration::from_millis(5500)).await;
+    app
+}
+
+// FAILS IF: a failing store recovers only when a bearer drives a refresh: with no bearer traffic
+// (a signature door's callers, a prober) the instance would answer "unavailable" for as long as the
+// outage's last bearer left it, after the endpoint is back. No bearer is sent at all.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_failing_store_recovers_with_no_bearer(pool: PgPool) {
+    let app = failed_then_recovered(&pool).await;
+    // The request that runs the recovering refresh arrived while the store was failing.
+    let first = signed_refusal(&app, "/internal/slack/mint").await;
+    assert_eq!(
+        without_cors(&first),
+        unavailable(),
+        "the recovering request"
+    );
+    let answers = vec![
+        (
+            "signature door".to_string(),
+            signed_refusal(&app, "/internal/slack/mint").await,
+        ),
+        (
+            "no bearer".to_string(),
+            send(&app, Method::GET, "/api/profile", &[]).await,
+        ),
+    ];
+    assert_refusals(&answers, &u401());
+}
+
+// FAILS IF: the request that sees the recovery answers by its door: on a bearer door its own
+// lookup runs the recovering refresh, and if "was failing" were read after that, it alone would
+// answer the constant refusal while every other door's first request says "unavailable".
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_recovering_request_answers_unavailable_on_a_bearer_door(pool: PgPool) {
+    let app = failed_then_recovered(&pool).await;
     let first = send(
         &app,
         Method::GET,
@@ -986,23 +1015,14 @@ async fn a_failing_store_recovers_with_no_bearer(pool: PgPool) {
     assert_eq!(
         without_cors(&first),
         unavailable(),
-        "the request that saw the recovery, on a bearer door"
+        "the recovering request"
     );
-    let answers = vec![
-        (
-            "bearer".to_string(),
-            send(
-                &app,
-                Method::GET,
-                "/api/profile",
-                &[("authorization", "Bearer garbage")],
-            )
-            .await,
-        ),
-        (
-            "no bearer".to_string(),
-            send(&app, Method::GET, "/api/profile", &[]).await,
-        ),
-    ];
-    assert_refusals(&answers, &u401());
+    let next = send(
+        &app,
+        Method::GET,
+        "/api/profile",
+        &[("authorization", "Bearer garbage")],
+    )
+    .await;
+    assert_eq!(without_cors(&next), u401(), "after recovery");
 }
