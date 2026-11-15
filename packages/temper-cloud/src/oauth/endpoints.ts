@@ -37,6 +37,7 @@ import {
 import { reconcileMemberships } from "./reconcile.js";
 import {
   RECONCILE_CHANNEL,
+  RESOLVE_CHANNEL,
   recordChannelFailure,
   recordChannelSuccess,
 } from "./reconcile-health.js";
@@ -451,11 +452,14 @@ export async function handleSamlAcs(req: Request, db: NeonClient): Promise<Respo
           email_verified: claims.email_verified,
         })
       ).profile_id;
+      // Recorded the way the reconcile above records, and neither write can throw.
+      await recordChannelSuccess(db, RESOLVE_CHANNEL);
     } catch (resolveErr) {
       logger.error(
         { err: resolveErr instanceof Error ? resolveErr.message : String(resolveErr) },
         "SAML ACS: principal resolve failed (fail-open, login proceeds without a chain owner)",
       );
+      await recordChannelFailure(db, RESOLVE_CHANNEL, resolveErr);
     }
 
     const code = newOpaqueToken();
@@ -741,12 +745,13 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     // next — carries the owner, rather than waiting out the chain's remaining lifetime.
     //
     // THIS HEALS A TRANSIENT FAILURE ONLY, and the distinction is the whole difference between a
-    // blip and a deployment that never had the mechanism. `resolvePrincipal` opens with
-    // `requireEnv`, so an unset `INTERNAL_RESOLVE_URL` (or a secret the API disagrees with) throws
-    // here exactly as it threw at the ACS — deterministically, every time. Such a deployment mints
-    // ownerless chains forever, the admission gate below is skipped for every one of them, and
-    // `standing_service::apply`'s hook matches nothing. It is not distinguishable at runtime from
-    // a healthy one; what reports it is the Rust-side warning when a terminal transition ends zero
+    // blip and a deployment that never had the mechanism. An unset or mis-pathed
+    // `INTERNAL_RESOLVE_URL`, or a secret the API disagrees with, throws here exactly as it threw
+    // at the ACS — deterministically, every time. Such a deployment mints ownerless chains
+    // forever, the admission gate below is skipped for every one of them, and
+    // `standing_service::apply`'s hook matches nothing. What reports it is the `principal_resolve`
+    // health channel, which both call sites write and the health cron reads (one occurrence of
+    // either cause is sustained), and the Rust-side warning when a terminal transition ends zero
     // chains.
     let profileId = rotated.profileId;
     if (profileId === null) {
@@ -758,11 +763,13 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
             email_verified: rotated.claims.email_verified,
           })
         ).profile_id;
+        await recordChannelSuccess(db, RESOLVE_CHANNEL);
       } catch (resolveErr) {
         logger.error(
           { err: resolveErr instanceof Error ? resolveErr.message : String(resolveErr) },
           "token: chain owner re-resolve failed (chain stays bounded by its absolute lifetime)",
         );
+        await recordChannelFailure(db, RESOLVE_CHANNEL, resolveErr);
       }
     }
 

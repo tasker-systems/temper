@@ -5,7 +5,7 @@ import { logger } from "../logger.js";
  * Whether temper-cloud's fail-open internal calls are REACHING temper-api, recorded where an
  * operator can be told about it.
  *
- * The reconcile call is fail-open by design (spec §3.8): a provisioning failure must never block a
+ * The reconcile and resolve calls are fail-open by design (spec §3.8): a provisioning failure must never block a
  * login. What that costs is that a failure leaves nothing behind but a `logger.error` on a surface
  * with no telemetry pipeline -- `logger.ts` is five lines of pino to stdout -- so de-provisioning
  * can stop for everyone with nothing anywhere saying so. This module is the positive record that
@@ -25,8 +25,11 @@ import { logger } from "../logger.js";
  *
  * ## The cause is load-bearing, not descriptive
  *
- * Two of the four causes are deployment facts -- an unset variable, a secret the API disagrees with
- * -- and one occurrence of either settles the question. The other two can be weather and must
+ * Two of the four causes are deployment facts -- an unset or mis-pathed variable, and a signature
+ * the API refused or a door it does not serve -- and one occurrence of either settles the question.
+ * temper-api refuses an unauthenticated caller the same way whatever the reason, so `unauthorized`
+ * cannot say which of the second pair it was; a wrong path in our own URL is caught before the call
+ * and recorded as `config_missing` instead, so it is never confused with a wrong secret. The other two can be weather and must
  * recur. The reader (`internal_call_health_service` in temper-api) branches on exactly this, which
  * is why classification happens at the point the error is raised rather than by string-matching a
  * message downstream, and why the database enforces the vocabulary rather than trusting this file.
@@ -34,6 +37,13 @@ import { logger } from "../logger.js";
 
 /** The channel name for the SAML membership reconcile call. */
 export const RECONCILE_CHANNEL = "saml_reconcile";
+
+/**
+ * The channel name for the principal resolve call, the reconcile's sibling. Fail-open on the same
+ * rule, and until it had a channel its failure was invisible: a deployment that could never name a
+ * chain's owner looked exactly like a healthy one.
+ */
+export const RESOLVE_CHANNEL = "principal_resolve";
 
 /**
  * How an internal call failed. Closed, and pinned to the CHECK on
@@ -63,6 +73,20 @@ export class InternalCallError extends Error {
     this.name = "InternalCallError";
     this.failureCause = cause;
     this.failureDetail = detail;
+  }
+}
+
+/**
+ * A call this side declined to make because the API would refuse the SUBJECT, not the caller.
+ *
+ * Not a channel failure, so [`recordChannelFailure`] records nothing for it: the channel was not
+ * exercised, and a per-principal refusal recorded at grain (channel) would page about the
+ * deployment on one principal's say-so. The caller still logs it and still fails open.
+ */
+export class SubjectRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SubjectRefused";
   }
 }
 
@@ -132,6 +156,9 @@ export async function recordChannelFailure(
   channel: string,
   err: unknown,
 ): Promise<void> {
+  if (err instanceof SubjectRefused) {
+    return;
+  }
   const { cause, detail } = classifyInternalCallFailure(err);
   try {
     await db`INSERT INTO kb_internal_call_health

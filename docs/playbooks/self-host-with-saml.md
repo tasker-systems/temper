@@ -432,7 +432,7 @@ provisioning occurs (authentication still works).
 | --- | --- | --- |
 | `INTERNAL_RECONCILE_SECRET` | AS + API (shared) | Shared secret gating the internal reconcile call. Same value on both. Unset ⇒ reconcile disabled, no group provisioning. |
 | `INTERNAL_RECONCILE_URL` | AS | Full URL of the `temper-api` `/internal/saml/reconcile` endpoint the AS calls before minting (e.g. `https://<your-api-origin>/internal/saml/reconcile`). |
-| `INTERNAL_RESOLVE_URL` | AS | Full URL of the `temper-api` `/internal/principal/resolve` endpoint (e.g. `https://<your-api-origin>/internal/principal/resolve`). Gated by the same `INTERNAL_RECONCILE_SECRET`. The AS calls it to learn which profile a login belongs to, so an administrator's revoke can end that principal's refresh chains. Unset ⇒ chains are minted without an owner and are bounded by `AS_REFRESH_CHAIN_MAX_SECONDS` alone. |
+| `INTERNAL_RESOLVE_URL` | AS | Full URL of the `temper-api` `/internal/principal/resolve` endpoint (e.g. `https://<your-api-origin>/internal/principal/resolve`). Gated by the same `INTERNAL_RECONCILE_SECRET`. The AS calls it to learn which profile a login belongs to, so an administrator's revoke can end that principal's refresh chains. Unset ⇒ chains are minted without an owner and are bounded by `AS_REFRESH_CHAIN_MAX_SECONDS` alone, and the health check reports the `principal_resolve` channel as `sustained` (`config_missing`) until it is set. Its path must end with `/internal/principal/resolve` (a prefix a proxy strips is fine): any other path is refused before the call and reported the same way. `INTERNAL_RECONCILE_URL` has the same rule for `/internal/saml/reconcile`. |
 
 ### Slack account link (optional)
 
@@ -743,9 +743,13 @@ appliers interleave across the full install timeline.
 > you — `temper admin saml provision` emits it only into a freshly generated bundle. Without it the
 > AS cannot record which principal a refresh chain belongs to, so **an administrator's revoke ends
 > no chains** and the only remaining bound is `AS_REFRESH_CHAIN_MAX_SECONDS`. Logins and refreshes
-> keep returning `200` throughout, so there is no failure to notice.
+> keep returning `200` throughout, so there is no failure to notice at the client.
 >
-> **The signal to look for** is the API's `standing terminal ended no refresh chains` warning when
+> **The first signal** is the health check: every login, and every refresh of a chain with no
+> owner, records the failed resolve, and `/api/internal-calls/health` reports the
+> `principal_resolve` channel as `sustained` with cause `config_missing` and the variable named.
+>
+> **A second signal** is the API's `standing terminal ended no refresh chains` warning when
 > you revoke someone — but read its `ownerless_live_chains` field, not merely its presence. That
 > warning is also the normal outcome for a machine principal and for anyone who simply was not
 > signed in; a **non-zero** `ownerless_live_chains` is the part that means the authorization server

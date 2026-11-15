@@ -26,8 +26,9 @@
 //!
 //! The distinction the task turns on is *"this is weather"* versus *"de-provisioning has stopped"*,
 //! and a threshold alone gets it wrong in both directions. Two of the four causes are **deployment
-//! facts**: an unset `INTERNAL_RECONCILE_URL` does not heal, and neither does a secret this API
-//! disagrees with. One occurrence settles either, and waiting for a second would leave a channel
+//! facts**: an unset or mis-pathed `INTERNAL_RECONCILE_URL` does not heal, and neither does a
+//! refused signature or a door this deployment does not serve. This API answers both of the latter
+//! with the same 401, so `unauthorized` cannot say which. One occurrence settles either, and waiting for a second would leave a channel
 //! that will never recover sitting in a state named after recovery. The other two — a transport
 //! error, a non-2xx that is not an auth refusal — genuinely can be a blip, and must both **recur**
 //! and **outlive a window** before they are called sustained.
@@ -59,13 +60,19 @@ use crate::error::ApiResult;
 /// `packages/temper-cloud/src/oauth/reconcile-health.ts`, which is the writer.
 pub const RECONCILE_CHANNEL: &str = "saml_reconcile";
 
+/// The channel the principal resolve call records under, the reconcile's fail-open sibling. Mirrors
+/// `RESOLVE_CHANNEL` in `packages/temper-cloud/src/oauth/reconcile-health.ts`, which is the writer.
+/// A failure here does not stop de-provisioning; it mints refresh chains with no owner, which
+/// `standing_service::apply` then cannot end.
+pub const RESOLVE_CHANNEL: &str = "principal_resolve";
+
 /// Every channel this check reports on, whether or not it has a row.
 ///
 /// **Enumerated rather than read from the table**, which is the whole reason this constant exists:
 /// a check that reports on the channels it finds cannot report a channel that has never written
 /// one. Selecting `FROM kb_internal_call_health` would make a deployment whose reconcile has never
 /// once been attempted look identical to one with nothing to say.
-pub const WATCHED_CHANNELS: [&str; 1] = [RECONCILE_CHANNEL];
+pub const WATCHED_CHANNELS: [&str; 2] = [RECONCILE_CHANNEL, RESOLVE_CHANNEL];
 
 /// Fields every `internal_call_health` span declares unconditionally.
 ///
@@ -181,10 +188,12 @@ impl ChannelState {
 
 /// Whether one occurrence of this cause settles the question.
 ///
-/// `config_missing` and `unauthorized` describe the deployment, not the moment: an unset variable
-/// and a rejected signature fail identically on the next login and every login after it. They are
-/// also the two whose operator action is unambiguous, which is the fourth acceptance criterion —
-/// *set this variable* and *the secrets disagree* are different jobs.
+/// `config_missing` and `unauthorized` describe the deployment, not the moment: an unset or
+/// mis-pathed variable, and a signature refused or a door not served, fail identically on the next
+/// login and every login after it. They are also the two whose operator action is bounded, which is
+/// the fourth acceptance criterion: *set this variable* is one job, and *check the URL and the
+/// secret on both sides* ([`operator_action`]) is another. `unauthorized` names a short list rather
+/// than one fix because this API refuses every unauthenticated caller the same way.
 ///
 /// An unrecognized cause is treated as weather-capable. It cannot arrive from the writer — the
 /// CHECK on `kb_internal_call_health.last_failure_cause` refuses it — and this arm is the reason
@@ -224,6 +233,43 @@ pub fn derive_state(row: Option<&ChannelHealth>, now: DateTime<Utc>) -> ChannelS
         ChannelState::Sustained
     } else {
         ChannelState::Transient
+    }
+}
+
+/// What an operator should check for a sustained channel, from its stored cause.
+///
+/// `None` for a channel or cause with nothing more specific to say than the cause itself. For
+/// `unauthorized` it names both checks, because this API's 401 does not say which failed: the
+/// URL, which must reach this deployment at the door (a host that serves a build without it
+/// answers 401 too), and the shared secret, which must match on both sides.
+pub fn operator_action(channel: &str, cause: Option<&str>) -> Option<&'static str> {
+    match (channel, cause) {
+        (RECONCILE_CHANNEL, Some("unauthorized")) => Some(
+            "check INTERNAL_RECONCILE_URL (path and host) and INTERNAL_RECONCILE_SECRET on both \
+             sides",
+        ),
+        (RESOLVE_CHANNEL, Some("unauthorized")) => Some(
+            "check INTERNAL_RESOLVE_URL (path and host) and INTERNAL_RECONCILE_SECRET on both \
+             sides",
+        ),
+        (RECONCILE_CHANNEL | RESOLVE_CHANNEL, Some("config_missing")) => {
+            Some("set or correct the temper-cloud variable named in detail")
+        }
+        _ => None,
+    }
+}
+
+/// What a sustained channel means has stopped happening, for the log line.
+fn consequence(channel: &str) -> &'static str {
+    match channel {
+        RECONCILE_CHANNEL => "IdP de-provisioning through it is not happening",
+        RESOLVE_CHANNEL => {
+            "refresh chains are minted with no owner, so ending a principal does not end them"
+        }
+        crate::services::erasure_fence_service::ERASURE_FENCE_CHANNEL => {
+            "erased principals' blob bytes are not being deleted on schedule"
+        }
+        _ => "the work it carries is not happening",
     }
 }
 
@@ -354,9 +400,11 @@ fn emit_channel_span(report: &ChannelReport) {
             channel = %report.channel,
             cause = report.failure_cause.as_deref().unwrap_or("unknown"),
             detail = report.failure_detail.as_deref().unwrap_or(""),
+            action = operator_action(&report.channel, report.failure_cause.as_deref())
+                .unwrap_or(""),
+            consequence = consequence(&report.channel),
             consecutive_failures = report.consecutive_failures,
-            "internal call channel has stopped reaching this API — IdP de-provisioning through it \
-             is not happening"
+            "internal call channel has stopped reaching this API"
         );
     }
 }
@@ -496,6 +544,126 @@ mod tests {
             now,
         );
         assert_eq!(derive_state(Some(&fresh), now), ChannelState::Sustained);
+    }
+
+    /// Captures the formatted log output of whatever runs inside it, on this thread only.
+    fn captured_log(f: impl FnOnce()) -> String {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("not poisoned").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+            type Writer = Capture;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(capture.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = capture.0.lock().expect("not poisoned").clone();
+        String::from_utf8(bytes).expect("utf-8 log")
+    }
+
+    fn sustained(channel: &str, cause: &str, detail: &str) -> ChannelReport {
+        ChannelReport {
+            channel: channel.to_owned(),
+            state: ChannelState::Sustained,
+            consecutive_failures: 1,
+            failures_total: 1,
+            failure_cause: Some(cause.to_owned()),
+            failure_detail: Some(detail.to_owned()),
+            seconds_since_success: None,
+            failing_for_seconds: Some(1),
+        }
+    }
+
+    // FAILS IF: the sustained log line for an `unauthorized` channel stops carrying the cause, or
+    // stops naming both checks an operator has to make. This API's 401 does not say whether the
+    // URL or the secret is wrong, so the line has to name both, and name the right URL per channel.
+    #[test]
+    fn the_sustained_line_names_the_cause_and_both_checks() {
+        for (channel, url) in [
+            (RECONCILE_CHANNEL, "INTERNAL_RECONCILE_URL"),
+            (RESOLVE_CHANNEL, "INTERNAL_RESOLVE_URL"),
+        ] {
+            let log = captured_log(|| {
+                emit_channel_span(&sustained(channel, "unauthorized", "HTTP 401"));
+            });
+            assert!(log.contains("ERROR"), "{channel}: no error line in {log:?}");
+            assert!(
+                // A leading space: the entered span prints `failure_cause="unauthorized"` too, and
+                // without it that substring would satisfy this on its own.
+                log.contains(" cause=\"unauthorized\""),
+                "{channel}: the line does not carry the cause: {log:?}"
+            );
+            assert!(
+                log.contains(&format!("{url} (path and host)")),
+                "{channel}: the line does not name {url}: {log:?}"
+            );
+            assert!(
+                log.contains("INTERNAL_RECONCILE_SECRET on both sides"),
+                "{channel}: the line does not name the secret: {log:?}"
+            );
+        }
+    }
+
+    // FAILS IF: a weather cause gains the URL-and-secret advice, which would send an operator to
+    // check a secret during a network outage.
+    #[test]
+    fn only_a_refusal_is_told_to_check_the_url_and_the_secret() {
+        for cause in ["transport", "endpoint_error"] {
+            assert_eq!(operator_action(RECONCILE_CHANNEL, Some(cause)), None);
+            assert_eq!(operator_action(RESOLVE_CHANNEL, Some(cause)), None);
+        }
+        let log = captured_log(|| {
+            emit_channel_span(&sustained(RESOLVE_CHANNEL, "transport", "TypeError"));
+        });
+        assert!(log.contains(" cause=\"transport\""), "{log:?}");
+        assert!(!log.contains("INTERNAL_RECONCILE_SECRET"), "{log:?}");
+    }
+
+    // FAILS IF: a channel with no row logs at error. A deployment that never makes the call (the
+    // resolve channel on a non-SAML deployment) must be silent at the levels anyone reads.
+    #[test]
+    fn a_channel_never_attempted_logs_no_error() {
+        for channel in [RECONCILE_CHANNEL, RESOLVE_CHANNEL] {
+            let report = ChannelReport {
+                channel: channel.to_owned(),
+                state: derive_state(None, Utc::now()),
+                consecutive_failures: 0,
+                failures_total: 0,
+                failure_cause: None,
+                failure_detail: None,
+                seconds_since_success: None,
+                failing_for_seconds: None,
+            };
+            assert_eq!(report.state, ChannelState::NoAttemptRecorded);
+            let log = captured_log(|| emit_channel_span(&report));
+            assert!(!log.contains("ERROR"), "{channel}: {log:?}");
+            assert!(!log.contains("WARN"), "{channel}: {log:?}");
+        }
+    }
+
+    // FAILS IF: the check stops watching the resolve channel, so a deployment that can never name
+    // a chain's owner reports `no_attempt_recorded` for the channel that would have said so.
+    #[test]
+    fn both_fail_open_channels_are_watched() {
+        assert_eq!(WATCHED_CHANNELS, [RECONCILE_CHANNEL, RESOLVE_CHANNEL]);
     }
 
     #[test]

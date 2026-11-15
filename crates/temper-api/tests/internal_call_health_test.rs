@@ -9,7 +9,7 @@
 
 use sqlx::PgPool;
 use temper_services::services::internal_call_health_service::{
-    check_internal_call_health, ChannelState, RECONCILE_CHANNEL, WATCHED_CHANNELS,
+    check_internal_call_health, ChannelState, RECONCILE_CHANNEL, RESOLVE_CHANNEL, WATCHED_CHANNELS,
 };
 
 /// **The property that makes this check able to report on silence at all.**
@@ -45,6 +45,25 @@ async fn a_channel_that_has_never_been_attempted_is_reported_not_omitted(pool: P
     // the opposite of the truth — the same lesson `oldest_pending_age_ms` records for the drains.
     assert_eq!(reconcile.seconds_since_success, None);
     assert_eq!(reconcile.failing_for_seconds, None);
+}
+
+/// FAILS IF: a deployment that never writes the resolve channel pages. A non-SAML deployment (the
+/// Auth0 proxy) never calls resolve, so it has no `principal_resolve` row, ever: that must read as
+/// `no_attempt_recorded` and leave the alertable flag down, exactly as an unexercised reconcile does.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_deployment_that_never_resolves_is_quiet_on_the_resolve_channel(pool: PgPool) {
+    let summary = check_internal_call_health(&pool).await.expect("check runs");
+    let resolve = summary
+        .channels
+        .iter()
+        .find(|c| c.channel == RESOLVE_CHANNEL)
+        .expect("the resolve channel is reported, row or no row");
+    assert_eq!(resolve.state, ChannelState::NoAttemptRecorded);
+    assert_eq!(resolve.failure_cause, None);
+    assert!(
+        !summary.any_sustained,
+        "no row on either channel must not page"
+    );
 }
 
 /// A stored deployment fact reaches the verdict as sustained, on one occurrence, with the detail

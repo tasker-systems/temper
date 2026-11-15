@@ -77,8 +77,10 @@ The orientation query, and the five states it can return:
 | `no_attempt_recorded` | Nothing has ever been recorded | No — see below |
 | `stale` | Something was recorded, but not within a day, so it is not a claim about now | No — see below |
 
-`saml_reconcile` is the only channel today; the sibling principal-resolve call is the same shape and
-can be added without a migration.
+Two channels are watched. `saml_reconcile` is the membership reconcile. `principal_resolve` is its
+fail-open sibling: it names a login's profile so the refresh chain carries an owner. When it fails,
+chains are minted with no owner, and ending that principal does not end them. Both are written by
+temper-cloud, and both are read by the same check, with the same states and the same alert.
 
 ## H3 — Which cause, so you know what to do? `[shape]`
 
@@ -90,8 +92,8 @@ The cause is the operator action, and the four are three different jobs:
 
 | `failure_cause` | What happened | What to do |
 |---|---|---|
-| `config_missing` | `requireEnv` threw. `failure_detail` **names the variable** | Set `INTERNAL_RECONCILE_URL` / `INTERNAL_RECONCILE_SECRET` on the temper-cloud deployment |
-| `unauthorized` | temper-api answered 401/403 | The two sides' secrets disagree, or the clock skew exceeds the verifier's window |
+| `config_missing` | A variable is unset, or a URL cannot reach the door it signs for: its path does not end with the door, its scheme is not http(s), or it carries userinfo. `failure_detail` **names the variable** (`… path` for the second) | Set or correct `INTERNAL_RECONCILE_URL` / `INTERNAL_RESOLVE_URL` / `INTERNAL_RECONCILE_SECRET` on the temper-cloud deployment |
+| `unauthorized` | temper-api answered 401/403: the signature was refused **or the door is not served** | Check the channel's URL (path and host) and `INTERNAL_RECONCILE_SECRET` on both sides. temper-api answers every unauthenticated caller the same way, so the 401 cannot say which: the secrets disagree, the clock skew exceeds the verifier's window, or the host serves a build without the door. The sustained log line's `action` field names both checks |
 | `transport` | The request got no answer; `failure_detail` is the error's name | Reachability between the Vercel function and the API host |
 | `endpoint_error` | Any other non-2xx; `failure_detail` is `HTTP <status>` | Read the endpoint's own spans — this one **does** reach Tempo on its own |
 

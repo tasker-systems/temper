@@ -8,6 +8,7 @@ import {
   signRequestV2,
   TIMESTAMP_HEADER,
 } from "../../src/oauth/reconcile.js";
+import { classifyInternalCallFailure, SubjectRefused } from "../../src/oauth/reconcile-health.js";
 
 const payload = {
   provider: "saml:acme",
@@ -99,5 +100,88 @@ describe("reconcileMemberships", () => {
     expect(infoSpy).toHaveBeenCalledOnce();
     const [bindings] = infoSpy.mock.calls[0] as unknown as [Record<string, unknown>, string];
     expect(bindings).toEqual({ groups: 1 });
+  });
+
+  // FAILS IF: a 401 from the API stops being the conclusive `unauthorized`. The reword widened
+  // what it means (signature refused or door not served); it did not soften it.
+  it("a 401 stays unauthorized", async () => {
+    vi.stubEnv("INTERNAL_RECONCILE_URL", "https://api.internal/internal/saml/reconcile");
+    vi.stubEnv("INTERNAL_RECONCILE_SECRET", "s3cr3t");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("no", { status: 401 })),
+    );
+    const err = await reconcileMemberships(payload).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(classifyInternalCallFailure(err)).toEqual({ cause: "unauthorized", detail: "HTTP 401" });
+  });
+
+  // FAILS IF: a machine-shaped subject is sent to the reconcile door. The API refuses it 401 behind
+  // a valid signature, which on the channel would read as a wrong secret.
+  it("a machine-shaped subject is refused locally and nothing is sent", async () => {
+    vi.stubEnv("INTERNAL_RECONCILE_URL", "https://api.internal/internal/saml/reconcile");
+    vi.stubEnv("INTERNAL_RECONCILE_SECRET", "s3cr3t");
+    const fetchMock = vi.fn(async () => new Response("no", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const err = await reconcileMemberships({ ...payload, external_user_id: "m2m@clients" }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(SubjectRefused);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // FAILS IF: a deployment behind a path prefix a proxy strips stops reaching the API. The door is
+  // never read from the URL, so a prefix was always supported (`temper_core::internal_sig`).
+  it("a path prefix in front of the door is sent, signed for the door", async () => {
+    vi.stubEnv("INTERNAL_RECONCILE_URL", "https://gw.internal/temper/internal/saml/reconcile");
+    vi.stubEnv("INTERNAL_RECONCILE_SECRET", "s3cr3t");
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await reconcileMemberships(payload);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const h = init.headers as Record<string, string>;
+    expect(h[SIGNATURE_V2_HEADER]).toBe(
+      signRequestV2(
+        "s3cr3t",
+        "POST",
+        RECONCILE_DOOR,
+        Number(h[TIMESTAMP_HEADER]),
+        h[NONCE_HEADER],
+        init.body as string,
+      ),
+    );
+  });
+
+  // FAILS IF: a URL whose path is not the door is signed and sent. The API would answer it 401,
+  // and the reader would page about the secret; caught here, the cause names the URL instead.
+  it.each([
+    ["a segment after the door", "https://api.internal/internal/saml/reconcile/x"],
+    ["a trailing slash", "https://api.internal/internal/saml/reconcile/"],
+    ["the wrong door", "https://api.internal/internal/principal/resolve"],
+    ["no path at all", "https://api.internal"],
+    ["a value that is not a URL", "api.internal/internal/saml/reconcile"],
+    ["a scheme fetch cannot send", "htps://api.internal/internal/saml/reconcile"],
+    ["a file URL", "file:///internal/saml/reconcile"],
+    ["userinfo in the URL", "https://u:p@api.internal/internal/saml/reconcile"],
+  ])("%s is config_missing and nothing is sent", async (_what, url) => {
+    vi.stubEnv("INTERNAL_RECONCILE_URL", url);
+    vi.stubEnv("INTERNAL_RECONCILE_SECRET", "s3cr3t");
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const err = await reconcileMemberships(payload).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(classifyInternalCallFailure(err)).toEqual({
+      cause: "config_missing",
+      detail: "INTERNAL_RECONCILE_URL path",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    // The detail is a fixed string; the URL itself is not echoed into the message either.
+    expect((err as Error).message).not.toContain("api.internal");
   });
 });
