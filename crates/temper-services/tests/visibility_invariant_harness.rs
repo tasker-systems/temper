@@ -2274,6 +2274,9 @@ const ENROLLED: &[&str] = &[
 /// PRIMITIVES every answer routes through, not answers themselves.
 const PRIMITIVES: &[&str] = &[
     "team_ancestors",
+    // The one statement of the live up-walk (20261129000010); team_ancestors and
+    // profile_reachable_teams are both wrappers over it.
+    "team_ancestors_of",
     "profile_effective_teams",
     "vis_team",
     // The DAG walks public_within's predicates are built from: the live down-walk and the
