@@ -19,7 +19,7 @@
 //!
 //! Since migration `20261129000010` the authority computes the same set in one walk,
 //! `team_ancestors_of(ARRAY(<effective teams>))`, of which `team_ancestors` is also a wrapper. The
-//! gate below therefore recognises the walk named or inlined (see [`INLINED_WALK`]).
+//! gate below therefore recognises the walk named or inlined (see [`DAG_FORMS`]).
 //!
 //! Measured 2026-08-04 against the live schema, that expression was **hand-copied verbatim into
 //! nine functions** — byte-identical once normalized for whitespace and parameter name, two of them
@@ -159,61 +159,110 @@ const AUTHORITATIVE: &str = "profile_reachable_teams";
 /// gate.** The claim was more harmful than the hole.
 const REACH_FORMS: (&str, &str) = ("%profile_effective_teams%", "%kb_team_members%");
 
-/// The one function that walks `team_ancestors` from a profile's memberships and is NOT a copy of
-/// [`AUTHORITATIVE`]: `profile_authoring_teams` (migration `20261109000000`) starts the walk from a
-/// ROLE-FILTERED direct membership (owner|maintainer|member, for write and delete), where the
-/// authoritative relation is role-blind. Routing it through `profile_reachable_teams` would lose
-/// the role on the direct team, which is the whole of what it adds. It is the false positive the
-/// gate's doc anticipates, named here rather than by loosening the gate.
-const ROLE_GATED_REACH: &str = "profile_authoring_teams";
-const ANCESTOR_WALK: &str = "%team_ancestors%";
-
 /// The walk itself, stated once (migration `20261129000010`): `team_ancestors_of(uuid[])`, of which
-/// `team_ancestors` and [`AUTHORITATIVE`] are both wrappers. Excluded from the scan as the
-/// primitive, alongside `team_ancestors`.
+/// `team_ancestors` and [`AUTHORITATIVE`] are both wrappers.
 const WALK_PRIMITIVE: &str = "team_ancestors_of";
 
-/// The walk half of the gate is a disjunction, **named or inlined**, for the same reason the reach
-/// half is. Once the up-walk had one home (`team_ancestors_of`), the natural copy of the closure is
-/// that function's recursive body seeded from `kb_team_members`. It names neither
-/// `team_ancestors` nor `team_ancestors_of`, so a gate keyed only to [`ANCESTOR_WALK`] could not
-/// see it. An inlined walk is a `WITH RECURSIVE` over `kb_teams_parents`.
-const INLINED_WALK: (&str, &str) = ("%WITH RECURSIVE%", "%kb_teams_parents%");
+/// The walk half of the gate is **any reference to the DAG**: a walk primitive by name, or
+/// `kb_teams_parents` itself. Once the up-walk had one home, the natural copy of the closure is that
+/// function's body seeded from memberships, and a copy need not be a `WITH RECURSIVE` at all: a
+/// PL/pgSQL frontier loop or a self-calling SQL function computes the same set. So the gate keys on
+/// the table, not on the recursion, and every pattern is matched case-insensitively (an identifier
+/// may be written in capitals, and a comment may sit between keywords).
+const DAG_FORMS: (&str, &str) = ("%team_ancestors%", "%kb_teams_parents%");
 
-/// The one function the inlined-walk half flags that is not a copy: the SAML group-mapping door
-/// walks DOWN the DAG (`tp.child_id` from `tp.parent_id`) to find the teams beneath a mapping, and
-/// counts `kb_team_members` separately, for a confirmation prompt. It never expands a profile's
-/// memberships upward, so it is not reach.
+/// The SAML group-mapping door walks DOWN the DAG (`tp.child_id` from `tp.parent_id`) to find the
+/// teams beneath a mapping, and counts `kb_team_members` separately, for a confirmation prompt. It
+/// never expands a profile's memberships upward, so it is not reach. The witness also asserts its
+/// body keeps that shape, so the exclusion fails loudly when its reason stops holding.
 const DOWNWARD_WALK: &str = "_admin_saml_group_mapping_write";
 
-/// The gate's catalog scan, shared by the witness and by the decoy test so the two cannot drift:
-/// every `public` function that walks the team DAG upward (by name or inlined) over a profile's own
-/// memberships (called or inlined), other than the primitives and the named exclusions above.
+/// Functions the scan's two halves both match that are not copies of reach, each by its exact
+/// signature (`regprocedure`), so an overload or a decoy that reuses one of these names is still
+/// scanned. A signature change here fails the witness, which is the intended direction.
+///
+/// * the authority, and the primitives it is built from;
+/// * `profile_authoring_teams` (migration `20261109000000`): it starts the walk from a
+///   ROLE-FILTERED direct membership (owner|maintainer|member, for write and delete), where the
+///   authoritative relation is role-blind. Routing it through the authority would lose the role on
+///   the direct team, which is the whole of what it adds;
+/// * [`DOWNWARD_WALK`], see its doc;
+/// * the two personal-team triggers: each touches `kb_team_members` and `kb_teams_parents` one hop
+///   at a time, to create a profile's personal team or refuse a link to one, and walks nothing.
+const NOT_COPIES: &[&str] = &[
+    "profile_reachable_teams(uuid)",
+    "profile_effective_teams(uuid)",
+    "team_ancestors(uuid)",
+    "team_ancestors_of(uuid[])",
+    "profile_authoring_teams(uuid,text)",
+    "_admin_saml_group_mapping_write(uuid,uuid,text,text,text,uuid,team_role,boolean,uuid)",
+    "personal_team_identity_fits()",
+    "sync_personal_team()",
+];
+
+/// The only callers of the walk primitive. Any other caller is flagged whatever its body reads,
+/// because a closure can reach memberships through a helper the scan never sees in the same body.
+const WALK_WRAPPERS: &[&str] = &["team_ancestors(uuid)", "profile_reachable_teams(uuid)"];
+
+/// The gate's catalog scan, shared by the witness and by the decoy test so the two cannot drift.
+///
+/// It reads every function and procedure in every non-system schema, and every view and
+/// materialized view, and flags:
+/// * any that references the DAG ([`DAG_FORMS`]) and a profile's memberships ([`REACH_FORMS`]),
+///   named or inlined, outside [`NOT_COPIES`];
+/// * any that calls [`WALK_PRIMITIVE`] other than [`WALK_WRAPPERS`] (and the primitive itself).
+///
+/// Functions come back as their `regprocedure` text, views as `view schema.name`. Dynamic SQL built
+/// from strings at run time is outside what a catalog scan can see.
 async fn structural_copies(pool: &PgPool) -> sqlx::Result<Vec<String>> {
     let (calls_pet, inlines_pet) = REACH_FORMS;
-    let (recursive, parents) = INLINED_WALK;
+    let (named_walk, dag_table) = DAG_FORMS;
+    let primitive = format!("%{WALK_PRIMITIVE}%");
+    let not_copies: Vec<String> = NOT_COPIES.iter().map(|s| s.to_string()).collect();
+    let wrappers: Vec<String> = WALK_WRAPPERS
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(format!("{WALK_PRIMITIVE}(uuid[])")))
+        .collect();
     sqlx::query_scalar(
-        "SELECT p.proname \
-           FROM pg_proc p \
-           JOIN pg_namespace n ON n.oid = p.pronamespace \
-           CROSS JOIN LATERAL (SELECT pg_get_functiondef(p.oid) AS def) d \
-          WHERE n.nspname = 'public' AND p.prokind = 'f' \
-            AND p.proname NOT IN ($1, 'profile_effective_teams', 'team_ancestors', $2, $3, $4) \
-            AND (d.def LIKE $5 OR (d.def ILIKE $6 AND d.def LIKE $7)) \
-            AND (d.def LIKE $8 OR d.def LIKE $9) \
+        "WITH defs AS ( \
+             SELECT CASE WHEN n.nspname = 'public' THEN p.oid::regprocedure::text \
+                         ELSE n.nspname || '.' || p.oid::regprocedure::text END AS who, \
+                    p.oid::regprocedure::text AS sig, \
+                    pg_get_functiondef(p.oid) AS def \
+               FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+              WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') \
+                AND n.nspname NOT LIKE 'pg\\_%' AND p.prokind IN ('f', 'p') \
+             UNION ALL \
+             SELECT 'view ' || schemaname || '.' || viewname, NULL, definition FROM pg_views \
+              WHERE schemaname NOT IN ('pg_catalog', 'information_schema') \
+             UNION ALL \
+             SELECT 'view ' || schemaname || '.' || matviewname, NULL, definition FROM pg_matviews \
+         ) \
+         SELECT who FROM defs \
+          WHERE ( (def ILIKE $1 OR def ILIKE $2) AND (def ILIKE $3 OR def ILIKE $4) \
+                  AND (sig IS NULL OR sig <> ALL($5)) ) \
+             OR ( def ILIKE $6 AND (sig IS NULL OR sig <> ALL($7)) ) \
           ORDER BY 1",
     )
-    .bind(AUTHORITATIVE)
-    .bind(WALK_PRIMITIVE)
-    .bind(ROLE_GATED_REACH)
-    .bind(DOWNWARD_WALK)
-    .bind(ANCESTOR_WALK)
-    .bind(recursive)
-    .bind(parents)
+    .bind(named_walk)
+    .bind(dag_table)
     .bind(calls_pet)
     .bind(inlines_pet)
+    .bind(&not_copies)
+    .bind(&primitive)
+    .bind(&wrappers)
     .fetch_all(pool)
     .await
+}
+
+/// Whether the scan flagged the function or view named `name` (in any schema, any signature).
+fn flagged(copies: &[String], name: &str) -> bool {
+    copies.iter().any(|c| {
+        let c = c.strip_prefix("view ").unwrap_or(c);
+        let bare = c.rsplit_once('.').map_or(c, |(_, n)| n);
+        bare == name || bare.starts_with(&format!("{name}("))
+    })
 }
 
 // =================================================================================================
@@ -230,7 +279,7 @@ async fn structural_copies(pool: &PgPool) -> sqlx::Result<Vec<String>> {
 /// It is deliberately a **catalog scan, not a fixed list**. A list would have to be edited by
 /// whoever adds the tenth copy — which is the person the test exists to stop.
 ///
-/// The gate runs on [`REACH_FORMS`] × [`ANCESTOR_WALK`], not on [`REACHABLE_TEAMS_EXPR`]: the regex
+/// The gate runs on [`REACH_FORMS`] × [`DAG_FORMS`], not on [`REACHABLE_TEAMS_EXPR`]: the regex
 /// pins the literal aliases the nine original copies happened to use, so it would miss a later copy
 /// that spells them differently. Read [`REACH_FORMS`]'s doc for why the structural question is the
 /// right one, and for the correction that made its reach half a disjunction. The regex is still
@@ -261,6 +310,29 @@ async fn the_reachable_teams_expression_has_exactly_one_home(pool: PgPool) -> sq
          longer has that shape, so the exclusion is stale: re-read it, and either route an upward \
          walk through {AUTHORITATIVE}() or narrow the exclusion."
     );
+    // The two personal-team triggers, pinned to their one-hop shape: no recursion, no walk, and
+    // exactly the `kb_teams_parents` references they hold today (identity_fits checks a link either
+    // way, sync inserts one). An edit that adds a reference must re-read this exclusion.
+    for (trigger, dag_refs) in [
+        ("personal_team_identity_fits", 2),
+        ("sync_personal_team", 1),
+    ] {
+        let def: String = sqlx::query_scalar(
+            "SELECT lower(pg_get_functiondef(p.oid)) FROM pg_proc p \
+               JOIN pg_namespace n ON n.oid = p.pronamespace \
+              WHERE n.nspname = 'public' AND p.proname = $1",
+        )
+        .bind(trigger)
+        .fetch_one(&pool)
+        .await?;
+        assert!(
+            !def.contains("recursive")
+                && !def.contains("team_ancestors")
+                && def.matches("kb_teams_parents").count() == dag_refs,
+            "{trigger} is excluded from the gate because it touches the DAG one hop at a time. Its \
+             body no longer has that shape, so the exclusion is stale: re-read it."
+        );
+    }
 
     assert!(
         copies.is_empty(),
@@ -396,7 +468,7 @@ async fn the_gate_catches_a_copy_written_with_different_aliases(pool: PgPool) ->
     .await?;
 
     // Decoy 4: the walk itself INLINED, seeded from memberships. It names neither walk function,
-    // so only the inlined-walk half ([`INLINED_WALK`]) can see it. This is the copy a single home
+    // so only the table half of [`DAG_FORMS`] can see it. This is the copy a single home
     // for the walk makes natural, and the gate was blind to it until 20261129000010.
     sqlx::query(
         "CREATE OR REPLACE FUNCTION decoy_inlined_walk(p_profile uuid) \
@@ -415,23 +487,23 @@ async fn the_gate_catches_a_copy_written_with_different_aliases(pool: PgPool) ->
     let structural = structural_copies(&pool).await?;
 
     assert!(
-        structural.contains(&"decoy_tenth_copy".to_string()),
+        flagged(&structural, "decoy_tenth_copy"),
         "the structural gate did NOT catch an alias-renamed copy — it caught {structural:?}. \
          The gate cannot do the job its doc claims."
     );
     assert!(
-        structural.contains(&"decoy_inlined_reach".to_string()),
+        flagged(&structural, "decoy_inlined_reach"),
         "the structural gate did NOT catch a copy that INLINES profile_effective_teams — it caught \
          {structural:?}. This is the exact hole adversarial review found on 2026-08-04: a gate that \
          requires the NAME is blind to the body."
     );
     assert!(
-        structural.contains(&"decoy_seeded_primitive".to_string()),
+        flagged(&structural, "decoy_seeded_primitive"),
         "the structural gate did NOT catch a copy seeding team_ancestors_of from memberships — it \
          caught {structural:?}."
     );
     assert!(
-        structural.contains(&"decoy_inlined_walk".to_string()),
+        flagged(&structural, "decoy_inlined_walk"),
         "the structural gate did NOT catch a copy that INLINES the up-walk — it caught \
          {structural:?}. The walk half must see a WITH RECURSIVE over kb_teams_parents, not only \
          the walk's name."
@@ -456,6 +528,105 @@ async fn the_gate_catches_a_copy_written_with_different_aliases(pool: PgPool) ->
          asserting the wrong thing."
     );
 
+    Ok(())
+}
+
+/// The copy shapes an adversarial review planted against the one-walk gate (2026-11-15), each of
+/// which an earlier form of [`structural_copies`] let through: identifiers in capitals, a comment
+/// between `WITH` and `RECURSIVE`, a PL/pgSQL frontier loop, a self-calling SQL function,
+/// memberships read through a helper, an overload under an excluded name, a view, a procedure, and
+/// a function in another schema. Every one computes reach, or is shaped to, and every one must be
+/// named. Two shapes are outside what this scan sees, and are stated rather than hidden: a copy
+/// built from strings at run time (dynamic SQL), and a walk split across two bodies neither of which
+/// reads memberships and the DAG together without calling the walk primitive.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_gate_catches_every_copy_shape_the_adversarial_pass_found(
+    pool: PgPool,
+) -> sqlx::Result<()> {
+    // check_function_bodies off: a self-calling SQL function cannot be validated before it exists.
+    let decoys = r#"
+        SET check_function_bodies = off;
+        CREATE FUNCTION decoy_upper(p uuid) RETURNS TABLE(team_id uuid) LANGUAGE sql STABLE AS $$
+            SELECT W.TEAM_ID FROM TEAM_ANCESTORS_OF(ARRAY(SELECT M.TEAM_ID FROM KB_TEAM_MEMBERS M
+                                                          WHERE M.PROFILE_ID = P)) W $$;
+        CREATE FUNCTION decoy_comment(p uuid) RETURNS TABLE(team_id uuid) LANGUAGE sql STABLE AS $$
+            WITH /* x */ RECURSIVE up AS (
+                SELECT m.team_id FROM kb_team_members m WHERE m.profile_id = p
+                UNION SELECT l.parent_id FROM kb_teams_parents l JOIN up ON l.child_id = up.team_id)
+            SELECT team_id FROM up $$;
+        CREATE FUNCTION decoy_loop(p uuid) RETURNS SETOF uuid LANGUAGE plpgsql STABLE AS $$
+        DECLARE frontier uuid[]; seen uuid[];
+        BEGIN
+            SELECT array_agg(m.team_id) INTO frontier FROM kb_team_members m WHERE m.profile_id = p;
+            seen := coalesce(frontier, '{}');
+            WHILE coalesce(array_length(frontier, 1), 0) > 0 LOOP
+                SELECT array_agg(DISTINCT l.parent_id) INTO frontier FROM kb_teams_parents l
+                 WHERE l.child_id = ANY(frontier) AND NOT l.parent_id = ANY(seen);
+                seen := seen || coalesce(frontier, '{}');
+            END LOOP;
+            RETURN QUERY SELECT unnest(seen);
+        END $$;
+        CREATE FUNCTION decoy_selfcall(p uuid, frontier uuid[]) RETURNS SETOF uuid
+            LANGUAGE sql STABLE AS $$
+            SELECT m.team_id FROM kb_team_members m
+             WHERE m.profile_id = p AND cardinality(frontier) = 0
+            UNION
+            SELECT unnest(frontier)
+            UNION
+            SELECT decoy_selfcall(p, ARRAY(SELECT l.parent_id FROM kb_teams_parents l
+                                            WHERE l.child_id = ANY(frontier)))
+             WHERE cardinality(frontier) > 0 $$;
+        CREATE FUNCTION decoy_my_teams(p uuid) RETURNS SETOF uuid LANGUAGE sql STABLE AS $$
+            SELECT m.team_id FROM kb_team_members m WHERE m.profile_id = p $$;
+        CREATE FUNCTION decoy_helper(p uuid) RETURNS TABLE(team_id uuid) LANGUAGE sql STABLE AS $$
+            SELECT w.team_id FROM team_ancestors_of(ARRAY(SELECT decoy_my_teams(p))) w $$;
+        CREATE FUNCTION team_ancestors(p uuid, b boolean) RETURNS TABLE(team_id uuid)
+            LANGUAGE sql STABLE AS $$
+            SELECT DISTINCT a.team_id FROM profile_effective_teams(p) e
+             CROSS JOIN LATERAL team_ancestors(e.team_id) a $$;
+        CREATE VIEW decoy_view AS
+            SELECT m.profile_id, a.team_id FROM kb_team_members m
+             CROSS JOIN LATERAL team_ancestors(m.team_id) a;
+        CREATE PROCEDURE decoy_proc(p uuid) LANGUAGE sql AS $$
+            CREATE TEMP TABLE IF NOT EXISTS decoy_out AS
+                SELECT a.team_id FROM profile_effective_teams(p) e
+                 CROSS JOIN LATERAL team_ancestors(e.team_id) a $$;
+        CREATE SCHEMA decoys;
+        CREATE FUNCTION decoys.reach(p uuid) RETURNS TABLE(team_id uuid) LANGUAGE sql STABLE AS $$
+            SELECT DISTINCT a.team_id FROM profile_effective_teams(p) e
+             CROSS JOIN LATERAL team_ancestors(e.team_id) a $$;
+    "#;
+    sqlx::raw_sql(decoys).execute(&pool).await?;
+
+    let structural = structural_copies(&pool).await?;
+    let missed: Vec<&str> = [
+        "decoy_upper",
+        "decoy_comment",
+        "decoy_loop",
+        "decoy_selfcall",
+        "decoy_helper",
+        "decoy_view",
+        "decoy_proc",
+        "reach",
+    ]
+    .into_iter()
+    .filter(|name| !flagged(&structural, name))
+    .collect();
+    assert!(
+        missed.is_empty(),
+        "the gate missed {missed:?}; it flagged {structural:?}"
+    );
+    assert!(
+        structural
+            .iter()
+            .any(|c| c == "team_ancestors(uuid,boolean)"),
+        "an overload reusing an excluded name was not scanned: exclusions must match the exact \
+         signature, not the name. Flagged: {structural:?}"
+    );
+    assert!(
+        structural.iter().any(|c| c.starts_with("decoys.")),
+        "a copy in another schema was not scanned: {structural:?}"
+    );
     Ok(())
 }
 
@@ -1016,7 +1187,7 @@ async fn can_modify_resource_inherits_a_write_grant_only_through_an_authoring_ro
 ///
 /// **Eight, not nine, since `20261109000000`.** `can_modify_resource` no longer joins
 /// `profile_reachable_teams`: its team arm walks the chain through `profile_authoring_teams`, which
-/// starts from a role-filtered membership ([`ROLE_GATED_REACH`]), so it has no role-blind fold left
+/// starts from a role-filtered membership (`profile_authoring_teams`), so it has no role-blind fold left
 /// to probe. Its behaviour is pinned by
 /// [`can_modify_resource_inherits_a_write_grant_only_through_an_authoring_role`].
 ///

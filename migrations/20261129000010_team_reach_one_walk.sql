@@ -15,8 +15,9 @@
 --     profile path, whose seeds come from profile_effective_teams, but load-bearing for every caller
 --     that seeds the walk with a team: public_within_row_effective relies on it to keep a dead T's
 --     row dormant.
---   * One statement of the walk. Neither wrapper restates the recursion, and nothing else may;
---     reachable_teams_one_definition_test scans pg_proc for copies, inlined recursions included.
+--   * One statement of the walk. Neither wrapper restates the recursion. A copy of reach (the walk
+--     over a profile's memberships, named or inlined, in any function, procedure or view) fails
+--     reachable_teams_one_definition_test.
 --   * Cycles are admitted states, and UNION (not UNION ALL) is what terminates the walk on one.
 --   * The profile path is a function scan, not inlined: an argument holding a sub-select stops SQL
 --     function inlining. ROWS 200 keeps its row estimate near what the inlined per-membership form

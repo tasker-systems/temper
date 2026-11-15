@@ -219,7 +219,24 @@ struct Curated {
     m_diamond: Uuid,
     /// Member of `c1` in the cycle c1 ⇄ c2, with c3 above c2.
     m_cycle: Uuid,
+    /// The bottom of a 70-team chain whose 67th team is dead, with a back-edge inside the live
+    /// stretch that the walk must run round: reach is exactly the 66 teams below the dead one. Deeper than any depth cap a
+    /// mutation might add, and wider than a LIMIT on the walk's output.
+    deep: Vec<Uuid>,
+    m_deep: Uuid,
+    /// A member of 300 leaf teams under one live parent: reach is 301 teams. Holds the profile
+    /// path to its full seed set (a truncated seed array would drop teams).
+    wide: Vec<Uuid>,
+    m_wide: Uuid,
+    /// leaf2 under live1 under dead2 under top2: a dead team two steps up, so a floor applied only
+    /// on the first step cannot pass.
+    later: [Uuid; 4],
+    m_later: Uuid,
 }
+
+const DEEP: usize = 70;
+const DEEP_DEAD_AT: usize = 66;
+const WIDE: usize = 300;
 
 /// ```text
 ///   top ─▸ mid (dead) ─▸ leaf ◂─ m_cut            top ─▸ ghost (dead) ◂─ m_ghost
@@ -269,6 +286,40 @@ async fn curated(pool: &PgPool) -> Curated {
         join(pool, t, m_many).await;
     }
 
+    let mut deep = Vec::with_capacity(DEEP);
+    for i in 0..DEEP {
+        deep.push(team(pool, &format!("cw-deep-{i}"), i != DEEP_DEAD_AT).await);
+    }
+    for i in 1..DEEP {
+        link(pool, deep[i - 1], deep[i]).await;
+    }
+    // A back-edge inside the live stretch, 60 up to 5, so the walk runs round a cycle of 56 teams.
+    link_past_the_cycle_trigger(pool, deep[60], deep[5]).await;
+    let m_deep = profile(pool, "cw-m-deep").await;
+    join(pool, deep[0], m_deep).await;
+
+    let wide_top = team(pool, "cw-wide-top", true).await;
+    let mut wide = vec![wide_top];
+    let m_wide = profile(pool, "cw-m-wide").await;
+    for i in 0..WIDE {
+        let t = team(pool, &format!("cw-wide-{i}"), true).await;
+        link(pool, t, wide_top).await;
+        join(pool, t, m_wide).await;
+        wide.push(t);
+    }
+
+    let later = [
+        team(pool, "cw-later-leaf", true).await,
+        team(pool, "cw-later-live1", true).await,
+        team(pool, "cw-later-dead2", false).await,
+        team(pool, "cw-later-top", true).await,
+    ];
+    for w in later.windows(2) {
+        link(pool, w[0], w[1]).await;
+    }
+    let m_later = profile(pool, "cw-m-later").await;
+    join(pool, later[0], m_later).await;
+
     Curated {
         top,
         mid,
@@ -285,6 +336,12 @@ async fn curated(pool: &PgPool) -> Curated {
         m_ghost,
         m_diamond,
         m_cycle,
+        deep,
+        m_deep,
+        wide,
+        m_wide,
+        later,
+        m_later,
     }
 }
 
@@ -339,6 +396,22 @@ async fn the_one_walk_returns_the_pre_migration_sets_on_every_curated_cell(pool:
         within(&reach(&pool, w.m_cycle).await, &world),
         sorted(vec![w.c1, w.c2, w.c3]),
         "a cycle terminates and reaches what is above it"
+    );
+    assert_eq!(
+        within(&reach(&pool, w.m_deep).await, &w.deep),
+        sorted(w.deep[..DEEP_DEAD_AT].to_vec()),
+        "a {DEEP}-team chain is walked to the dead team at {DEEP_DEAD_AT} and no further, and the \
+         cycle over it adds nothing"
+    );
+    assert_eq!(
+        within(&reach(&pool, w.m_wide).await, &w.wide).len(),
+        WIDE + 1,
+        "a member of {WIDE} teams reaches every one of them and their parent"
+    );
+    assert_eq!(
+        within(&reach(&pool, w.m_later).await, &w.later),
+        sorted(w.later[..2].to_vec()),
+        "a dead team two steps up stops the walk there"
     );
 }
 
@@ -509,7 +582,10 @@ async fn the_step_floor_bites(pool: PgPool) {
 }
 
 /// B8: the seed floor (`t.is_active`) dropped ALONE, `profile_effective_teams` left as it is. On
-/// the profile path that floor is redundant, so a profile-only check would stay green. Team-seeded
+/// the profile path that floor is redundant, so a profile-only check would stay green. The test
+/// also asserts the profile path stays closed under this mutation: that is defence in depth, and it
+/// is what makes seeding `profile_reachable_teams` from raw memberships (equivalent today, because
+/// the seed floor drops dead seeds) go red here too, so the two floors never come to rest on one. Team-seeded
 /// callers are what it protects, and the leak is concrete: a dead T's public_within row becomes
 /// effective, and a person under the anchor reads T's resource.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
