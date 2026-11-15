@@ -159,24 +159,93 @@ UUIDs. Integers stay within 2^53 − 1.
 
 ### Find claimable work
 
-`list_resources` filters by `tags`, not by other `open_meta` keys. `run_query` can *select*
-resources by any key, but it cannot return a selection's rows: that stage is refused as not
-returnable, and every act that returns rows needs a text question. So **your workflow keeps a
-positive marker in `tags`**, such as `claimable`, and agents list by it:
-`list_resources {"context_ref": "<ctx>", "tags": ["claimable"]}`.
-Several tags narrow the list (AND), and the rows carry `open_meta`, so you can see `claim_id`.
+Discovery is a query that returns rows:
+`run_query {"plan": <plan>}`
+with a `list-resources-with` stage. It selects resources by any `open_meta` key and returns them
+newest first, or oldest first if you ask. Which key marks work, and what its values mean, is your
+workflow's choice; Temper only reads the key.
 
-- **The marker is your workflow's to maintain, not Temper's.** Add it with
-  `update_resource {"id": "<work item>", "open_meta_add": {"tags": ["claimable"]}}`,
-  which unions it with the tags already there. To remove it, restate the whole `tags` list in
-  `open_meta`. That write replaces every tag, so in a workflow context keep `tags` to your markers.
-  It can also drop a tag added at the same moment. Guarding it on the claim
-  (`expect: {"open": {"claim_id": "<C>"}}`) at least ties the removal to the holder.
-- **Tags are full-text indexed.** A marker makes work items rank in searches, which is one more
-  reason to keep the workflow in its own context.
+**The simple case: a positive marker key.** Your workflow writes a key such as `state: "ready"` on
+each item that can be claimed, and lists by it:
+
+```json
+{"stages": [{"name": "work", "act": "list-resources-with",
+   "inputs": [{"from": "caller", "as": "bound", "ids": {"kind": "context", "ids": ["<ctx id>"]}}],
+   "resource_filter": {"properties": [{"key": "state", "op": {"op": "contains", "values": ["ready"]}}]},
+   "order": "asc", "terms": {"limit": 20}}],
+ "outcome": {"returns": [{"stage": "work", "with": ["open-meta"]}]}}
+```
+
+- **Three operators, closed.** `{"op": "has_key"}` matches any item carrying the key.
+  `{"op": "contains", "values": [...]}` tests containment against the whole stored value (a
+  scalar probe also matches an array holding it), and several values OR.
+  `{"op": "compare", "direction": "gte", "value": ...}` (`gt`, `gte`, `lt`, `lte`) compares only
+  values of the bound's JSON type. Several predicates AND.
+- **`with: ["open-meta"]`** puts each row's `open_meta` on its `resource`, so you see `claim_id`
+  without another read.
+- **The marker is your workflow's to maintain, not Temper's.** It is one key, so it is set and
+  cleared by an ordinary meta write (`null` clears it), and that write can be guarded on the claim
+  like any other.
+- **Tags with `list_resources` still work** for a single positive marker:
+  `list_resources {"context_ref": "<ctx>", "tags": ["claimable"]}`.
+  The trade-off: to remove a tag you restate the whole `tags` list, which replaces every tag and
+  can drop one added at the same moment; tags are full-text indexed, so markers rank in searches;
+  and the list cannot say what an item lacks. Keep a tag marker you already have if you never need
+  negation, and keep `tags` to your markers in a workflow context.
+
+**The negation case: ready, and no claim yet.** A filter matches what an item has, never what it
+lacks, so select both sets with `find-resources-with`, take the `difference`, and return it through
+a list stage bound on the difference:
+
+```json
+{"stages": [
+  {"name": "ready", "act": "find-resources-with",
+   "inputs": [{"from": "caller", "as": "bound", "ids": {"kind": "context", "ids": ["<ctx id>"]}}],
+   "resource_filter": {"properties": [{"key": "state", "op": {"op": "contains", "values": ["ready"]}}]}},
+  {"name": "claimed", "act": "find-resources-with",
+   "inputs": [{"from": "caller", "as": "bound", "ids": {"kind": "context", "ids": ["<ctx id>"]}}],
+   "resource_filter": {"properties": [{"key": "claim_id", "op": {"op": "has_key"}}]}},
+  {"name": "open", "op": "difference", "inputs": ["ready", "claimed"]},
+  {"name": "work", "act": "list-resources-with",
+   "inputs": [{"from": "upstream", "as": "bound", "stage": "open"}],
+   "order": "asc", "terms": {"limit": 20}}],
+ "outcome": {"returns": [{"stage": "work", "with": ["open-meta"]}]}}
+```
+
+- **`difference` is ordered:** the first input minus the second. `intersect` and `union` come back
+  as rows the same way.
+- **A stage takes one input per relation**, so the list stage holds either the context anchor or
+  the resource bound, never both (`duplicate_input_relation`). Here the selections carry the
+  context.
+- **A reclaim makes an item claimable again here:** writing `claim_id: null` removes the key, so
+  `has_key` stops matching it.
+
+**Reading it as a work queue.**
+- **`"order": "asc"` is oldest first** by the item's `created`. The default is newest first, and
+  ties break on id ascending in either direction.
+- **Page with `terms`:** `limit` and `offset`. `limit` is 50 when omitted, and a larger value is
+  clamped to 50 (`terms_applied` shows what ran). Each page is its
+  own statement, so a page can repeat or skip a row when items are added or claimed between reads.
+- **Read `total`** on the returned stage. It counts every match you can see, unpaged, on every page,
+  `0` included. `disposition` describes the page, so a page past the end is `empty` beside a
+  `total` above zero.
 - **A stale hit is harmless.** A listed item may already be claimed. The guarded claim decides, so
   a claimant that loses simply moves on.
+- **Under contention the same row loses systematically.** The order is total, so every agent
+  reading page 1 sees the same first row: if all take it, one claim wins and the rest lose it.
+  What a loser does next is your workflow's choice, as is the queue's order. Taking a random row
+  from page 1 spreads claimants without any new mechanism.
 - **Re-read your candidates periodically** anyway, as the feed section says.
+
+**Refusals you can hit.** A refused plan runs nothing and reports every refusal at once, each with
+its `reason` and, if it has one, its stage:
+an `invalid_params` error whose `data.refusals` carries them.
+- **`stage_not_pipeable`:** a list stage was named as another stage's input. A page is a sample of
+  the match set, so it feeds nothing. Pipe a `find-resources-with` selection instead, and return a
+  list stage at the end.
+- **`stage_not_returnable`:** a `find-resources-with` or combinator stage was named in `returns`.
+  Bind a list stage on it and return that.
+- **`order_not_applicable`:** an `order` was sent to an act other than `list-resources-with`.
 
 ### Claim with `expect`
 
