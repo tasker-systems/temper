@@ -194,3 +194,88 @@ async fn admitted_callers_keep_their_answers(pool: PgPool) {
         "an unapproved but signed caller still gets the 404: {body}"
     );
 }
+
+/// A registered, approved machine; returns its bearer.
+async fn registered_machine(pool: &PgPool) -> String {
+    let client_id = format!("fallback-machine-{}", Uuid::new_v4().simple());
+    let profile = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+         VALUES ($1, $2, $2, NULL, '{}')",
+    )
+    .bind(profile)
+    .bind(&client_id)
+    .execute(pool)
+    .await
+    .expect("seed machine profile");
+    sqlx::query(
+        "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+         VALUES ($1, 'test', $2, $2)",
+    )
+    .bind(&client_id)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("seed machine registration");
+    sqlx::query("INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1, 'approved')")
+        .bind(profile)
+        .execute(pool)
+        .await
+        .expect("approve machine");
+    common::generate_machine_jwt(&client_id)
+}
+
+// FAILS IF: a machine on a mistyped path gets anything but what a bearer route gives it: a
+// registered machine the 404, an unregistered one its provisioning answer. Taken down the human
+// lookup, every machine came back 404, the unregistered one included.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_machine_gets_what_a_bearer_route_gives_it(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let registered = registered_machine(&pool).await;
+    let (status, _, body) = get(&app, "/api/no-such", Some(&registered)).await;
+    assert_eq!(status, 404, "{body}");
+    assert!(body.contains("No route matches"), "{body}");
+
+    let unregistered =
+        common::generate_machine_jwt(&format!("fallback-stranger-{}", Uuid::new_v4().simple()));
+    let routed = get(&app, "/api/profile", Some(&unregistered)).await;
+    assert_eq!(routed.0, 401, "{routed:?}");
+    assert_eq!(get(&app, "/api/no-such", Some(&unregistered)).await, routed);
+}
+
+// FAILS IF: a spelling of the refused prefix reaches the signed caller's 404, or another method on
+// an unmatched path answers an unauthenticated caller anything but the refusal.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn every_spelling_and_method_meets_the_refusal(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let expected = u401(&app).await;
+    let bearer = person(&pool, true).await;
+    for path in ["//internal/x", "/internal", "///internal/saml/reconcile"] {
+        assert_eq!(
+            get(&app, path, Some(&bearer)).await,
+            expected,
+            "{path} signed"
+        );
+    }
+    for method in [
+        reqwest::Method::POST,
+        reqwest::Method::PUT,
+        reqwest::Method::DELETE,
+        reqwest::Method::PATCH,
+    ] {
+        let response = app
+            .client
+            .request(method.clone(), app.url("/api/no-such"))
+            .send()
+            .await
+            .expect("sent");
+        assert_eq!(answer(response).await, expected, "{method}");
+    }
+    let head = app
+        .client
+        .head(app.url("/api/no-such"))
+        .send()
+        .await
+        .expect("sent");
+    assert_eq!(head.status().as_u16(), 401);
+}

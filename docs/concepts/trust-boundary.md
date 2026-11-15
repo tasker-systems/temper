@@ -141,13 +141,16 @@ headers for the caller's `Origin`, and an `x-request-id` minted for the request.
 log line for it, `auth error`, carries that request id and the real cause, so a caller who quotes
 the id can be helped without the answer saying anything.
 
-An unmatched path is answered the same way. Without a validly signed bearer it is that refusal;
-with one, it is the 404 `No route matches …`, whether or not the token's identity has a profile,
-and resolving it never creates one. Under `/internal/`, where no bearer route lives, every
-unmatched path is the refusal whoever asks. The cost of the bearer check on an unmatched path is one
-token verification and one profile lookup, plus the email lookup (and possibly one call to the
-identity provider's `/userinfo`) when the token carries no email claim and no link is cached. It
-writes nothing. Reaching any of it takes a validly signed token.
+An unmatched path is answered the same way. Without a validly signed bearer it is that refusal.
+With one, it is the 404 `No route matches …`, whether or not the token's identity has a profile,
+unless a gated route would refuse the same token for itself (a deactivated account, an unregistered
+or revoked machine, an email that cannot be resolved), which keeps that answer. Resolving the caller
+never creates a profile; like sign-in, it may refresh an auth link or attach a verified email's link
+to the profile that holds it. Under `/internal/` (however many leading slashes, or the bare
+`/internal`), where no bearer route lives, every unmatched path is the refusal whoever asks. The
+cost of the bearer check on an unmatched path is one token verification and one profile lookup,
+plus the email lookup (and possibly one call to the identity provider's `/userinfo`) when the token
+carries no email claim and no link is cached. Reaching any of it takes a validly signed token.
 
 "Unavailable" is server-wide state, not a per-path answer. Each instance keeps one bearer key
 store. When its keys are stale, every refusal it gives joins one shared refresh of that store,

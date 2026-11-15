@@ -185,16 +185,27 @@ pub const NO_EXISTING_PROFILE: &str = "no existing temper profile for this ident
 /// profile INSERT that auto-provisioning performs fires `trg_sync_system_membership`, which in
 /// `open` mode joins EVERY auto-join team. See the T2 spec, D3.
 ///
+/// Also the declared fallback's lookup (temper-api's `routes::fallback`): a mistyped URL is not a
+/// registration route either.
+///
 /// Level 1's post-resolution gate is **not** skipped: this shares `gate_resolved_profile`
 /// with `authenticate`, so an inactive profile is refused here exactly as it is on the login
 /// path. Level 2 ([`require_system_access`]) remains the caller's to apply, identical to the
 /// login path.
+///
+/// A machine token takes the machine resolver, exactly as on the login path. That resolver only
+/// looks a registration up and never creates one, so it is lookup-only already, and a machine gets
+/// the answer it gets on any bearer route (registered, unregistered, revoked, deactivated) rather
+/// than the human path's machine-shape refusal.
 pub(crate) async fn authenticate_token_existing_only(
     state: &AppState,
     raw: &RawJwtClaims,
     token: &str,
 ) -> Result<AuthenticatedProfile, AuthzError> {
     let claims = claims_from_token(state, raw, token).await?;
+    if claims.principal_kind == PrincipalKind::Machine {
+        return authenticate(&state.pool, &claims, state.config.auth.mode).await;
+    }
 
     let profile = profile_service::resolve_existing_human_from_claims(&state.pool, &claims)
         .await

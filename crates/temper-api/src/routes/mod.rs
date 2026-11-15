@@ -863,22 +863,22 @@ mod tests {
                 "{door} is not under a refused prefix"
             );
         }
-        let sources = [
-            include_str!("admin.rs"),
-            include_str!("auth_only.rs"),
-            include_str!("blob_doors.rs"),
-            include_str!("embed_internal.rs"),
-            include_str!("gated.rs"),
-            include_str!("internal.rs"),
-            include_str!("public.rs"),
-            include_str!("query.rs"),
-            include_str!("slack_link_public.rs"),
-            include_str!("webhook_intake.rs"),
-        ];
+        // Every route file in the directory, read at test time, so a new file cannot be left out.
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/routes");
+        let sources: Vec<String> = std::fs::read_dir(dir)
+            .expect("routes dir")
+            .map(|entry| entry.expect("entry").path())
+            .filter(|path| {
+                path.extension().is_some_and(|e| e == "rs")
+                    && path.file_name().is_some_and(|n| n != "mod.rs")
+            })
+            .map(|path| std::fs::read_to_string(path).expect("route file"))
+            .collect();
+        assert!(sources.len() >= 10, "found {} route files", sources.len());
         let mounted: BTreeSet<String> = sources
             .iter()
             .flat_map(|source| {
-                route_code(source)
+                route_code(source.as_str())
                     .split('"')
                     .skip(1)
                     .step_by(2)

@@ -12,8 +12,13 @@
 //! auto-provision a profile and confer auto-join team reach. A mistyped URL must not mint an
 //! account. The cost per unmatched authenticated request is one JWT verification and one profile
 //! lookup, plus the email ladder (and possibly one `/userinfo` call) when the token carries no
-//! email claim and no link is cached. No write. Reaching the ladder takes a validly signed token,
-//! so it is no lever for an anonymous caller.
+//! email claim and no link is cached. It creates no profile; like sign-in, it may refresh an auth
+//! link's verification, or attach a verified email's link to the profile that already holds it.
+//! Reaching any of it takes a validly signed token, so it is no lever for an anonymous caller.
+//!
+//! A signed caller gets the answer a gated route gives the same token when that answer is a refusal
+//! about the credential (deactivated, an unregistered or revoked machine, an email that cannot be
+//! resolved) or a server fault, and otherwise the 404.
 
 use axum::extract::{Request, State};
 use axum::response::{IntoResponse, Response};
@@ -28,10 +33,16 @@ use crate::middleware::auth::verify_bearer;
 use super::REFUSED_PREFIXES;
 
 /// Whether `path` is under a prefix every unmatched request is refused on, whoever sends it.
+///
+/// Leading slashes are collapsed first, and the prefix's own bare form (`/internal`) counts, so
+/// `//internal/x` and `/internal` are refused like `/internal/x`. None of them routes to a door, but
+/// the rule is "every unmatched path under the prefix", and those are spellings of it. Matching is
+/// on bytes, as routing is: `/INTERNAL/x` is a different path, unmatched like any other.
 pub(super) fn under_refused_prefix(path: &str) -> bool {
+    let collapsed = format!("/{}", path.trim_start_matches('/'));
     REFUSED_PREFIXES
         .iter()
-        .any(|prefix| path.starts_with(prefix))
+        .any(|prefix| collapsed.starts_with(prefix) || collapsed == prefix.trim_end_matches('/'))
 }
 
 /// `create_app`'s fallback: the uniform refusal unless the caller holds a validly signed bearer,
@@ -45,15 +56,30 @@ pub(super) async fn lookup_then_not_found(
     }
     let (token, raw) = match verify_bearer(&state, request.headers()).await {
         Ok(verified) => verified,
-        // Every way a bearer can fail, its absence included, is the one refusal. Its cause is
-        // logged on the outer service's `auth error` line; the key store's outage is answered
-        // there too, for every refusal at once.
-        Err(_) => return ApiError::Unauthenticated(UnauthCause::UnmatchedPath).into_response(),
+        // Every way a bearer can fail, its absence included, is the one refusal, logged on the
+        // outer service's `auth error` line as `unmatched_path`. The bearer's own cause is kept
+        // here, at debug, for an operator who needs it; the key store's outage is answered by the
+        // outer service for every refusal at once.
+        Err(err) => {
+            if let ApiError::Unauthenticated(cause) = &err {
+                tracing::debug!(
+                    bearer_cause = cause.as_str(),
+                    "unmatched path: bearer refused"
+                );
+            }
+            return ApiError::Unauthenticated(UnauthCause::UnmatchedPath).into_response();
+        }
     };
+    // The token verified, so this caller is one of ours: join its trace, as `require_auth` does.
+    temper_telemetry::link_trusted_caller(&tracing::Span::current(), request.headers());
     // Every result below is a validly signed caller, so none is anonymous: each keeps the answer
     // the same caller gets on a bearer route, or the 404.
     match temper_services::auth::authenticate_caller_existing_only(&state, &raw, &token).await {
-        Ok(_) => fallback_handler(request).await,
+        Ok(caller) => {
+            tracing::Span::current()
+                .record("profile_id", tracing::field::display(caller.profile().id));
+            fallback_handler(request).await
+        }
         Err(AuthzError::Deactivated { profile_id }) => {
             tracing::warn!(%profile_id, "rejected: profile is deactivated");
             ApiError::Unauthorized("account is deactivated".to_string()).into_response()
@@ -64,8 +90,15 @@ pub(super) async fn lookup_then_not_found(
         Err(AuthzError::Refused(why)) => {
             ApiError::Unauthorized(format!("machine credential refused: {why}")).into_response()
         }
-        Err(AuthzError::EmailResolution(err)) => err.into_response(),
-        Err(_) => fallback_handler(request).await,
+        // The answers `require_auth` gives the same token: an email that cannot be resolved, an
+        // unregistered or revoked machine, or a server fault, never hidden behind a 404.
+        Err(AuthzError::EmailResolution(err))
+        | Err(AuthzError::ProfileResolution(err))
+        | Err(AuthzError::Classification(err)) => err.into_response(),
+        Err(AuthzError::AccessCheck(_)) | Err(AuthzError::SystemAccessDenied { .. }) => {
+            ApiError::Internal("unexpected system-access error from a lookup".to_string())
+                .into_response()
+        }
     }
 }
 

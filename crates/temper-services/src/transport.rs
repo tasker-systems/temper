@@ -364,7 +364,8 @@ pub async fn fallback_handler(req: axum::extract::Request) -> axum::response::Re
     use axum::response::IntoResponse;
 
     let path = sanitize_echoed_path(req.uri().path());
-    let method = req.method().to_string();
+    // A method is token characters only, but its length is the caller's; bounded like the path.
+    let method = crate::error::bounded(req.method().as_str()).to_string();
     tracing::warn!(path = %path, method = %method, "unmatched route");
     let body =
         crate::error::ErrorBody::new("NOT_FOUND", format!("No route matches {method} {path}"));

@@ -6,13 +6,15 @@ status   = "signal-only"
 body = '''
 What changed: a path no route matches now answers a caller without a validly signed bearer the
 uniform pre-identity 401 (the same bytes a gated route gives), not the 404 "No route matches …". A
-caller with a validly signed bearer still gets the 404, whether or not its identity has a profile;
-the fallback resolves the caller lookup-only and never provisions one. A deactivated caller keeps
-"account is deactivated", and a refused machine credential keeps its own message. The cause is
-logged as unmatched_path on the "auth error" line with the request id.
+caller with a validly signed bearer still gets the 404, whether or not its identity has a profile,
+unless a gated route would refuse the same token for itself: a deactivated account, an unregistered
+or revoked machine, or an email that cannot be resolved keeps that answer, and a server fault is a
+500, not a 404. The fallback resolves the caller lookup-only and never creates a profile. The cause
+is logged as unmatched_path on the "auth error" line with the request id.
 
-Under /internal/ every unmatched path is the uniform 401 whoever asks, bearer or not, on both the
-main app and the internal function (refused_prefix). The internal function answers every path it
+Under /internal/ (with any number of leading slashes, or the bare /internal) every unmatched path is
+the uniform 401 whoever asks, bearer or not, on both the main app and the internal function
+(refused_prefix). The 404 body's echoed method is now bounded in length, like its path. The internal function answers every path it
 does not serve that way.
 
 Unchanged: status codes and code strings in the contract; only their conditions moved. The MCP
