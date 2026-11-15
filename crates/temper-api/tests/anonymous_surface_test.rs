@@ -1,0 +1,369 @@
+//! What an unauthenticated caller can learn, asserted against pinned bytes.
+//!
+//! The rule: an unauthenticated caller learns nothing except from the designated public routes.
+//! Every assertion here compares an answer against a pinned constant (absolute bytes, not "every
+//! path answered alike"), so a revert that moves every path together still fails.
+//!
+//! What is witnessed so far, through the real `create_app` and its outer service:
+//! - **preflight**: a CORS preflight from an allowlisted origin is the same bytes on every path,
+//!   matched or not, public or not, carrying the security headers and never `Allow`; every other
+//!   `OPTIONS` is routed like any other method;
+//! - **`Allow` rides only a 405**: never on a 401, never on the 415 an undecodable
+//!   `Content-Encoding` gets before any gate;
+//! - **the request id** is minted per request, 32 lowercase hex digits, and never adopted from the
+//!   request; an allowlisted origin can read it.
+#![cfg(feature = "test-db")]
+
+mod common;
+
+use std::collections::BTreeMap;
+
+use reqwest::Method;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+const ORIGIN: &str = "https://allowed.example";
+const FOREIGN: &str = "https://foreign.example";
+
+/// One answer, with its headers lowercased and `date` dropped (the comparison never includes it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Answer {
+    status: u16,
+    headers: BTreeMap<String, String>,
+    body: String,
+}
+
+impl Answer {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).map(String::as_str)
+    }
+
+    /// The answer without `x-request-id`, which is asserted by format, never by value.
+    fn without_request_id(&self) -> Answer {
+        let mut a = self.clone();
+        a.headers.remove("x-request-id");
+        a
+    }
+}
+
+async fn send(
+    app: &common::TestApp,
+    method: Method,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> Answer {
+    let mut request = app.client.request(method, app.url(path));
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let response = request.send().await.expect("request sent");
+    let status = response.status().as_u16();
+    let mut map = BTreeMap::new();
+    for (name, value) in response.headers() {
+        if name.as_str() == "date" {
+            continue;
+        }
+        let value = value.to_str().expect("ascii header").to_string();
+        map.entry(name.as_str().to_string())
+            .and_modify(|v: &mut String| {
+                v.push_str(", ");
+                v.push_str(&value);
+            })
+            .or_insert(value);
+    }
+    let body = response.text().await.expect("body");
+    Answer {
+        status,
+        headers: map,
+        body,
+    }
+}
+
+fn assert_request_id_format(what: &str, answer: &Answer) {
+    let id = answer
+        .header("x-request-id")
+        .unwrap_or_else(|| panic!("{what}: no x-request-id: {answer:?}"));
+    assert!(
+        id.len() == 32
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        "{what}: x-request-id is not 32 lowercase hex digits: {id:?}"
+    );
+}
+
+/// The five security headers, exactly as the per-endpoint layers set them.
+const SECURITY_HEADERS: [(&str, &str); 5] = [
+    (
+        "content-security-policy",
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    ),
+    ("referrer-policy", "no-referrer"),
+    (
+        "strict-transport-security",
+        "max-age=63072000; includeSubDomains",
+    ),
+    ("x-content-type-options", "nosniff"),
+    ("x-frame-options", "DENY"),
+];
+
+/// `PREFLIGHT`: the answer to a preflight from [`ORIGIN`] asking for `POST` with `authorization`,
+/// on any path (`x-request-id` asserted by format).
+fn preflight_constant() -> Answer {
+    let mut headers: BTreeMap<String, String> = SECURITY_HEADERS
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .collect();
+    for (n, v) in [
+        ("access-control-allow-origin", ORIGIN),
+        ("access-control-allow-methods", "*"),
+        ("access-control-allow-headers", "authorization"),
+        // tower-http's own `vary` for an allowlist that mirrors the request headers: the origin
+        // and the header list are the two inputs the answer varies on (the methods are `*`).
+        ("vary", "origin, access-control-request-headers"),
+        ("content-length", "0"),
+    ] {
+        headers.insert(n.to_string(), v.to_string());
+    }
+    Answer {
+        status: 200,
+        headers,
+        body: String::new(),
+    }
+}
+
+const PREFLIGHT_REQUEST: [(&str, &str); 3] = [
+    ("origin", ORIGIN),
+    ("access-control-request-method", "POST"),
+    ("access-control-request-headers", "authorization"),
+];
+
+/// Representative paths: one per kind of door, plus the unmatched and public ones.
+fn representative_paths() -> Vec<String> {
+    let id = Uuid::new_v4();
+    vec![
+        "/api/health".to_string(),
+        "/api/auth/slack/callback".to_string(),
+        "/api/profile".to_string(),
+        "/api/resources".to_string(),
+        format!("/api/resources/{id}"),
+        "/api/admin/ledger".to_string(),
+        "/internal/saml/reconcile".to_string(),
+        "/internal/slack/mint".to_string(),
+        "/api/embed/dispatch".to_string(),
+        "/api/intake/webhook".to_string(),
+        "/no-such".to_string(),
+        "/api/no-such".to_string(),
+        "/internal/no-such".to_string(),
+    ]
+}
+
+async fn allowlisted_app(pool: &PgPool) -> common::TestApp {
+    common::setup_test_app_with_config(pool.clone(), |config| {
+        config.cors_origins = vec![ORIGIN.to_string()];
+        config.internal_reconcile_secret = Some("reconcile-secret".to_string());
+        config.slack_mint_secret = Some("mint-secret".to_string());
+        config.embed_dispatch_secret = Some("dispatch-secret".to_string());
+    })
+    .await
+}
+
+// FAILS IF: an allowlisted preflight's answer depends on the path, lacks the security headers,
+// carries `Allow`, or its bytes move.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn preflight_bytes_are_pinned_and_path_independent(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    let expected = preflight_constant();
+    for path in representative_paths() {
+        let answer = send(&app, Method::OPTIONS, &path, &PREFLIGHT_REQUEST).await;
+        assert_request_id_format(&format!("OPTIONS {path}"), &answer);
+        assert_eq!(answer.without_request_id(), expected, "OPTIONS {path}");
+    }
+}
+
+// FAILS IF: an `OPTIONS` that is not a preflight this instance answers (no `Origin`, a foreign one,
+// an allowlisted one without `Access-Control-Request-Method`, or any origin when none is
+// configured) gets the CORS layer's 200, or a gated path's answer carries `Allow`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn options_without_a_preflight_is_routed(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    let not_preflights: [&[(&str, &str)]; 3] = [
+        &[],
+        &[
+            ("origin", FOREIGN),
+            ("access-control-request-method", "POST"),
+        ],
+        &[("origin", ORIGIN)],
+    ];
+    for headers in not_preflights {
+        for path in [
+            "/api/admin/ledger",
+            "/api/profile",
+            "/api/resources",
+            "/internal/slack/mint",
+        ] {
+            let answer = send(&app, Method::OPTIONS, path, headers).await;
+            assert_eq!(answer.status, 401, "OPTIONS {path} {headers:?}: {answer:?}");
+            assert_eq!(answer.header("allow"), None, "OPTIONS {path} {headers:?}");
+            assert_request_id_format(&format!("OPTIONS {path}"), &answer);
+        }
+        // A designated public route keeps its own answer: 405 with `Allow`.
+        let health = send(&app, Method::OPTIONS, "/api/health", headers).await;
+        assert_eq!(
+            health.status, 405,
+            "OPTIONS /api/health {headers:?}: {health:?}"
+        );
+        assert!(
+            health.header("allow").is_some(),
+            "the public route's 405 names Allow"
+        );
+    }
+
+    // No origins configured: nothing is a preflight this instance answers.
+    let closed = common::setup_test_app_with_config(pool.clone(), |config| {
+        config.cors_origins = vec![];
+    })
+    .await;
+    let answer = send(
+        &closed,
+        Method::OPTIONS,
+        "/api/admin/ledger",
+        &PREFLIGHT_REQUEST,
+    )
+    .await;
+    assert_eq!(answer.status, 401, "{answer:?}");
+    assert_eq!(answer.header("access-control-allow-origin"), None);
+}
+
+// FAILS IF: `Allow` rides any status but 405: the anonymous 401 on an unmounted method, or the 415
+// an undecodable `Content-Encoding` gets before any gate, on a mounted, an unmounted-method or an
+// unmatched path. And the admitted control: an authenticated unmounted method keeps its 405 with
+// `Allow`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn allow_rides_only_a_405(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+
+    for (method, path) in [
+        (Method::POST, "/api/profile"),
+        (Method::PUT, "/api/resources"),
+        (Method::PUT, "/internal/slack/mint"),
+    ] {
+        let answer = send(&app, method.clone(), path, &[]).await;
+        assert_eq!(answer.status, 401, "{method} {path}: {answer:?}");
+        assert_eq!(answer.header("allow"), None, "{method} {path}");
+    }
+
+    for (method, path) in [
+        (Method::POST, "/api/resources"),
+        (Method::PUT, "/api/resources"),
+        (Method::POST, "/api/no-such"),
+        (Method::PUT, "/internal/slack/mint"),
+    ] {
+        let answer = send(&app, method.clone(), path, &[("content-encoding", "foo")]).await;
+        assert_eq!(
+            answer.status, 415,
+            "{method} {path} Content-Encoding: foo: {answer:?}"
+        );
+        assert_eq!(
+            answer.header("allow"),
+            None,
+            "{method} {path} Content-Encoding: foo"
+        );
+    }
+
+    let email = format!("anon-surface-{}@example.com", Uuid::new_v4());
+    let (profile_id, _) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{profile_id}"), &email);
+    let bearer = format!("Bearer {token}");
+    let admitted = send(
+        &app,
+        Method::PUT,
+        "/api/resources",
+        &[("authorization", &bearer)],
+    )
+    .await;
+    assert_eq!(admitted.status, 405, "{admitted:?}");
+    assert_eq!(
+        admitted.header("allow"),
+        Some("GET,HEAD,POST"),
+        "{admitted:?}"
+    );
+}
+
+// FAILS IF: a response lacks `x-request-id`, two requests share one, or the id is taken from the
+// request's own `x-request-id` or `traceparent`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn request_id_is_minted_and_never_adopted(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    const INBOUND_ID: &str = "0123456789abcdef0123456789abcdef";
+    const TRACEPARENT: &str = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    let mut seen = std::collections::BTreeSet::new();
+    for path in representative_paths() {
+        for headers in [
+            &[][..],
+            &[("x-request-id", INBOUND_ID), ("traceparent", TRACEPARENT)][..],
+        ] {
+            let answer = send(&app, Method::GET, &path, headers).await;
+            assert_request_id_format(&format!("GET {path}"), &answer);
+            let id = answer.header("x-request-id").expect("id").to_string();
+            assert_ne!(id, INBOUND_ID, "GET {path}: the inbound id was adopted");
+            assert!(
+                !TRACEPARENT.contains(&id),
+                "GET {path}: the trace id was adopted"
+            );
+            assert!(
+                !answer.body.contains(INBOUND_ID),
+                "GET {path}: the inbound id was echoed"
+            );
+            assert!(seen.insert(id), "GET {path}: a request id repeated");
+        }
+    }
+}
+
+// FAILS IF: a cross-origin browser client on an allowlisted origin cannot read the request id (it
+// is not exposed), or the actual response after a preflight loses its CORS headers.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn expose_headers_name_the_request_id(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    let email = format!("anon-surface-{}@example.com", Uuid::new_v4());
+    let (profile_id, _) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{profile_id}"), &email);
+    let bearer = format!("Bearer {token}");
+
+    let preflight = send(&app, Method::OPTIONS, "/api/profile", &PREFLIGHT_REQUEST).await;
+    assert_eq!(
+        preflight.header("access-control-allow-origin"),
+        Some(ORIGIN)
+    );
+
+    for headers in [
+        vec![("origin", ORIGIN)],
+        vec![("origin", ORIGIN), ("authorization", bearer.as_str())],
+    ] {
+        let answer = send(&app, Method::GET, "/api/profile", &headers).await;
+        assert_eq!(
+            answer.header("access-control-allow-origin"),
+            Some(ORIGIN),
+            "{answer:?}"
+        );
+        let exposed = answer
+            .header("access-control-expose-headers")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        assert!(
+            exposed
+                .split(',')
+                .map(str::trim)
+                .any(|h| h == "x-request-id"),
+            "x-request-id is not exposed: {answer:?}"
+        );
+        assert!(
+            exposed.split(',').map(str::trim).any(|h| h == "link"),
+            "link stays exposed"
+        );
+    }
+
+    // A foreign origin gets no ACAO on the actual response, whatever the path.
+    let foreign = send(&app, Method::GET, "/api/profile", &[("origin", FOREIGN)]).await;
+    assert_eq!(foreign.header("access-control-allow-origin"), None);
+}

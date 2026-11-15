@@ -637,7 +637,7 @@ python3 - "$FIX/mod.rs" <<'PYEOF'
 import sys
 p = sys.argv[1]
 s = open(p).read()
-marker = "let cors = temper_services::cors::cors_layer(&state.config.cors_origins);"
+marker = "let cors = temper_services::cors::CorsPolicy::new(&state.config.cors_origins);"
 assert marker in s
 s = s.replace(marker, marker + "\n    let app = app.layer(from_fn(preconditions::refuse_unhonoured_preconditions));", 1)
 open(p, "w").write(s)
