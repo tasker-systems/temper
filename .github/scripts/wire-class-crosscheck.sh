@@ -96,8 +96,9 @@
 #   * the output names every charged entry point and every one the release reading reclassified.
 # When no ref qualifies (a shallow clone, no tag, a tag the remote does not hold, a newer tag on
 # the remote, an unlistable remote) or openapi.json cannot be read at it, the verdict is
-# BASE-ONLY — the comparator against the base, as before — and the output says so. Base-only
-# is stricter everywhere except a re-birth and a property the release admitted through
+# BASE-ONLY — the comparator against the base, as before, and the same per-entry-point reading
+# with the base standing in for the release; either moving is moved — and the output says so.
+# Base-only is stricter everywhere except a re-birth and a property the release admitted through
 # additionalProperties. Residues (.conventions/status.toml, COMPAT-1): an earlier declared break
 # can be re-charged on an operation this PR touches; additionalProperties-admitted names read as
 # growth; there is no pre-publish check yet.
@@ -539,7 +540,7 @@ derive_shape() {
     if cmp -s "$tmp_base" "$tmp_head"; then rm -f "$tmp_base" "$tmp_head"; echo "unchanged"; return 0; fi
     if [ -n "$RELEASE_CONTRACT" ]; then
         rm -f "$tmp_base" "$tmp_head"
-        derive_shape_release
+        derive_shape_release "$RELEASE_CONTRACT"
         return 0
     fi
     local verdict
@@ -554,6 +555,13 @@ derive_shape() {
     rm -f "$tmp_base" "$tmp_head"
     verdict="${verdict//\"/}"
     [ -z "$verdict" ] && verdict="moved"
+    # Base-only is also judged per resolved entry point, with the base standing in for the
+    # release: the named-component comparison above never looks inside a parameter, response or
+    # other non-schema component, nor at a webhook payload's side. Either reading moving is moved,
+    # so the fallback is never looser than the comparator alone was.
+    if [ "$verdict" = "grew" ]; then
+        verdict="$(derive_shape_release "$BASE_CONTRACT")"
+    fi
     echo "$verdict"
 }
 
@@ -562,10 +570,11 @@ derive_shape() {
 # tools/scripts/release/lib/common.sh: never a copy of it here. It is sourced in a subshell,
 # because that library sets `-e` and this script must report every face, not die on the first.
 # A fallback is never a release: when no ref qualifies, or the release's openapi.json cannot be
-# read, the verdict is base-only (the comparator against the base, as before COMPAT-1) and the
-# output says so. Base-only is stricter everywhere except a re-birth and a property the release
-# admitted through additionalProperties — so falling back can redden a PR, never wave a break
-# through that the release-relative reading would refuse, except those two.
+# read, the verdict is base-only (the comparator against the base, as before COMPAT-1, and the
+# per-entry-point reading with the base as the release) and the output says so. Base-only is
+# stricter everywhere except a re-birth and a property the release admitted through
+# additionalProperties — so falling back can redden a PR, never wave a break through that the
+# release-relative reading would refuse, except those two.
 CONTRACT_DIR="$(mktemp -d)"
 RELEASE_REPORT="${CONTRACT_DIR}/release-report.txt"
 : > "$RELEASE_REPORT"
@@ -618,11 +627,12 @@ prepare_contracts() {
 # component no entry point reaches, each resolved with its $refs inlined (wire-resolve.py);
 # then broke_node, unchanged, pointed at release → head under the doctrine's per-entry-point
 # fallback (wire-shape-release.jq). Prints the verdict; the names go to $RELEASE_REPORT.
-derive_shape_release() {
+derive_shape_release() { # $1 = the contract judged as the release (the base, for base-only)
+    local release_contract="$1"
     local r="${CONTRACT_DIR}/release.ep.json" b="${CONTRACT_DIR}/base.ep.json" h="${CONTRACT_DIR}/head.ep.json"
     local doc="${CONTRACT_DIR}/stripped.json" result
     command -v python3 >/dev/null 2>&1 || { echo "undeterminable"; return 0; }
-    jq 'del(.info.version)' "$RELEASE_CONTRACT" > "$doc" 2>/dev/null \
+    jq 'del(.info.version)' "$release_contract" > "$doc" 2>/dev/null \
         && python3 -I "${SCRIPT_DIR}/wire-resolve.py" "$doc" > "$r" 2>>"$RELEASE_REPORT" \
         || { echo "undeterminable"; return 0; }
     jq 'del(.info.version)' "$BASE_CONTRACT" > "$doc" 2>/dev/null \

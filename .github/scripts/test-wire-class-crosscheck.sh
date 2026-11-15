@@ -934,10 +934,10 @@ expect_charged "COMPAT-1 bite 9: a changed security scheme on a released operati
 # Bite 6 under the fallback, and the residue it records. An earlier PR declared maxLength
 # 10 → 5; this PR relaxes it to 8. Against the release 10 → 8 is still a tightening, and this
 # PR changes the operation, so the verdict-only fallback charges it again (the residue
-# status.toml records for COMPAT-1). A further break at the same place fails, as it must.
+# status.toml records for COMPAT-1). A deeper break at the same place (5 → 3) fails, as it must.
 derive_contract release max5 '.components.schemas.ItemCreate.properties.name.maxLength = 5'
 derive_contract release max8 '.components.schemas.ItemCreate.properties.name.maxLength = 8'
-derive_contract max5 max5-enum '.components.schemas.ItemCreate.properties.name.pattern = "^a"'
+derive_contract max5 max5-enum '.components.schemas.ItemCreate.properties.name.maxLength = 3'
 out="$(compat_check release max5 max8)"; rc=$?
 expect_charged "COMPAT-1 bite 6 (residue): a relaxed earlier declared break is re-charged on the touched operation" "$out" "$rc" "op POST /items"
 out="$(compat_check release max5 max5-enum)"; rc=$?
@@ -948,6 +948,60 @@ if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'release-relative verdict' \
     && ! printf '%s' "$out" | grep -q 'charged —'; then
   ok "COMPAT-1 bite 6: an earlier declared break on an operation this PR leaves alone is not charged"
 else bad "COMPAT-1 bite 6: an earlier declared break this PR leaves alone is not charged" "exit=$rc" "$out"; fi
+
+# A cycle marker names the enclosing node by its place in the operation, not by ref-hops: two
+# contracts that differ (p.q was an Item-like node, it is now a node with only q) never resolve
+# to the same form.
+derive_contract release cyc-a '.paths."/a" = {"get":{"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"$ref":"#/components/schemas/A"}}}}}}}
+  | .components.schemas.A = {"type":"object","properties":{"v":{"type":"string"},"p":{"type":"object","properties":{"q":{"$ref":"#/components/schemas/A"}}}}}'
+derive_contract cyc-a cyc-p '.components.schemas.A.properties.p = {"$ref":"#/components/schemas/P"}
+  | .components.schemas.P = {"type":"object","properties":{"q":{"$ref":"#/components/schemas/P"}}}'
+out="$(compat_check cyc-a cyc-a cyc-p)"; rc=$?
+expect_charged "COMPAT-1: a cycle re-pointed at a different enclosing node is not aliased to the released one" "$out" "$rc" "op GET /a"
+
+# A webhook's payload is server-sent: enum growth there is output growth, a break — never the
+# input tolerance a request body gets. Both readings refuse it.
+derive_contract release hook '.webhooks = {"evt":{"post":{"requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Evt"}}}},"responses":{"200":{"description":"ok"}}}}}
+  | .components.schemas.Evt = {"type":"object","properties":{"kind":{"type":"string","enum":["a","b"]}}}'
+derive_contract hook hook-grown '.components.schemas.Evt.properties.kind.enum += ["c"]'
+out="$(compat_check hook hook hook-grown)"; rc=$?
+expect_charged "COMPAT-1 bite 9: enum growth in a released webhook payload fails" "$out" "$rc" "webhook evt POST"
+out="$(compat_check none hook hook-grown)"; rc=$?
+if [ "$rc" -ne 0 ]; then ok "COMPAT-1: the same webhook payload growth fails base-only"
+else bad "COMPAT-1: webhook payload growth fails base-only" "exit=$rc" "$out"; fi
+# ... and the same in a callback.
+derive_contract release cb '.paths."/items".post.callbacks = {"done":{"{$request.body#/url}":{"post":{"requestBody":{"content":{"application/json":{"schema":{"type":"string","enum":["ok"]}}}},"responses":{"200":{"description":"ok"}}}}}}'
+derive_contract cb cb-grown '.paths."/items".post.callbacks.done."{$request.body#/url}".post.requestBody.content."application/json".schema.enum += ["late"]'
+out="$(compat_check cb cb cb-grown)"; rc=$?
+expect_charged "COMPAT-1: enum growth in a released callback payload fails" "$out" "$rc" "op POST /items"
+
+# Base-only is never looser than the per-entry-point reading: a released parameter component
+# made required, with no release to measure against, still fails.
+derive_contract param-born param-born-req '.components.parameters.Verbose.required = true'
+out="$(compat_check none param-born param-born-req)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'base-only verdict'; then
+  ok "COMPAT-2: base-only also judges resolved operations (a parameter component made required fails)"
+else bad "COMPAT-2: base-only also judges resolved operations" "exit=$rc" "$out"; fi
+
+# Two $ref'd parameters carrying non-prose siblings keep their own identities: one of them
+# turning required fails, and is never collapsed away.
+derive_contract release two-params '.paths."/items/{id}".get.parameters += [{"$ref":"#/components/parameters/A","x-order":1},{"$ref":"#/components/parameters/B","x-order":2}]
+  | .components.parameters = {"A":{"in":"query","name":"a","schema":{"type":"string"}},"B":{"in":"query","name":"b","schema":{"type":"string"}}}'
+derive_contract two-params two-params-a-req '.components.parameters.A.required = true'
+out="$(compat_check two-params two-params two-params-a-req)"; rc=$?
+expect_charged "COMPAT-1: a \$ref'd parameter with siblings is judged as itself" "$out" "$rc" "op GET /items/{}"
+
+# A $ref into the middle of a component does not reach the rest of it: the rest is still judged.
+derive_contract release partial '.components.schemas.Foo = {"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"}}}
+  | .components.schemas.Item.properties.fx = {"$ref":"#/components/schemas/Foo/properties/x"}'
+derive_contract partial partial-moved '.components.schemas.Foo.properties.y.type = "integer"'
+out="$(compat_check partial partial partial-moved)"; rc=$?
+expect_charged "COMPAT-1: a ref into the middle of a component leaves the rest judged as unreached" "$out" "$rc" "component schemas/Foo"
+
+# example/examples beside a $ref are prose, as broke_node reads them.
+derive_contract release ex '.paths."/items/{id}".get.responses."200".content."application/json".schema.examples = [{"id":"z"}]'
+out="$(compat_check release release ex)"; rc=$?
+expect_pass "COMPAT-1: examples beside a \$ref are prose, not a break" "$out" "$rc"
 
 # A resolver that cannot resolve is "could not look": a dangling $ref fails, never passes.
 derive_contract release dangling '.components.schemas.Item.properties.name = {"$ref":"#/components/schemas/Nowhere"}'
@@ -1019,12 +1073,19 @@ DETECT_OUT="$(cd "$SHALLOW" && bash tools/scripts/release/detect-changes.sh 2>/d
 if printf '%s' "$DETECT_OUT" | grep -qx 'CHANGES_BASE_IS_FALLBACK=true'; then
   ok "COMPAT-2: detect-changes reports the shallow clone's base as a fallback, machine-readably"
 else bad "COMPAT-2: detect-changes reports the fallback machine-readably" "$DETECT_OUT"; fi
-# The CI step's fetch turns the same clone into a provable one.
-git -C "$SHALLOW" fetch -q --filter=tree:0 --unshallow --tags origin 2>/dev/null
+# Unshallowed with tags, the same clone becomes a provable one.
+git -C "$SHALLOW" fetch -q --unshallow --tags origin 2>/dev/null
 out="$(derived_check "$SHALLOW")"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'release: v1.0.0 — release-relative verdict'; then
-  ok "COMPAT-2: after the unshallow-and-tags fetch, the same clone measures against v1.0.0"
-else bad "COMPAT-2: after the unshallow-and-tags fetch, the clone measures against v1.0.0" "exit=$rc" "$out"; fi
+  ok "COMPAT-2: after an unshallow-and-tags fetch, the same clone measures against v1.0.0"
+else bad "COMPAT-2: after an unshallow-and-tags fetch, the clone measures against v1.0.0" "exit=$rc" "$out"; fi
+# The guard-tests checkout: full history, tags, blobs on demand (fetch-depth 0, filter blob:none).
+BLOBLESS="${WORK}/clone-blobless"
+clone_of "$BLOBLESS" --filter=blob:none
+out="$(derived_check "$BLOBLESS")"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'release: v1.0.0 — release-relative verdict'; then
+  ok "COMPAT-2: the guard-tests checkout shape (blobless, full history, tags) measures against v1.0.0"
+else bad "COMPAT-2: the guard-tests checkout shape measures against v1.0.0" "exit=$rc" "$out"; fi
 DETECT_OUT="$(cd "$SHALLOW" && bash tools/scripts/release/detect-changes.sh 2>/dev/null)"
 if printf '%s' "$DETECT_OUT" | grep -qx 'CHANGES_BASE_REF=v1.0.0' \
     && printf '%s' "$DETECT_OUT" | grep -qx 'CHANGES_BASE_IS_FALLBACK=false'; then
@@ -1039,6 +1100,34 @@ if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'release: v1.0.0 — release-
   ok "COMPAT-2 bite 16: a release-form tag on a PR-only commit is not taken as the release"
 else bad "COMPAT-2 bite 16: a release-form tag on a PR-only commit is not the release" "exit=$rc" "$out"; fi
 up tag -d v9.9.9 >/dev/null
+
+# A nearer tag that is not in the release form (a pre-release) neither hides the release nor
+# forces a fallback: only v<MAJOR>.<MINOR>.<PATCH> tags are releases.
+up tag v1.1.0-rc1 "$UP_BASE"
+clone_of "$FULL"
+out="$(derived_check "$FULL")"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'release: v1.0.0 — release-relative verdict'; then
+  ok "COMPAT-2: a nearer pre-release tag is skipped, not taken and not a fallback"
+else bad "COMPAT-2: a nearer pre-release tag is skipped" "exit=$rc" "$out"; fi
+up tag -d v1.1.0-rc1 >/dev/null
+
+# The newest release by version, not the nearest tag: a maintenance-line tag merged in after a
+# newer release must not stand in for it (shape shipped in the newer release would read as
+# window-born).
+up checkout -q -b maint v1.0.0
+echo "fix" > "${UP}/maint.txt"; up add maint.txt; up commit -q -m "maint fix"
+up tag v1.0.9
+up checkout -q main
+up tag v1.1.0 "$UP_BASE~0"
+up merge -q --no-edit -m "merge maint" maint >/dev/null 2>&1
+MAINT_BASE="$(up rev-parse HEAD)"
+clone_of "$FULL"
+out="$( (cd "$FULL" && source tools/scripts/release/lib/common.sh && last_release "$MAINT_BASE") 2>&1)"
+if printf '%s' "$out" | grep -qx 'LAST_RELEASE_REF=v1.1.0' && printf '%s' "$out" | grep -qx 'LAST_RELEASE_IS_FALLBACK=false'; then
+  ok "COMPAT-2: the newest release by version wins over a nearer maintenance-line tag"
+else bad "COMPAT-2: the newest release by version wins over a nearer maintenance tag" "$out"; fi
+up tag -d v1.0.9 v1.1.0 >/dev/null
+up reset -q --hard "$UP_BASE"
 
 # A tag only this clone holds (nobody pushed it) is not a release either.
 clone_of "$FULL"
@@ -1069,7 +1158,7 @@ clone_of "$FULL"
 up tag -d v1.0.0 >/dev/null
 git -C "$FULL" tag -d v1.0.0 >/dev/null
 out="$(derived_check "$FULL")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'base-only verdict (COMPAT-2): no v<VERSION> tag'; then
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'base-only verdict (COMPAT-2): no v<MAJOR>.<MINOR>.<PATCH> tag'; then
   ok "COMPAT-2 bite 14: with no release ref resolvable, the gate gives the base-only verdict"
 else bad "COMPAT-2 bite 14: with no release ref, base-only" "exit=$rc" "$out"; fi
 

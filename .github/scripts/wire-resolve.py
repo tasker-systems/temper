@@ -20,23 +20,31 @@ Entry point keys (conventions doctrine compat.md, "Terms"):
 
 The resolved form of an operation is the operation object with:
   * every `$ref` reached from it inlined in place, through components of every kind. A `$ref`'s
-    prose siblings (description, summary, title) overlay the target; any other sibling is kept
-    beside it as `allOf: [target, siblings]`, never silently merged;
-  * a reference back into a node already being resolved replaced by {"$cycle": <depth>}, the
-    distance up the resolution stack to the enclosing node, so a cycle ends and a rename alone
-    changes nothing;
-  * its parameters merged with the path item's (the operation's win on the same in+name), and
-    each path parameter's name replaced by its position in the template ("{0}", "{1}"): the
-    name is not on the wire, the position is;
+    prose siblings (description, summary, title, example, examples) overlay the target; any
+    other sibling is kept beside it as `allOf: [target, siblings]`, never silently merged
+    (a parameter or a path item, which is no schema, takes the siblings as an overlay);
+  * a reference back into a node already being resolved replaced by {"$cycle": <location>}, the
+    enclosing node's place in this form (a path of property names from the entry point's root),
+    so a cycle ends, a rename alone changes nothing, and two different enclosing nodes never
+    read as one;
+  * its parameters merged with the path item's (the operation's win on the same in+name), each
+    with `required` written out (default false), and each path parameter's name replaced by its
+    position in the template ("{0}", "{1}"): the name is not on the wire, the position is;
   * `servers` replaced by the effective servers (operation, else path item, else document,
     else the default "/") and `security` by the effective requirements with each scheme
     resolved — both under the same keys, so broke_node reads them as it reads any other key;
   * each discriminator's effective mapping (explicit entries, plus the implicit entry for every
     `$ref` arm of the sibling oneOf/anyOf), each value resolved in place;
-  * the dialect its schemas are read in: {"openapi", "jsonSchemaDialect"} under `x-dialect`.
+  * the dialect its schemas are read in: {"openapi", "jsonSchemaDialect"} under `x-dialect`;
+  * in a webhook, and in every callback, the request is SERVER-SENT: its `requestBody` and
+    `parameters` are renamed (SERVER_SENT below) so broke_node judges them on the strict side,
+    never with the input-side tolerance a client's request gets.
 
-Fails closed: an unresolvable local `$ref`, a key collision after erasure, or an unreadable
-document exits non-zero, and the gate reads that as "could not look", never as "nothing moved".
+A `$ref` into the middle of a component reaches only that part, so the component is still judged
+as one no entry point reaches.
+
+Fails closed: an unresolvable local `$ref`, a key collision after erasure, a parameter with no
+in+name or listed twice, or an unreadable document exits non-zero, and the gate reads that as "could not look", never as "nothing moved".
 A non-local `$ref` (another document) is left as written; the contract has none, and comparing
 the string is the strictest reading available.
 """
@@ -49,8 +57,14 @@ import sys
 from typing import Any
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
-PROSE = ("description", "summary", "title")
+# The keys broke_node treats as prose (wire-shape-lib.jq, sans_prose): beside a `$ref` they overlay
+# the target; any other sibling is kept as `allOf: [target, siblings]`.
+PROSE = ("description", "summary", "title", "example", "examples")
 TEMPLATE_PARAM = re.compile(r"\{([^}]*)\}")
+# In a webhook, or a callback, the server SENDS the request: its body and parameters are output.
+# broke_node's side follows key names (`requestBody`/`parameters` descend as input), so those keys
+# are renamed in a server-sent operation and judged on the strict, mixed side instead.
+SERVER_SENT = {"requestBody": "x-server-sent-requestBody", "parameters": "x-server-sent-parameters"}
 
 
 class Unresolvable(Exception):
@@ -71,11 +85,16 @@ def pointer_get(doc: Any, pointer: str) -> Any:
 
 
 def component_of(pointer: str) -> str | None:
-    """'#/components/schemas/Foo/properties/x' -> 'schemas/Foo'."""
+    """'#/components/schemas/Foo' -> 'schemas/Foo'. A ref into the middle of a component
+    ('#/components/schemas/Foo/properties/x') does not reach the whole component, so it is not
+    counted: the rest of Foo is still judged as a component no entry point reaches."""
     parts = pointer[2:].split("/")
-    if len(parts) >= 3 and parts[0] == "components":
+    if len(parts) == 3 and parts[0] == "components":
         return f"{parts[1]}/{parts[2]}"
     return None
+
+
+Stack = tuple[tuple[str, str], ...]  # (ref, the resolved-tree location it was inlined at)
 
 
 class Resolver:
@@ -83,25 +102,31 @@ class Resolver:
         self.doc = doc
         self.touched: set[str] = set()
 
-    def resolve(self, node: Any, stack: tuple[str, ...]) -> Any:
+    def resolve(self, node: Any, stack: Stack = (), at: str = "") -> Any:
+        """Inline every local `$ref` under `node`. `at` is the node's location in the form being
+        built, from the entry point's root: a reference back into a node already being resolved
+        becomes {"$cycle": <that node's location>}. The location names properties, never
+        components, so a rename alone changes nothing, and two different enclosing nodes never
+        read as the same one."""
         if isinstance(node, list):
-            return [self.resolve(x, stack) for x in node]
+            return [self.resolve(x, stack, f"{at}/{i}") for i, x in enumerate(node)]
         if not isinstance(node, dict):
             return node
         ref = node.get("$ref")
         if isinstance(ref, str) and ref.startswith("#"):
             siblings = {k: v for k, v in node.items() if k != "$ref"}
-            if ref in stack:
-                target: Any = {"$cycle": len(stack) - stack.index(ref)}
+            entered = dict(stack)
+            if ref in entered:
+                target: Any = {"$cycle": entered[ref] or "/"}
             else:
                 comp = component_of(ref)
                 if comp:
                     self.touched.add(comp)
-                target = self.resolve(pointer_get(self.doc, ref), (*stack, ref))
-            return self.overlay(target, self.resolve(siblings, stack))
-        out = {k: self.resolve(v, stack) for k, v in node.items()}
+                target = self.resolve(pointer_get(self.doc, ref), (*stack, (ref, at)), at)
+            return self.overlay(target, self.resolve(siblings, stack, at))
+        out = {k: self.resolve(v, stack, f"{at}/{k}") for k, v in node.items()}
         if isinstance(out.get("discriminator"), dict):
-            out["discriminator"] = self.discriminator(node, out["discriminator"], stack)
+            out["discriminator"] = self.discriminator(node, out["discriminator"], stack, at)
         return out
 
     @staticmethod
@@ -112,14 +137,15 @@ class Resolver:
             return {**target, **siblings}
         return {"allOf": [target, siblings]}
 
-    def discriminator(self, raw: dict, resolved: dict, stack: tuple[str, ...]) -> dict:
+    def discriminator(self, raw: dict, resolved: dict, stack: Stack, at: str) -> dict:
         mapping: dict[str, Any] = {}
         explicit = (raw.get("discriminator") or {}).get("mapping") or {}
         named = set()
+        here = f"{at}/discriminator/mapping"
         for value, target in explicit.items():
             pointer = target if target.startswith("#") else f"#/components/schemas/{target}"
             named.add(pointer)
-            mapping[value] = self.resolve({"$ref": pointer}, stack)
+            mapping[value] = self.resolve({"$ref": pointer}, stack, f"{here}/{value}")
         for arm in (raw.get("oneOf") or []) + (raw.get("anyOf") or []):
             pointer = arm.get("$ref") if isinstance(arm, dict) else None
             if (
@@ -127,34 +153,90 @@ class Resolver:
                 and pointer.startswith("#/components/schemas/")
                 and pointer not in named
             ):
-                mapping[pointer.rsplit("/", 1)[1]] = self.resolve({"$ref": pointer}, stack)
+                value = pointer.rsplit("/", 1)[1]
+                mapping[value] = self.resolve({"$ref": pointer}, stack, f"{here}/{value}")
         return {**resolved, "mapping": mapping}
+
+    def path_item(self, raw: dict) -> dict:
+        """A path item, its own `$ref` resolved. Its siblings (summary, description, and in 3.1
+        anything else) overlay the target: a path item is a map of operations, never a schema, so
+        an `allOf` wrapper would make its operations vanish."""
+        if "$ref" not in raw:
+            return raw
+        target = pointer_get(self.doc, raw["$ref"])
+        if not isinstance(target, dict):
+            raise Unresolvable(f"path item $ref {raw['$ref']} is not an object")
+        siblings = {k: v for k, v in raw.items() if k != "$ref"}
+        return self.path_item({**target, **siblings})
 
 
 def erase(template: str) -> str:
     return TEMPLATE_PARAM.sub("{}", template)
 
 
-def operation_form(r: Resolver, doc: dict, template: str | None, item: dict, op: dict) -> dict:
-    form = r.resolve(op, ())
-    item_params = r.resolve(item.get("parameters") or [], ())
-    own = form.get("parameters") or []
+def as_parameter(p: Any) -> dict:
+    """A resolved parameter, with its identity. A `$ref`'d parameter with non-prose siblings
+    resolves to `allOf: [target, siblings]`; a parameter is no schema, so the siblings overlay
+    it instead. A parameter with no `in`+`name` cannot be told apart from another: refuse."""
+    if (
+        isinstance(p, dict)
+        and set(p) == {"allOf"}
+        and len(p["allOf"]) == 2
+        and isinstance(p["allOf"][0], dict)
+        and "in" in p["allOf"][0]
+    ):
+        p = {**p["allOf"][0], **p["allOf"][1]}
+    if not (
+        isinstance(p, dict) and isinstance(p.get("in"), str) and isinstance(p.get("name"), str)
+    ):
+        raise Unresolvable(f"a parameter has no in+name identity: {json.dumps(p)[:120]}")
+    # `required` defaults to false (OAS 3.1, Parameter Object): written out, so a parameter that
+    # gains it compares as the boolean it is. broke_node reads a `required` key gained from
+    # absent as a schema's required array, and errors on a boolean.
+    return {"required": False, **p}
+
+
+def parameter_list(resolved: list, where: str) -> list[dict]:
+    seen = set()
+    out = []
+    for p in resolved:
+        p = as_parameter(p)
+        key = (p["in"], p["name"])
+        if key in seen:
+            raise Unresolvable(f"{where} lists the parameter {key} twice")
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def server_sent(form: dict) -> dict:
+    return {SERVER_SENT.get(k, k): v for k, v in form.items()}
+
+
+def operation_form(
+    r: Resolver, doc: dict, template: str | None, item: dict, op: dict, sent: bool
+) -> dict:
+    form = r.resolve(op)
+    where = f"{template or 'a webhook'}"
+    item_params = parameter_list(r.resolve(item.get("parameters") or [], (), "/parameters"), where)
+    own = parameter_list(form.get("parameters") or [], where)
     merged: dict[tuple, Any] = {}
-    for p in list(item_params) + list(own):
-        key = (p.get("in"), p.get("name")) if isinstance(p, dict) else ("?", json.dumps(p))
-        merged[key] = p
+    for p in item_params + own:
+        merged[(p["in"], p["name"])] = p
     positions = {}
     if template is not None:
         positions = {name: i for i, name in enumerate(TEMPLATE_PARAM.findall(template))}
     params = []
     for p in merged.values():
-        if isinstance(p, dict) and p.get("in") == "path" and p.get("name") in positions:
+        if p["in"] == "path" and p["name"] in positions:
             p = {**p, "name": f"{{{positions[p['name']]}}}"}
         params.append(p)
     if params or "parameters" in op or "parameters" in item:
         form["parameters"] = params
     form["servers"] = r.resolve(
-        op.get("servers") or item.get("servers") or doc.get("servers") or [{"url": "/"}], ()
+        op.get("servers") or item.get("servers") or doc.get("servers") or [{"url": "/"}],
+        (),
+        "/servers",
     )
     requirements = op.get("security", doc.get("security", []))
     schemes = (doc.get("components") or {}).get("securitySchemes") or {}
@@ -165,14 +247,33 @@ def operation_form(r: Resolver, doc: dict, template: str | None, item: dict, op:
             if name not in schemes:
                 raise Unresolvable(f"security requirement names an undefined scheme {name}")
             r.touched.add(f"securitySchemes/{name}")
-            entry[name] = {"scopes": scopes, "scheme": r.resolve(schemes[name], ())}
+            entry[name] = {
+                "scopes": scopes,
+                "scheme": r.resolve(schemes[name], (), f"/security/{name}"),
+            }
         security.append(entry)
     form["security"] = security
     form["x-dialect"] = {
         "openapi": doc.get("openapi"),
         "jsonSchemaDialect": doc.get("jsonSchemaDialect"),
     }
-    return form
+    # Callbacks are server-sent operations wherever they appear.
+    if isinstance(form.get("callbacks"), dict):
+        form["callbacks"] = {
+            name: {
+                expr: {
+                    k: server_sent(v) if k in METHODS and isinstance(v, dict) else v
+                    for k, v in (item_ or {}).items()
+                }
+                if isinstance(item_, dict)
+                else item_
+                for expr, item_ in (cb or {}).items()
+            }
+            if isinstance(cb, dict)
+            else cb
+            for name, cb in form["callbacks"].items()
+        }
+    return server_sent(form) if sent else form
 
 
 def entry_points(doc: dict) -> dict[str, Any]:
@@ -185,20 +286,20 @@ def entry_points(doc: dict) -> dict[str, Any]:
         out[key] = form
 
     for template, raw_item in sorted((doc.get("paths") or {}).items()):
-        item = r.resolve(raw_item, ()) if "$ref" in raw_item else raw_item
+        item = r.path_item(raw_item)
         for method in METHODS:
             if isinstance(item.get(method), dict):
                 put(
                     f"op {method.upper()} {erase(template)}",
-                    operation_form(r, doc, template, item, item[method]),
+                    operation_form(r, doc, template, item, item[method], sent=False),
                 )
     for name, raw_item in sorted((doc.get("webhooks") or {}).items()):
-        item = r.resolve(raw_item, ()) if "$ref" in raw_item else raw_item
+        item = r.path_item(raw_item)
         for method in METHODS:
             if isinstance(item.get(method), dict):
                 put(
                     f"webhook {name} {method.upper()}",
-                    operation_form(r, doc, None, item, item[method]),
+                    operation_form(r, doc, None, item, item[method], sent=True),
                 )
 
     reached = set(r.touched)
@@ -208,7 +309,7 @@ def entry_points(doc: dict) -> dict[str, Any]:
         for name in sorted(members):
             comp = f"{kind}/{name}"
             pointer = f"#/components/{kind}/{name.replace('~', '~0').replace('/', '~1')}"
-            form = r.resolve({"$ref": pointer}, ())
+            form = r.resolve({"$ref": pointer})
             out[f"component {comp}"] = {"reached": comp in reached, "form": form}
     return out
 

@@ -357,14 +357,14 @@ surfaces_intersect() {
 #   LAST_RELEASE_REASON=<why it is a fallback; empty when it is not>
 #
 # LAST_RELEASE_IS_FALLBACK=false only when every condition holds:
-#   * a tag in the release form, v<MAJOR>.<MINOR>.<PATCH>, is reachable from <commit>
-#     (`git describe`, the nearest one);
+#   * a tag in the release form, v<MAJOR>.<MINOR>.<PATCH>, is reachable from <commit>: the
+#     newest by version among them (other tag forms are not releases and are skipped);
 #   * it is an ancestor of <commit>;
 #   * the history holds it: the clone is not shallow (a shallow clone is cut short, and a
 #     tag-less checkout cannot see any tag);
 #   * the remote lists the tag on the same commit (a tag nobody pushed is not a release);
-#   * the remote lists no other release tag that is a descendant of it and an ancestor of
-#     <commit>; a listed tag whose commit this clone cannot place, or a remote whose tags
+#   * the remote lists no other release tag that <commit> contains and that is a descendant of
+#     it or a higher version; a listed tag whose commit this clone cannot place, or a remote whose tags
 #     cannot be listed, cannot show that, so it is a fallback too.
 # Otherwise LAST_RELEASE_IS_FALLBACK=true. LAST_RELEASE_REF is then the nearest tag if one was
 # found (the calculator's best guess at its window, flagged), else the root commit. A fallback
@@ -390,17 +390,18 @@ last_release() {
         _last_release_emit "" true "${at} is not a commit in this clone"
         return 0
     fi
+    # The newest release-form tag among the ancestors of <commit>, by version, not `describe`'s
+    # nearest: a nearer maintenance-line tag (v1.0.1 merged after v1.1.0) or a pre-release tag
+    # (v1.1.0-rc1) must not stand in for the newest release.
+    tag="$(git tag --merged "$at" --list 'v*' 2>/dev/null | grep -E "$form" \
+        | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1)"
+    [[ -z "$tag" ]] || tag="v${tag}"
     if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null)" != "false" ]]; then
         _last_release_fallback "the clone is shallow: its history is cut short, so no tag found in it is provably the last release (git fetch --unshallow --tags)"
         return 0
     fi
-    if ! tag="$(git describe --tags --match 'v[0-9]*' --abbrev=0 "$at" 2>/dev/null)"; then
-        tag=""
-        _last_release_fallback "no v<VERSION> tag is reachable from ${at} (were tags fetched?)"
-        return 0
-    fi
-    if ! [[ "$tag" =~ $form ]]; then
-        _last_release_fallback "the nearest tag ${tag} is not in the release form v<MAJOR>.<MINOR>.<PATCH>"
+    if [[ -z "$tag" ]]; then
+        _last_release_fallback "no v<MAJOR>.<MINOR>.<PATCH> tag is reachable from ${at} (were tags fetched?)"
         return 0
     fi
     commit="$(git rev-parse "${tag}^{commit}")"
@@ -432,7 +433,8 @@ last_release() {
             _last_release_fallback "${remote} lists ${name} on ${c}, which this clone cannot place (git fetch --tags)"
             return 0
         fi
-        if git merge-base --is-ancestor "$commit" "$c" && git merge-base --is-ancestor "$c" "$at"; then
+        git merge-base --is-ancestor "$c" "$at" || continue
+        if git merge-base --is-ancestor "$commit" "$c" || ! semver_ge "${tag#v}" "${name#v}"; then
             _last_release_fallback "${remote} lists ${name}, a newer release than ${tag} that ${at} contains"
             return 0
         fi

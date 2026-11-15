@@ -259,6 +259,8 @@ CONS-9 = "uncovered: conventions-bump.yml is not adopted; the pin is moved by ha
 #   * the pre-publish check (release-prepare.sh judging the candidate against the last tag, and
 #     refusing a break no window entry declares) is not built: a break that landed under the
 #     base-only verdict is not caught before publish (bite 13);
+#   * the comparator's own residue carries over: a constraint key gained on an existing property
+#     (enum, maxLength, pattern, ...) still reads as growth;
 #   * MCP output and CLI stdout have no committed shape artifact, so no gate judges them (the
 #     gate's own accepted residue).
 # Continuous deploy, ruled by the owner (2026-11-15): tag releases are the compatibility
@@ -266,10 +268,14 @@ CONS-9 = "uncovered: conventions-bump.yml is not adopted; the pin is moved by ha
 # observe window-born shape that this rule lets move; that is accepted, not measured.
 COMPAT-1 = "partial: release-relative per-entry-point fallback in guard-tests; no pre-publish check, and an earlier declared break can be re-charged"
 # last_release in tools/scripts/release/lib/common.sh is the one derivation: detect-changes.sh
-# (the calculator's window) and the gate both call it. guard-tests fetches the history and tags
-# (--filter=tree:0 --unshallow --tags); a shallow clone, no tag, a tag the remote does not hold,
-# a newer remote tag, or an unlistable remote is a fallback, emitted as LAST_RELEASE_IS_FALLBACK /
-# CHANGES_BASE_IS_FALLBACK, and the gate then gives the base-only verdict. Bite cases: §21.
+# (the calculator's window) and the gate both call it: the newest v<X.Y.Z> ancestor tag by
+# version. guard-tests checks out the full history and tags, blobless, and a visible step proves
+# it; a shallow clone, no tag, a tag the remote does not hold, a newer remote tag the base
+# contains, or an unlistable remote is a fallback, emitted as LAST_RELEASE_IS_FALLBACK /
+# CHANGES_BASE_IS_FALLBACK, and the gate then gives the base-only verdict (the named-component
+# comparator and the per-entry-point reading against the base; either moving is moved). Nothing
+# yet refuses a release from a fallback window (the pre-publish check is deferred). Bite
+# cases: §21.
 # One stream: v<VERSION> tags on main; the leaves carry no tags of their own and no maintenance
 # line is declared. The release's contract is openapi.json at the tag, the file the SDKs were
 # generated from. Staleness: the merge queue runs the gate on the exact merge commit.
