@@ -7,10 +7,11 @@
 //! match, and a fallback (added with the shared transport layers) that answers before auth does.
 //!
 //! The last one is not hypothetical — it is why this file was written. Adding
-//! `transport::apply_base_layers` moved an unmatched path from `401` (the auth middleware wrapping
-//! `mcp_routes`' inherited fallback) to `404`. That is the intended shape, but it is a change to
-//! what an unauthenticated caller gets, so the gate on the routes that matter is asserted here
-//! rather than assumed.
+//! `transport::apply_base_layers` moved an unmatched path from the auth middleware's `401` (wrapping
+//! `mcp_routes`' inherited fallback) to the surface's own fallback. That fallback now answers the
+//! uniform pre-identity `401` outside the discovery and OAuth families and the `404` inside them,
+//! never the gate's challenge, so the gate on the routes that matter is asserted here rather than
+//! assumed.
 //!
 //! `/mcp/health` is the interesting case: it is registered as an exact public route *underneath*
 //! `nest_service("/mcp", …)`, which the auth layer wraps. It stays public only because an exact
@@ -238,14 +239,28 @@ async fn the_public_routes_are_reachable_without_a_token() {
     }
 }
 
-/// An unmatched path is a 404, not a 401. Answering 401 would tell an unauthenticated prober that
-/// every path exists, and would come from the auth middleware rather than from any routing
-/// decision.
+/// An unmatched path is answered by the fallback, never by the auth gate: no MCP challenge, so a
+/// prober cannot tell it from the gated door. Outside the discovery and OAuth families it is the
+/// uniform pre-identity 401 (`unmatched_fallback_test.rs` pins its bytes); inside them, the 404.
 #[tokio::test]
 async fn an_unmatched_path_is_not_answered_by_the_auth_gate() {
+    let response = router()
+        .oneshot(
+            Request::builder()
+                .uri("/definitely-not-a-route")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router answers");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        response.headers().get(header::WWW_AUTHENTICATE).is_none(),
+        "an unmatched path must be the fallback's refusal, not the auth layer's challenge"
+    );
     assert_eq!(
-        status_of("GET", "/definitely-not-a-route", None).await,
+        status_of("GET", "/oauth/definitely-not-a-route", None).await,
         StatusCode::NOT_FOUND,
-        "an unmatched path must be a 404 from the fallback, not a 401 from the auth layer"
+        "an unmatched path in the OAuth family must be a 404 from the fallback"
     );
 }

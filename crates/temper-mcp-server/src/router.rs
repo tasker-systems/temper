@@ -132,8 +132,10 @@ pub fn build_router(
         config,
     );
 
-    // The limit is the OUTERMOST layer here, above `require_mcp_auth`, so an oversized body is
-    // refused before the JWKS lookup and signature check that authentication performs. It is still INSIDE
+    // The limit is the OUTERMOST layer here, above `require_mcp_auth`, so a body whose declared
+    // `Content-Length` is over it is refused before the JWKS lookup and signature check that
+    // authentication performs; a chunked or compressed one (decompression drops the length) is cut
+    // off only when it is read, which is after the gate. It is still INSIDE
     // `apply_base_layers`' decompression, which is applied to the merged router below — so it
     // measures decompressed bytes, the property `/api/query`'s limit has and the one that matters.
     let mcp_routes = Router::new()
@@ -147,17 +149,17 @@ pub fn build_router(
     // ── Health (public) ────────────────────────────────────────────────
     let health = Router::new().route("/mcp/health", get(|| async { "ok" }));
 
-    // The layers below the root span, from the same place temper-api takes them: the structured
-    // 404 and request decompression. Applied to the merged router so the fallback outranks the one
-    // `mcp_routes` inherits — without it an unmatched path was answered by the auth middleware
-    // wrapping that router's fallback, so a typo'd URL came back `401`, not a 404 of any shape.
+    // The layers below the root span, from the same place temper-api takes them: this surface's
+    // fallback ([`unmatched`]) and request decompression. Applied to the merged router so the
+    // fallback outranks the one `mcp_routes` inherits — without it an unmatched path was answered
+    // by the auth middleware wrapping that router's fallback, with the MCP challenge.
     temper_services::transport::apply_base_layers(
         Router::new()
             .merge(discovery_routes)
             .merge(registration_routes)
             .merge(health)
             .merge(mcp_routes),
-        temper_services::transport::fallback_handler,
+        unmatched,
     )
     // HTTP root span, mirroring temper-api's `apply_transport_layers`. Until this landed, MCP
     // requests had NO root span at all — every MCP log line was parentless, on the surface that
@@ -177,6 +179,52 @@ pub fn build_router(
     // reported that. `temper_services::cors` now owns the policy (and its parse) so there is
     // one place it can be read from and no second stack to forget.
     .layer(temper_services::cors::cors_layer(&cors_origins))
+}
+
+/// The prefixes whose unmatched paths keep the structured 404: the discovery and OAuth families.
+///
+/// RFC 8615 makes "404" the answer for a well-known name a server does not publish, and MCP
+/// clients rely on it: they probe `/.well-known/oauth-protected-resource/mcp`,
+/// `/.well-known/openid-configuration` and its path-suffixed form, and fall back on a 404 (some
+/// SDK versions on a 404 only). Answering those 401 would break live OAuth discovery. `/oauth/`
+/// is the same family's endpoint namespace. Both are designated public doors, and `vercel.json`,
+/// which is public, already says they reach this function, so the 404 says nothing new.
+///
+/// `/mcp` and everything under it never reaches the fallback: `nest_service("/mcp", …)` takes
+/// them, behind the edge gate and its `WWW-Authenticate` challenge.
+pub const NOT_FOUND_PREFIXES: &[&str] = &["/.well-known/", "/oauth/"];
+
+/// This surface's fallback: the structured 404 under [`NOT_FOUND_PREFIXES`], and everywhere else
+/// temper-api's uniform pre-identity refusal, whoever asks.
+///
+/// An unauthenticated caller must learn nothing except from the designated public routes. The
+/// edge serves this function at its own path (`/api/mcp`, through `vercel.json`'s filesystem
+/// handle) and, if the platform matches routes without regard to case, at case variants of its
+/// doors, so a path outside its public families can reach it. There it answers exactly what
+/// temper-api answers an unmatched or refused path: the same `ApiError::Unauthenticated` render,
+/// so the status and body are the same bytes. It refuses even a validly signed caller, as
+/// temper-api's internal function does, because this surface resolves no profile and serves no
+/// route a bearer could reach there.
+///
+/// Matching is on bytes, as routing is: `/OAUTH/x` and `/.Well-Known/x` are outside the families
+/// and refused. An undecodable `Content-Encoding` never reaches here: decompression answers it the
+/// `415` first, as on temper-api.
+async fn unmatched(request: axum::extract::Request) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use temper_services::error::{ApiError, UnauthCause};
+
+    let path = request.uri().path();
+    if NOT_FOUND_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+    {
+        return temper_services::transport::fallback_handler(request).await;
+    }
+    // On the root span's `auth_failure`, in the refusal's own cause vocabulary: this surface has no
+    // outer service to log the cause, as temper-api's does.
+    let cause = UnauthCause::UnmatchedPath;
+    tracing::Span::current().record("auth_failure", cause.as_str());
+    ApiError::Unauthenticated(cause).into_response()
 }
 
 /// The `mcp_request` root span, and the end of its life.

@@ -107,7 +107,7 @@ async fn an_unmatched_path_answers_with_the_structured_error_body() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/no-such-route-on-the-mcp-surface")
+                .uri("/oauth/no-such-route-on-the-mcp-surface")
                 .body(Body::empty())
                 .expect("request builds"),
         )
@@ -312,7 +312,7 @@ async fn every_response_carries_the_baseline_security_headers() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/no-such-route-on-the-mcp-surface")
+                .uri("/oauth/no-such-route-on-the-mcp-surface")
                 .body(Body::empty())
                 .expect("request builds"),
         )

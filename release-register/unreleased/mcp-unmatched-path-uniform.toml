@@ -1,0 +1,37 @@
+title    = "temper-mcp answers an unmatched path outside its discovery and OAuth families with temper-api's uniform 401"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["mcp"]
+status   = "signal-only"
+body = '''
+What changed: temper-mcp's fallback. An unmatched path answered the structured 404 everywhere.
+Outside the discovery and OAuth families (any path not under /.well-known/ or /oauth/, and not
+/mcp or under it, which the door's nested service takes) it now answers the pre-identity refusal
+temper-api answers: 401, the same ApiError::Unauthenticated render, so the same body bytes. It is
+the refusal whoever asks, a validly signed bearer included: this surface resolves no profile.
+Unmatched paths under /.well-known/ and /oauth/ keep the 404 (RFC 8615, and MCP clients' discovery
+fallback). /mcp keeps its edge 401 with WWW-Authenticate; discovery, /oauth/register and
+/mcp/health are unchanged.
+
+Who observes it: a caller of a path no MCP client uses, such as the function's own edge path
+/api/mcp, or a case variant of a door (/MCP, /OAUTH/register) if the platform matches routes
+without regard to case. Those were the MCP 404 and are now the 401 temper-api gives the same
+caller, with the same status and body. Some answers still differ (no x-request-id on MCP, its
+CORS exposed headers, every OPTIONS 200 without the security headers, no "unavailable" swap
+while its key store is failing), as docs/concepts/trust-boundary.md declares. An undecodable
+Content-Encoding is the 415 before the fallback, as on the API. No
+first-party client calls them; the documented MCP URL is /mcp. A deployment whose TEMPER_MCP_URL
+still names /api/mcp already got a 404 there; it now gets "authentication required" even with a
+valid bearer, which is a wrong URL, not a bad token.
+
+This supersedes one sentence of unmatched-path-uniform-to-anonymous, which is in this window: its
+"The MCP surface keeps its own 404 for an unmatched path" now holds only under /.well-known/ and
+/oauth/.
+
+Why behavioral: no shape moved; the status and body of one class of answer changed. Review-owned.
+
+Witnesses: crates/temper-mcp-server/tests/unmatched_fallback_test.rs (the bytes against the
+render and the pinned literal on every method, with and without a valid bearer; the families'
+404s including the MCP discovery probes; the /mcp challenge; the OPTIONS residue).
+Release relevance: signal-only.
+'''

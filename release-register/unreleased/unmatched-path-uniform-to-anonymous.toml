@@ -18,7 +18,8 @@ the uniform 401 whoever asks, bearer or not, on both the main app and the intern
 body's echoed method is now bounded in length, like its path.
 
 Unchanged: status codes and code strings in the contract; only their conditions moved. The MCP
-surface keeps its own 404 for an unmatched path. Authenticated clients (CLI, SDKs, UI proxy, MCP
+surface keeps its own 404 for an unmatched path (narrowed to /.well-known/ and /oauth/ by
+mcp-unmatched-path-uniform). Authenticated clients (CLI, SDKs, UI proxy, MCP
 relay) still get 404 for a wrong path; temper-ts with an expired token on a wrong path re-mints
 once on the 401, then gets the 404.
 '''
