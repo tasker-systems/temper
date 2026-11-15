@@ -340,3 +340,102 @@ surfaces_intersect() {
     done
     return 1
 }
+
+# ---------------------------------------------------------------------------
+# The last release — ONE derivation (conventions COMPAT-2)
+# ---------------------------------------------------------------------------
+# The release calculator (detect-changes.sh opens its window here) and the declared-class
+# gate (wire-class-crosscheck.sh measures against it) both call this; neither keeps a copy.
+# Two derivations of "the last release" drift, and then the gate and the calculator disagree
+# about which window a change belongs to.
+#
+#   last_release <commit> [remote]      (remote default: $RELEASE_REMOTE, else origin)
+#
+# Prints eval-safe KEY=VALUE on stdout:
+#   LAST_RELEASE_REF=<tag|commit>
+#   LAST_RELEASE_IS_FALLBACK=true|false
+#   LAST_RELEASE_REASON=<why it is a fallback; empty when it is not>
+#
+# LAST_RELEASE_IS_FALLBACK=false only when every condition holds:
+#   * a tag in the release form, v<MAJOR>.<MINOR>.<PATCH>, is reachable from <commit>
+#     (`git describe`, the nearest one);
+#   * it is an ancestor of <commit>;
+#   * the history holds it: the clone is not shallow (a shallow clone is cut short, and a
+#     tag-less checkout cannot see any tag);
+#   * the remote lists the tag on the same commit (a tag nobody pushed is not a release);
+#   * the remote lists no other release tag that is a descendant of it and an ancestor of
+#     <commit>; a listed tag whose commit this clone cannot place, or a remote whose tags
+#     cannot be listed, cannot show that, so it is a fallback too.
+# Otherwise LAST_RELEASE_IS_FALLBACK=true. LAST_RELEASE_REF is then the nearest tag if one was
+# found (the calculator's best guess at its window, flagged), else the root commit. A fallback
+# is NEVER a release: a consumer that needs one must not use LAST_RELEASE_REF when the flag is
+# true, and a consumer that cannot read the flag treats it as true.
+last_release() {
+    local at="${1:-HEAD}" remote="${2:-${RELEASE_REMOTE:-origin}}"
+    local tag="" commit="" listed="" sha name c
+    local form='^v[0-9]+\.[0-9]+\.[0-9]+$'
+
+    _last_release_emit() { # $1 = ref, $2 = is-fallback, $3 = reason
+        printf 'LAST_RELEASE_REF=%q\n' "$1"
+        printf 'LAST_RELEASE_IS_FALLBACK=%s\n' "$2"
+        printf 'LAST_RELEASE_REASON=%q\n' "$3"
+    }
+    _last_release_fallback() { # $1 = reason
+        local ref="$tag"
+        [[ -n "$ref" ]] || ref="$(git rev-list --max-parents=0 "$at" 2>/dev/null | head -n1)"
+        _last_release_emit "$ref" true "$1"
+    }
+
+    if ! git cat-file -e "${at}^{commit}" 2>/dev/null; then
+        _last_release_emit "" true "${at} is not a commit in this clone"
+        return 0
+    fi
+    if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null)" != "false" ]]; then
+        _last_release_fallback "the clone is shallow: its history is cut short, so no tag found in it is provably the last release (git fetch --unshallow --tags)"
+        return 0
+    fi
+    if ! tag="$(git describe --tags --match 'v[0-9]*' --abbrev=0 "$at" 2>/dev/null)"; then
+        tag=""
+        _last_release_fallback "no v<VERSION> tag is reachable from ${at} (were tags fetched?)"
+        return 0
+    fi
+    if ! [[ "$tag" =~ $form ]]; then
+        _last_release_fallback "the nearest tag ${tag} is not in the release form v<MAJOR>.<MINOR>.<PATCH>"
+        return 0
+    fi
+    commit="$(git rev-parse "${tag}^{commit}")"
+    if ! git merge-base --is-ancestor "$commit" "$at" 2>/dev/null; then
+        _last_release_fallback "${tag} is not an ancestor of ${at}"
+        return 0
+    fi
+    if ! listed="$(git ls-remote --tags "$remote" 'refs/tags/v*' 2>/dev/null)"; then
+        _last_release_fallback "the tags on ${remote} could not be listed, so a newer release cannot be ruled out"
+        return 0
+    fi
+
+    # One `<tag> <commit>` line per release-form tag on the remote; for an annotated tag the
+    # peeled `^{}` line follows its tag line, so the last line for a name is its commit.
+    # (Plain lines, not an associative array: bash 3.2, macOS's, has none.)
+    local pairs
+    pairs="$(while IFS=$'\t' read -r sha name; do
+        name="${name#refs/tags/}"; name="${name%^\{\}}"
+        [[ "$name" =~ $form ]] && printf '%s %s\n' "$name" "$sha"
+    done <<< "$listed" | awk '{ c[$1] = $2 } END { for (n in c) print n, c[n] }')"
+
+    if [[ "$(awk -v t="$tag" '$1 == t { print $2 }' <<< "$pairs")" != "$commit" ]]; then
+        _last_release_fallback "${remote} does not list ${tag} on ${commit}: a tag the remote does not hold is not a release"
+        return 0
+    fi
+    while read -r name c; do
+        [[ -n "$name" && "$c" != "$commit" ]] || continue
+        if ! git cat-file -e "${c}^{commit}" 2>/dev/null; then
+            _last_release_fallback "${remote} lists ${name} on ${c}, which this clone cannot place (git fetch --tags)"
+            return 0
+        fi
+        if git merge-base --is-ancestor "$commit" "$c" && git merge-base --is-ancestor "$c" "$at"; then
+            _last_release_fallback "${remote} lists ${name}, a newer release than ${tag} that ${at} contains"
+            return 0
+        fi
+    done <<< "$pairs"
+    _last_release_emit "$tag" false ""
+}

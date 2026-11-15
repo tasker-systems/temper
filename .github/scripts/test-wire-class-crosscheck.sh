@@ -698,7 +698,7 @@ else bad "erasure policy: an added entry listing erasure-policy passes, and the 
 # touches a wire path and does one thing to the register.
 GITBOX="${WORK}/gitbox"
 mkdir -p "${GITBOX}/.github/scripts" "${GITBOX}/tools" "${GITBOX}/clients"
-cp "${REPO}/.github/scripts/wire-class-crosscheck.sh" "${REPO}/.github/scripts/"wire-shape*.jq "${GITBOX}/.github/scripts/"
+cp "${REPO}/.github/scripts/wire-class-crosscheck.sh" "${REPO}/.github/scripts/"wire-shape*.jq "${REPO}/.github/scripts/wire-resolve.py" "${GITBOX}/.github/scripts/"
 cp -R "${REPO}/tools/manifest" "${GITBOX}/tools/manifest"
 reset_register
 cp -R "$REG" "${GITBOX}/release-register"
@@ -753,6 +753,325 @@ out="$(git_mode_check)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'half-written.toml: pr: missing'; then
   ok "W2: a malformed added entry fails as itself, naming the file and key"
 else bad "W2: a malformed added entry fails as itself" "exit=$rc" "$out"; fi
+
+# ── 20. COMPAT-1 — the verdict is release-relative, judged per resolved operation ───────────────
+# The conventions doctrine (compat.md) and its bite list. A client of the last release can only
+# observe shape the release had: shape born in the window moves freely, released shape is judged
+# against its released form wherever the change is made. broke_node returns a verdict per node,
+# so the gate runs the doctrine's per-entry-point fallback: an operation is charged when
+# release → head breaks it AND this PR changes its resolved form. Each probe feeds three
+# contracts through the --release / --base-contract / --head-contract seams, with a row
+# declaring `additive` — so a FAIL is the gate charging a break.
+CDIR="${WORK}/compat"
+mkdir -p "$CDIR"
+# The release: GET/DELETE /items/{id}, POST /items, a cycle, a security scheme, an orphan.
+cat > "${CDIR}/release.json" <<'JSON'
+{"openapi":"3.1.0","info":{"title":"t","version":"1.0.0"},
+ "security":[{"bearer":[]}],
+ "paths":{
+  "/items/{id}":{
+   "get":{"operationId":"get_item",
+     "parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}],
+     "responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}}}}},
+   "delete":{"operationId":"delete_item",
+     "parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}],
+     "responses":{"204":{"description":"gone"}}}},
+  "/items":{
+   "post":{"operationId":"create_item",
+     "requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ItemCreate"}}}},
+     "responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}}}}}}},
+ "components":{
+  "securitySchemes":{"bearer":{"type":"http","scheme":"bearer"}},
+  "schemas":{
+   "Item":{"type":"object","required":["id"],"properties":{
+     "id":{"type":"string"},"name":{"type":"string"},
+     "parent":{"$ref":"#/components/schemas/Node"}}},
+   "Node":{"type":"object","properties":{"child":{"$ref":"#/components/schemas/Node"}}},
+   "ItemCreate":{"type":"object","properties":{"name":{"type":"string","maxLength":10}}},
+   "Orphan":{"type":"object","properties":{"a":{"type":"string"}}}}}}
+JSON
+
+# A derived contract: $1 = from, $2 = out, $3 = jq edit.
+derive_contract() { jq "$3" "${CDIR}/$1.json" > "${CDIR}/$2.json" || echo "fixture edit failed: $2"; }
+compat_check() { # $1 = release (a fixture name, or `none`), $2 = base, $3 = head, $4 = classes
+  reset_fixtures
+  printf '%s\n' "openapi.json" > "$WIRE"
+  add_own_row self "${4:-additive}"
+  local rel="$1"; [ "$rel" = "none" ] || rel="${CDIR}/$1.json"
+  bash "$CHECK" --wire-touched "$WIRE" --added-entries "$ADDED" --register-dir "$REG" \
+      --legacy-register "$LEGACY" --release "$rel" \
+      --base-contract "${CDIR}/$2.json" --head-contract "${CDIR}/$3.json" 2>&1
+}
+expect_pass() { # $1 = label, $2 = output, $3 = rc
+  if [ "$3" -eq 0 ] && printf '%s' "$2" | grep -q 'release-relative verdict'; then ok "$1"
+  else bad "$1" "exit=$3" "$2"; fi
+}
+expect_charged() { # $1 = label, $2 = output, $3 = rc, $4 = the key the gate must name
+  if [ "$3" -ne 0 ] && printf '%s' "$2" | grep -q 'charged — release → head breaks it' \
+      && printf '%s' "$2" | grep -qF "    $4"; then ok "$1"
+  else bad "$1" "exit=$3" "$2"; fi
+}
+
+# Bite 1 (temper#1388's shape): a schema born in the window, reached only through a new optional
+# property of a released operation, gains a required member. Base → head reads that as a break
+# (required growth); against the release the whole subtree is growth.
+derive_contract release born '.components.schemas.Item.properties.extra = {"$ref":"#/components/schemas/Extra"}
+  | .components.schemas.Extra = {"type":"object","properties":{"a":{"type":"string"}}}'
+derive_contract born born-moved '.components.schemas.Extra.required = ["a"]'
+out="$(compat_check release born born-moved)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'release-relative verdict' \
+    && printf '%s' "$out" | grep -q 'reclassified as growth' \
+    && printf '%s' "$out" | grep -qF '    op GET /items/{}'; then
+  ok "COMPAT-1 bite 1: a moved window-born node passes as additive, its operations named as reclassified"
+else bad "COMPAT-1 bite 1: a moved window-born node passes as additive" "exit=$rc" "$out"; fi
+
+# Bite 3: the release reference removed (the fix reverted) — bite 1 fails, base-only.
+out="$(compat_check none born born-moved)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'base-only verdict'; then
+  ok "COMPAT-1 bite 3: with no release, the same diff fails base-only"
+else bad "COMPAT-1 bite 3: with no release, the same diff fails base-only" "exit=$rc" "$out"; fi
+
+# Bite 2: a released node moved fails without shape-breaking — and passes, noted, with the
+# retirement-train routing (the declared-break path is unchanged).
+derive_contract release released-moved '.components.schemas.Item.properties.name.type = "integer"'
+out="$(compat_check release release released-moved)"; rc=$?
+expect_charged "COMPAT-1 bite 2: a moved released node fails without shape-breaking" "$out" "$rc" "op GET /items/{}"
+out="$(compat_check release release released-moved "shape-breaking, retirement-train")"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "COMPAT-1 bite 2: the same break declared and routed passes"
+else bad "COMPAT-1 bite 2: the same break declared and routed passes" "exit=$rc" "$out"; fi
+
+# Bite 4: a re-birth judged against its released form. The window removed Item.name; this PR
+# restores it as an integer. Base → head is a new optional property (growth); release → head is
+# a type change.
+derive_contract release name-gone 'del(.components.schemas.Item.properties.name)'
+derive_contract name-gone name-reborn-differs '.components.schemas.Item.properties.name = {"type":"integer"}'
+derive_contract name-gone name-reborn-same '.components.schemas.Item.properties.name = {"type":"string"}'
+out="$(compat_check release name-gone name-reborn-differs)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'reclassified as a break' \
+    && printf '%s' "$out" | grep -qF '    op GET /items/{}'; then
+  ok "COMPAT-1 bite 4: a differing re-birth of a property fails, named as reclassified"
+else bad "COMPAT-1 bite 4: a differing re-birth of a property fails" "exit=$rc" "$out"; fi
+out="$(compat_check release name-gone name-reborn-same)"; rc=$?
+expect_pass "COMPAT-1 bite 4: a property re-born unchanged passes" "$out" "$rc"
+# ... and once as an operation: DELETE removed in the window, restored with a required query.
+derive_contract release delete-gone 'del(.paths."/items/{id}".delete)'
+derive_contract release delete-reborn '.paths."/items/{id}".delete.parameters += [{"in":"query","name":"force","required":true,"schema":{"type":"boolean"}}]'
+out="$(compat_check release delete-gone delete-reborn)"; rc=$?
+expect_charged "COMPAT-1 bite 4: a differing re-birth of an operation fails" "$out" "$rc" "op DELETE /items/{}"
+out="$(compat_check release delete-gone release)"; rc=$?
+expect_pass "COMPAT-1 bite 4: an operation re-born unchanged passes" "$out" "$rc"
+
+# Bite 5 / the non-schema referrer: a window-born PARAMETER component on a released operation
+# becomes required. The path still holds the same `$ref` string, and the old comparator never
+# compared components.parameters at all — the change is visible only once the operation is
+# resolved.
+derive_contract release param-born '.paths."/items/{id}".get.parameters += [{"$ref":"#/components/parameters/Verbose"}]
+  | .components.parameters = {"Verbose":{"in":"query","name":"verbose","required":false,"schema":{"type":"boolean"}}}'
+derive_contract param-born param-required '.components.parameters.Verbose.required = true'
+out="$(compat_check release param-born param-required)"; rc=$?
+expect_charged "COMPAT-1 bite 5: a window-born parameter component that becomes required fails (a non-schema referrer)" "$out" "$rc" "op GET /items/{}"
+# ... and a released RESPONSE component, changed behind an unchanged $ref string.
+derive_contract release resp-ref '.paths."/items/{id}".delete.responses."404" = {"$ref":"#/components/responses/Missing"}
+  | .components.responses = {"Missing":{"description":"none","content":{"application/json":{"schema":{"type":"string"}}}}}'
+derive_contract resp-ref resp-ref-moved '.components.responses.Missing.content."application/json".schema.type = "integer"'
+out="$(compat_check resp-ref resp-ref resp-ref-moved)"; rc=$?
+expect_charged "COMPAT-1: a released response component changed behind its \$ref fails" "$out" "$rc" "op DELETE /items/{}"
+
+# A gained $ref at a released location: Item.name becomes a reference to a schema born in this
+# PR. What the client sees is the inlined target, judged against the released property.
+derive_contract release ref-swap-break '.components.schemas.Item.properties.name = {"$ref":"#/components/schemas/Name"}
+  | .components.schemas.Name = {"type":"integer"}'
+derive_contract release ref-swap-same '.components.schemas.Item.properties.name = {"$ref":"#/components/schemas/Name"}
+  | .components.schemas.Name = {"type":"string"}'
+out="$(compat_check release release ref-swap-break)"; rc=$?
+expect_charged "COMPAT-1: a gained \$ref at a released location, to a differing born schema, fails" "$out" "$rc" "op POST /items"
+out="$(compat_check release release ref-swap-same)"; rc=$?
+expect_pass "COMPAT-1: a gained \$ref whose target equals the released form passes" "$out" "$rc"
+
+# Bite 7: a renamed path-template parameter is the released operation — no removal, no birth.
+derive_contract release renamed '.paths."/items/{item_id}" = (.paths."/items/{id}"
+    | (.get.parameters, .delete.parameters) |= map(.name = "item_id"))
+  | del(.paths."/items/{id}")'
+out="$(compat_check release release renamed)"; rc=$?
+if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q 'charged'; then
+  ok "COMPAT-1 bite 7: a renamed path template is the released operation (rename alone passes)"
+else bad "COMPAT-1 bite 7: a renamed path template is the released operation" "exit=$rc" "$out"; fi
+derive_contract renamed renamed-moved '.paths."/items/{item_id}".get.parameters[0].schema.type = "integer"'
+out="$(compat_check release release renamed-moved)"; rc=$?
+expect_charged "COMPAT-1 bite 7: a renamed template whose parameter also moved is judged against the released form" "$out" "$rc" "op GET /items/{}"
+
+# Bite 10: a released operation this PR removes fails; one an earlier PR removed does not.
+out="$(compat_check release release delete-gone)"; rc=$?
+expect_charged "COMPAT-1 bite 10: removing a released operation fails" "$out" "$rc" "op DELETE /items/{}"
+derive_contract delete-gone delete-gone-grown '.components.schemas.Orphan.properties.b = {"type":"string"}'
+out="$(compat_check release delete-gone delete-gone-grown)"; rc=$?
+expect_pass "COMPAT-1 bite 10: an operation an earlier PR removed is not charged again" "$out" "$rc"
+
+# Bite 11: a component no entry point reaches is judged as its own entry point.
+derive_contract release orphan-moved '.components.schemas.Orphan.properties.a.type = "integer"'
+out="$(compat_check release release orphan-moved)"; rc=$?
+expect_charged "COMPAT-1 bite 11: an unreachable component this PR breaks fails" "$out" "$rc" "component schemas/Orphan"
+derive_contract release orphan-reached '.components.schemas.Item.properties.orphan = {"$ref":"#/components/schemas/Orphan"}'
+out="$(compat_check release release orphan-reached)"; rc=$?
+expect_pass "COMPAT-1 bite 11: a component this PR makes reachable is not read as removed" "$out" "$rc"
+
+# Bite 12: a rename inside a reference cycle passes; servers on a released operation fail.
+derive_contract release cycle-renamed '.components.schemas.Tree = (.components.schemas.Node
+    | .properties.child."$ref" = "#/components/schemas/Tree")
+  | del(.components.schemas.Node)
+  | .components.schemas.Item.properties.parent."$ref" = "#/components/schemas/Tree"'
+out="$(compat_check release release cycle-renamed)"; rc=$?
+expect_pass "COMPAT-1 bite 12: a rename inside a reference cycle passes" "$out" "$rc"
+derive_contract release servers-moved '.paths."/items".post.servers = [{"url":"https://elsewhere.example"}]'
+out="$(compat_check release release servers-moved)"; rc=$?
+expect_charged "COMPAT-1 bite 12: a change to a released operation's servers fails" "$out" "$rc" "op POST /items"
+
+# Bite 9: a changed security scheme on a released operation fails.
+derive_contract release scheme-moved '.components.securitySchemes.bearer.scheme = "basic"'
+out="$(compat_check release release scheme-moved)"; rc=$?
+expect_charged "COMPAT-1 bite 9: a changed security scheme on a released operation fails" "$out" "$rc" "op DELETE /items/{}"
+
+# Bite 6 under the fallback, and the residue it records. An earlier PR declared maxLength
+# 10 → 5; this PR relaxes it to 8. Against the release 10 → 8 is still a tightening, and this
+# PR changes the operation, so the verdict-only fallback charges it again (the residue
+# status.toml records for COMPAT-1). A further break at the same place fails, as it must.
+derive_contract release max5 '.components.schemas.ItemCreate.properties.name.maxLength = 5'
+derive_contract release max8 '.components.schemas.ItemCreate.properties.name.maxLength = 8'
+derive_contract max5 max5-enum '.components.schemas.ItemCreate.properties.name.pattern = "^a"'
+out="$(compat_check release max5 max8)"; rc=$?
+expect_charged "COMPAT-1 bite 6 (residue): a relaxed earlier declared break is re-charged on the touched operation" "$out" "$rc" "op POST /items"
+out="$(compat_check release max5 max5-enum)"; rc=$?
+expect_charged "COMPAT-1 bite 6: a further break at an earlier declared break's place fails" "$out" "$rc" "op POST /items"
+derive_contract max5 max5-elsewhere '.components.schemas.Orphan.properties.b = {"type":"string"}'
+out="$(compat_check release max5 max5-elsewhere)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'release-relative verdict' \
+    && ! printf '%s' "$out" | grep -q 'charged —'; then
+  ok "COMPAT-1 bite 6: an earlier declared break on an operation this PR leaves alone is not charged"
+else bad "COMPAT-1 bite 6: an earlier declared break this PR leaves alone is not charged" "exit=$rc" "$out"; fi
+
+# A resolver that cannot resolve is "could not look": a dangling $ref fails, never passes.
+derive_contract release dangling '.components.schemas.Item.properties.name = {"$ref":"#/components/schemas/Nowhere"}'
+out="$(compat_check release release dangling)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'verdict: undeterminable'; then
+  ok "COMPAT-1: an unresolvable \$ref is undeterminable and fails"
+else bad "COMPAT-1: an unresolvable \$ref is undeterminable and fails" "exit=$rc" "$out"; fi
+
+# ── 21. COMPAT-2 — the last release is the release tooling's, and a fallback is never one ────────
+# A sandbox upstream with release tags, cloned the way CI and a developer would clone it. The
+# gate runs in git mode (no --release): it calls last_release from the release library, the same
+# function detect-changes.sh calls. The contracts are the bite-1 pair, so a release-relative
+# verdict passes and a base-only verdict fails: the verdict line says which one ran.
+UP="${WORK}/upstream"
+mkdir -p "${UP}/.github/scripts" "${UP}/tools/scripts/release/lib"
+cp "${REPO}/.github/scripts/wire-class-crosscheck.sh" "${REPO}/.github/scripts/"wire-shape*.jq "${REPO}/.github/scripts/wire-resolve.py" "${UP}/.github/scripts/"
+cp -R "${REPO}/tools/manifest" "${UP}/tools/manifest"
+cp "${REPO}/tools/scripts/release/lib/common.sh" "${UP}/tools/scripts/release/lib/common.sh"
+cp "${REPO}/tools/scripts/release/detect-changes.sh" "${UP}/tools/scripts/release/detect-changes.sh"
+reset_register
+cp -R "$REG" "${UP}/release-register"
+up() { git -C "$UP" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+cp "${CDIR}/release.json" "${UP}/openapi.json"
+up init -q -b main
+up add -A
+up commit -q -m "release"
+up tag v1.0.0
+cp "${CDIR}/born.json" "${UP}/openapi.json"
+up commit -q -am "window: a born schema"
+UP_BASE="$(up rev-parse HEAD)"
+up checkout -q -b pr
+cp "${CDIR}/born-moved.json" "${UP}/openapi.json"
+up commit -q -am "the PR: the born schema moves"
+up checkout -q main
+
+clone_of() { # $1 = dir, remaining = git clone args
+  local d="$1"; shift
+  rm -rf "$d"
+  git clone -q "$@" "file://${UP}" "$d" 2>/dev/null
+  git -C "$d" fetch -q origin pr 2>/dev/null
+  git -C "$d" -c advice.detachedHead=false checkout -q FETCH_HEAD 2>/dev/null
+}
+derived_check() { # $1 = clone; the gate in git mode against the window base
+  reset_fixtures
+  printf '%s\n' "openapi.json" > "$WIRE"
+  add_own_row self additive
+  (cd "$1" && bash .github/scripts/wire-class-crosscheck.sh --wire-touched "$WIRE" \
+      --added-entries "$ADDED" --register-dir "$REG" --legacy-register "$LEGACY" --base "$UP_BASE" 2>&1)
+}
+
+FULL="${WORK}/clone-full"
+clone_of "$FULL"
+out="$(derived_check "$FULL")"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'release: v1.0.0 — release-relative verdict'; then
+  ok "COMPAT-2: a full clone with tags measures against the derived release v1.0.0"
+else bad "COMPAT-2: a full clone with tags measures against the derived release" "exit=$rc" "$out"; fi
+
+# Bite 15: the CI shape before the fix — depth 2, no tags. The derivation's fallback would be a
+# root inside the window (here: the PR's own parent); it must give base-only, never a verdict
+# against that commit.
+SHALLOW="${WORK}/clone-shallow"
+clone_of "$SHALLOW" --depth 2 --no-tags
+git -C "$SHALLOW" fetch -q --depth=1 origin "$UP_BASE" 2>/dev/null
+out="$(derived_check "$SHALLOW")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'base-only verdict (COMPAT-2): the clone is shallow'; then
+  ok "COMPAT-2 bite 15: a shallow clone with no tags gives the base-only verdict"
+else bad "COMPAT-2 bite 15: a shallow clone with no tags gives the base-only verdict" "exit=$rc" "$out"; fi
+DETECT_OUT="$(cd "$SHALLOW" && bash tools/scripts/release/detect-changes.sh 2>/dev/null)"
+if printf '%s' "$DETECT_OUT" | grep -qx 'CHANGES_BASE_IS_FALLBACK=true'; then
+  ok "COMPAT-2: detect-changes reports the shallow clone's base as a fallback, machine-readably"
+else bad "COMPAT-2: detect-changes reports the fallback machine-readably" "$DETECT_OUT"; fi
+# The CI step's fetch turns the same clone into a provable one.
+git -C "$SHALLOW" fetch -q --filter=tree:0 --unshallow --tags origin 2>/dev/null
+out="$(derived_check "$SHALLOW")"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'release: v1.0.0 — release-relative verdict'; then
+  ok "COMPAT-2: after the unshallow-and-tags fetch, the same clone measures against v1.0.0"
+else bad "COMPAT-2: after the unshallow-and-tags fetch, the clone measures against v1.0.0" "exit=$rc" "$out"; fi
+DETECT_OUT="$(cd "$SHALLOW" && bash tools/scripts/release/detect-changes.sh 2>/dev/null)"
+if printf '%s' "$DETECT_OUT" | grep -qx 'CHANGES_BASE_REF=v1.0.0' \
+    && printf '%s' "$DETECT_OUT" | grep -qx 'CHANGES_BASE_IS_FALLBACK=false'; then
+  ok "COMPAT-2: detect-changes and the gate derive the same release"
+else bad "COMPAT-2: detect-changes and the gate derive the same release" "$DETECT_OUT"; fi
+
+# Bite 16: a tag in the release form on a PR-only commit is not the release.
+up tag v9.9.9 pr
+clone_of "$FULL"
+out="$(derived_check "$FULL")"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'release: v1.0.0 — release-relative verdict'; then
+  ok "COMPAT-2 bite 16: a release-form tag on a PR-only commit is not taken as the release"
+else bad "COMPAT-2 bite 16: a release-form tag on a PR-only commit is not the release" "exit=$rc" "$out"; fi
+up tag -d v9.9.9 >/dev/null
+
+# A tag only this clone holds (nobody pushed it) is not a release either.
+clone_of "$FULL"
+git -C "$FULL" tag v1.0.1 "$UP_BASE"
+out="$(derived_check "$FULL")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'does not list v1.0.1'; then
+  ok "COMPAT-2: a release-form tag the remote does not hold gives the base-only verdict"
+else bad "COMPAT-2: a local-only release-form tag gives the base-only verdict" "exit=$rc" "$out"; fi
+
+# Bite 17: the clone holds the older release, the remote a newer one the base contains.
+clone_of "$FULL"
+up tag v1.0.2 "$UP_BASE"
+out="$(derived_check "$FULL")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'lists v1.0.2, a newer release than v1.0.0'; then
+  ok "COMPAT-2 bite 17: an older local tag, with a newer one on the remote, gives the base-only verdict"
+else bad "COMPAT-2 bite 17: an older local tag with a newer remote one gives base-only" "exit=$rc" "$out"; fi
+up tag -d v1.0.2 >/dev/null
+# ... and a remote whose tags cannot be listed.
+clone_of "$FULL"
+git -C "$FULL" remote set-url origin "file://${WORK}/no-such-remote"
+out="$(derived_check "$FULL")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'could not be listed'; then
+  ok "COMPAT-2 bite 17: a remote whose tags cannot be listed gives the base-only verdict"
+else bad "COMPAT-2 bite 17: an unlistable remote gives the base-only verdict" "exit=$rc" "$out"; fi
+
+# Bite 14: no release tag at all.
+clone_of "$FULL"
+up tag -d v1.0.0 >/dev/null
+git -C "$FULL" tag -d v1.0.0 >/dev/null
+out="$(derived_check "$FULL")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'base-only verdict (COMPAT-2): no v<VERSION> tag'; then
+  ok "COMPAT-2 bite 14: with no release ref resolvable, the gate gives the base-only verdict"
+else bad "COMPAT-2 bite 14: with no release ref, base-only" "exit=$rc" "$out"; fi
 
 echo
 echo "  ${PASS} passed, ${FAIL} failed"

@@ -12,7 +12,7 @@
 # two; their rules read `uncovered` here until they land.
 #
 # `reviewed_at` is the baseline revision these statuses were reviewed against (check F).
-reviewed_at = "af5ffd124e3f0b80d003cc11a3bb96031523eb48"
+reviewed_at = "65588eceb9ba45ca623355937ee468b3e0874038"
 [rules]
 
 # --- Rust ----------------------------------------------------------------------------------------
@@ -239,3 +239,38 @@ CONS-6 = "gated: .github/workflows/quality-gate.yml#conventions"
 CONS-7 = "gated: .github/workflows/quality-gate.yml#conventions"
 # The witness's control run passes with no credential; the job references no secret.
 CONS-8 = "gated: .github/workflows/quality-gate.yml#conventions"
+# The canonical .github/workflows/conventions-bump.yml is not adopted: the pin moves by hand
+# (conventions.py bump), and nothing opens or classifies a bump PR.
+CONS-9 = "uncovered: conventions-bump.yml is not adopted; the pin is moved by hand"
+
+# --- Compatibility gates (compat.md) -------------------------------------------------------------
+# wire-class-crosscheck.sh, in guard-tests, judges openapi.json per resolved entry point
+# (wire-resolve.py: each operation, webhook and unreached component, $refs inlined, path-template
+# names erased) with broke_node unchanged, pointed at release → head. broke_node returns a
+# verdict per node, so the gate runs the doctrine's per-entry-point fallback: charged when
+# release → head breaks it and base ≠ head. Bite cases: test-wire-class-crosscheck.sh §20.
+# Residues:
+#   * the fallback re-charges an earlier declared break on an operation this PR touches, even
+#     where this PR only grows the operation or relaxes the break (bite 6's residue probe);
+#   * a schema that omits additionalProperties is read as not admitting unknown properties
+#     (the doctrine's reading; utoipa omits it, and the server never promised to accept them);
+#     where a released schema declares it true or as a schema (12 maps in openapi.json), a new
+#     property by that name still reads as growth (bite 8 is not met);
+#   * the pre-publish check (release-prepare.sh judging the candidate against the last tag, and
+#     refusing a break no window entry declares) is not built: a break that landed under the
+#     base-only verdict is not caught before publish (bite 13);
+#   * MCP output and CLI stdout have no committed shape artifact, so no gate judges them (the
+#     gate's own accepted residue).
+# Continuous deploy, ruled by the owner (2026-11-15): tag releases are the compatibility
+# boundary. The hosted API auto-deploys main, so a client integrated against the deployment can
+# observe window-born shape that this rule lets move; that is accepted, not measured.
+COMPAT-1 = "partial: release-relative per-entry-point fallback in guard-tests; no pre-publish check, and an earlier declared break can be re-charged"
+# last_release in tools/scripts/release/lib/common.sh is the one derivation: detect-changes.sh
+# (the calculator's window) and the gate both call it. guard-tests fetches the history and tags
+# (--filter=tree:0 --unshallow --tags); a shallow clone, no tag, a tag the remote does not hold,
+# a newer remote tag, or an unlistable remote is a fallback, emitted as LAST_RELEASE_IS_FALLBACK /
+# CHANGES_BASE_IS_FALLBACK, and the gate then gives the base-only verdict. Bite cases: §21.
+# One stream: v<VERSION> tags on main; the leaves carry no tags of their own and no maintenance
+# line is declared. The release's contract is openapi.json at the tag, the file the SDKs were
+# generated from. Staleness: the merge queue runs the gate on the exact merge commit.
+COMPAT-2 = "gated: .github/workflows/quality-gate.yml#guard-tests"

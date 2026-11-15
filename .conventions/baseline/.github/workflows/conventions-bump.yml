@@ -1,0 +1,119 @@
+# Moves this repository's pin on the tasker-systems conventions baseline (CONS-9).
+#
+# CANONICAL: this file is the baseline's `.github/workflows/conventions-bump.yml`, adopted in
+# `exact` mode at the same path, so check A fails on any local edit. Change it in the baseline; a
+# change there reaches this repository as a loud bump. It lives in the baseline's own workflows
+# directory so that the baseline's Dependabot keeps its pins current; a consumer excludes its copy
+# from its own Dependabot (`exclude-paths`), since an edit there would fail check A.
+#
+# Each day, `conventions.py propose` moves the pin to the baseline's main and classifies the move:
+#   none   the pin is already main's: any open bump PR is closed
+#   quiet  no rule moved, and no doctrine text (beyond the register's generated cells), canonical
+#          config, projected tool or skill changed: the bump PR merges on green CI
+#   loud   anything else: the bump PR waits for a person, and check F (or A) is red until then
+# One branch, `conventions/bump`, holds the one open bump PR; each run replaces its commit.
+#
+# The credential: a GitHub App installation token for this repository only, minted in this job
+# and used only for git push and gh. Never add a pull_request or pull_request_target trigger, and
+# never run a fork's code here: the job runs nothing but the projected, standard-library
+# conventions.py, git and gh. The required check's jobs hold no secret (CONS-8); this is not one.
+#
+# Org settings this needs: the App's client id and private key as the secrets
+# CONVENTIONS_BOT_CLIENT_ID and CONVENTIONS_BOT_KEY, and "Allow auto-merge" on the repository.
+
+name: Conventions bump
+
+on:
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conventions-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Move the conventions pin
+    # The baseline holds the canonical copy but is not a consumer: it has no pin to move.
+    if: github.repository != 'tasker-systems/conventions'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Mint a token for this repository only
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.CONVENTIONS_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.CONVENTIONS_BOT_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Move the pin and classify the move
+        id: propose
+        run: |
+          python3 -I .conventions/baseline/tools/conventions.py propose \
+            --body-file "$RUNNER_TEMP/body.md" >> "$GITHUB_OUTPUT"
+
+      - name: Open, update or close the bump PR
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          APP_SLUG: ${{ steps.token.outputs.app-slug }}
+          KIND: ${{ steps.propose.outputs.class }}
+          REVISION: ${{ steps.propose.outputs.revision }}
+          PREVIOUS: ${{ steps.propose.outputs.previous }}
+          SKILL: ${{ steps.propose.outputs.skill }}
+          BRANCH: conventions/bump
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # `--head` matches the branch name only, so a fork's PR from its own `conventions/bump`
+          # would match too. Only this repository's own branch is the bump PR.
+          open=$(gh pr list --head "$BRANCH" --state open \
+            --json number,isCrossRepository,headRepositoryOwner \
+            --jq '[.[] | select(.isCrossRepository == false
+                    and .headRepositoryOwner.login == env.OWNER)][0].number // empty')
+          if [ "$KIND" = none ]; then
+            if [ -n "$open" ]; then
+              gh pr close "$open" --delete-branch \
+                --comment "The pin is already on the baseline's main; nothing to move."
+            fi
+            exit 0
+          fi
+          bot="${APP_SLUG}[bot]"
+          id=$(gh api "users/${bot}" --jq .id)
+          git config user.name "$bot"
+          git config user.email "${id}+${bot}@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add -A -- .conventions "$SKILL"
+          # No repository-controlled hook runs in the step that holds the token.
+          git -c core.hooksPath=/dev/null commit -q -m "chore(conventions): move the pin to ${REVISION:0:12} (${KIND})" \
+            -m "From ${PREVIOUS} to ${REVISION}, classified ${KIND} by conventions.py propose (CONS-9)."
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # An open PR whose tree is already this one is left alone, so a quiet day re-runs no CI.
+          if [ -n "$open" ] && git fetch -q "$remote" "refs/heads/${BRANCH}" \
+            && git diff --quiet FETCH_HEAD HEAD; then
+            echo "the open bump PR already carries this move"
+          else
+            git push --force -q "$remote" "HEAD:refs/heads/${BRANCH}"
+          fi
+          title="chore(conventions): move the pin to ${REVISION:0:12} (${KIND})"
+          if [ -n "$open" ]; then
+            gh pr edit "$open" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          else
+            url=$(gh pr create --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/body.md")
+            open=${url##*/}
+          fi
+          if [ "$KIND" = quiet ]; then
+            # A merge-queue branch takes no method; any other branch needs one.
+            gh pr merge "$open" --auto || gh pr merge "$open" --auto --merge
+          else
+            gh pr merge "$open" --disable-auto 2>/dev/null || true
+          fi

@@ -348,7 +348,10 @@ emit_leaf CLOUD "packages/temper-cloud/package.json"   '"version"'    "$CLOUD_RE
 # ---------------------------------------------------------------------------
 # Re-emit detect-changes variables so callers get everything in one eval
 # ---------------------------------------------------------------------------
-echo "CHANGES_BASE_REF=${CHANGES_BASE_REF}"
+printf 'CHANGES_BASE_REF=%q\n' "${CHANGES_BASE_REF}"
+# A detect-changes that does not say whether its base is a release is read as a fallback.
+echo "CHANGES_BASE_IS_FALLBACK=${CHANGES_BASE_IS_FALLBACK:-true}"
+printf 'CHANGES_BASE_REASON=%q\n' "${CHANGES_BASE_REASON:-}"
 echo "CORE_CHANGED=${CORE_CHANGED}"
 echo "WIRE_CHANGED=${WIRE_CHANGED}"
 echo "CLIENTS_CHANGED=${CLIENTS_CHANGED}"

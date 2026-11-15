@@ -7,6 +7,7 @@ baseline's main, so that the verdict a consumer gets is the one its pin chose:
     python3 -I .conventions/baseline/tools/conventions.py check [--offline]
     python3 -I .conventions/baseline/tools/conventions.py bump --revision <sha|main> [--init --name N]
     python3 -I .conventions/baseline/tools/conventions.py witness
+    python3 -I .conventions/baseline/tools/conventions.py propose --body-file <path>
 
 `check` runs six checks and exits non-zero if any fails:
 
@@ -30,6 +31,14 @@ token, credential helper or git configuration: that is the control, and the witn
 needs nothing an outsider lacks. Every workflow job that runs `check` must reference no secret. A
 seed that finds nothing to edit fails rather than passing vacuously.
 
+`propose` is `bump --revision main` for the canonical bump workflow (CONS-9). It moves the
+pin, classifies the move, writes a pull-request body to `--body-file`, and prints `class=`,
+`revision=`, `previous=` and `skill=` lines for `$GITHUB_OUTPUT`, and nothing else on stdout. The
+class is `none` (the pin is already main's, or this repository has not adopted), `quiet` (no rule
+was added, removed or changed, nothing changed under `rust/`, `python/`, `typescript/`, `tools/`
+or `skill/` or in the canonical bump workflow, and no doctrine text changed beyond the register's
+generated cells) or `loud` (anything else). Only a quiet move may merge without a person.
+
 NOT CHECKED, by design:
   - that a `gated:` gate actually fails on a violation (that is each consumer's bite test, TW-5);
   - that a consumer's own guidance does not restate or contradict the doctrine (judged in review);
@@ -42,6 +51,8 @@ Standard library only; Python 3.11+ (tomllib).
 from __future__ import annotations
 
 import argparse
+import ast
+import difflib
 import json
 import math
 import os
@@ -68,6 +79,7 @@ PROJECTED = (
     "rust",
     "python",
     "typescript",
+    ".github/workflows/conventions-bump.yml",
     "skill",
     "tools/conventions.py",
     "tools/slots.toml",
@@ -365,10 +377,21 @@ def local_slots(consumer: Consumer, canonical: str) -> list[str]:
     return list(data.get(canonical, {}).get("slots", []))
 
 
+# Canonical files the baseline has moved: old path -> new. A consumer whose adoption map still
+# names the old path is told where the file went, rather than only that it is gone.
+MOVED = {"ci/conventions-bump.yml": ".github/workflows/conventions-bump.yml"}
+
+
 def differences(adopted: Adopted, consumer: Consumer) -> list[str]:
     canonical_path = consumer.baseline_dir / adopted.canonical
     local_path = consumer.root / adopted.path
     if not canonical_path.is_file():
+        moved = MOVED.get(adopted.canonical)
+        if moved and (consumer.baseline_dir / moved).is_file():
+            return [
+                f"(canonical file {adopted.canonical} moved to {moved}: set `canonical` to it in "
+                "consumer.toml, and bring this file into line with it)"
+            ]
         return [f"(canonical file {adopted.canonical} is not in the projection)"]
     if not local_path.is_file():
         return ["(file missing)"]
@@ -492,8 +515,33 @@ class Fetched:
         result = git(["rev-parse", "--verify", "-q", ref], self.path)
         return result.stdout.decode().strip() or None if result.returncode == 0 else None
 
+    def projected(self, revision: str) -> tuple[str, ...]:
+        """The projected path set as the tool *at that revision* declares it.
+
+        A bump is run by the old pin's tool, so taking the set from the running tool would leave a
+        path the new revision adds (such as the bump workflow) out of the projection, and check B,
+        run by the new tool, would then fail it.
+        """
+        source = git(["show", f"{revision}:tools/conventions.py"], self.path).stdout
+        try:
+            tree = ast.parse(source)
+        except (SyntaxError, ValueError):
+            return PROJECTED
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "PROJECTED" for t in node.targets
+            ):
+                try:
+                    value = ast.literal_eval(node.value)
+                except ValueError:
+                    break
+                if isinstance(value, tuple) and all(isinstance(x, str) for x in value):
+                    return value
+        return PROJECTED
+
     def files(self, revision: str) -> dict[str, bytes]:
-        listed = git(["ls-tree", "-r", "-z", "--name-only", revision, "--", *PROJECTED], self.path)
+        paths = self.projected(revision)
+        listed = git(["ls-tree", "-r", "-z", "--name-only", revision, "--", *paths], self.path)
         out: dict[str, bytes] = {}
         for name in filter(None, listed.stdout.decode().split("\0")):
             out[name] = git(["show", f"{revision}:{name}"], self.path).stdout
@@ -680,7 +728,24 @@ def write_tree(target: Path, files: dict[str, bytes]) -> None:
         path.write_bytes(data)
 
 
-def bump(root: Path, revision: str, url: str | None, init_name: str | None) -> int:
+@dataclass
+class Move:
+    """What `bump` did, for `bump` to print and `propose` to classify."""
+
+    consumer: Consumer
+    previous: str
+    sha: str
+    behind: int
+    first: bool
+    rules: list[tuple[str, str]]  # (added|removed|changed, rule id)
+    before: dict[str, bytes]
+    after: dict[str, bytes]
+
+
+def move_pin(
+    root: Path, revision: str, url: str | None, init_name: str | None, log: Any = sys.stdout
+) -> Move | int:
+    """Move the pin and rewrite the projection and skill. An int is an exit code for a refusal."""
     config_path = root / CONVENTIONS_DIR / "consumer.toml"
     if init_name:
         if config_path.exists():
@@ -696,6 +761,8 @@ def bump(root: Path, revision: str, url: str | None, init_name: str | None) -> i
         print(f"conventions: {error}", file=sys.stderr)
         return 2
     url = url or consumer.baseline
+    previous = consumer.revision
+    before = projected_on_disk(consumer)
     old_rules_md = consumer.baseline_dir / "doctrine" / "rules.md"
     old_rules = rule_rows(old_rules_md) if old_rules_md.is_file() else {}
 
@@ -707,6 +774,7 @@ def bump(root: Path, revision: str, url: str | None, init_name: str | None) -> i
                 f"conventions: {revision} is not a commit on the baseline's main", file=sys.stderr
             )
             return 2
+        behind = fetched.lag(previous)[0] if fetched.resolve(previous) else 0
         write_tree(consumer.baseline_dir, fetched.files(sha))
     finally:
         fetched.close()
@@ -721,15 +789,17 @@ def bump(root: Path, revision: str, url: str | None, init_name: str | None) -> i
     )
 
     new_rules = rule_rows(consumer.baseline_dir / "doctrine" / "rules.md")
-    print(f"pinned {consumer.name} to {sha}")
-    if not old_rules:
+    print(f"pinned {consumer.name} to {sha}", file=log)
+    move = Move(consumer, previous, sha, behind, not old_rules, [], before, {})
+    move.after = projected_on_disk(consumer)
+    if move.first:
         set_reviewed_at(root, sha)
         print(
             f"  first projection: {len(new_rules)} rules. Each is unexamined here until you record"
-            " its status in .conventions/status.toml"
+            " its status in .conventions/status.toml",
+            file=log,
         )
-        return 0
-    moved = False
+        return move
     for label, ids in (
         ("added", sorted(new_rules.keys() - old_rules.keys())),
         ("removed", sorted(old_rules.keys() - new_rules.keys())),
@@ -739,17 +809,193 @@ def bump(root: Path, revision: str, url: str | None, init_name: str | None) -> i
         ),
     ):
         for rule in ids:
-            moved = True
-            print(f"  rule {label}: {rule}")
-    if not moved:
+            move.rules.append((label, rule))
+            print(f"  rule {label}: {rule}", file=log)
+    if not move.rules:
         set_reviewed_at(root, sha)
-        print("  no rule was added, removed or changed; status.toml is reviewed at the new pin")
-        return 0
+        print(
+            "  no rule was added, removed or changed; status.toml is reviewed at the new pin",
+            file=log,
+        )
+        return move
     print(
         "record the status of each rule above in .conventions/status.toml, then set its "
-        f'`reviewed_at = "{sha}"`, in this commit (check F fails until you do)'
+        f'`reviewed_at = "{sha}"`, in this commit (check F fails until you do)',
+        file=log,
     )
-    return 0
+    return move
+
+
+def bump(root: Path, revision: str, url: str | None, init_name: str | None) -> int:
+    move = move_pin(root, revision, url, init_name)
+    return move if isinstance(move, int) else 0
+
+
+# --------------------------------------------------------------------------------------------
+# propose — the bump workflow's step: move the pin, classify the move, write the PR body (CONS-9)
+# --------------------------------------------------------------------------------------------
+
+# A change under (or to) any of these is a change to what a consumer enforces, adopted here or
+# not: a file adopted later would carry an unreviewed change in with it.
+CANONICAL_PATHS = ("rust/", "python/", "typescript/", ".github/workflows/conventions-bump.yml")
+# The projected tool is code the consumer's CI and bump workflow execute, and the skill is what its
+# agents are told to follow: a change to either is reviewed, never merged on CI alone.
+CONTROL_PATHS = ("tools/", "skill/")
+LOUD_PATHS = CANONICAL_PATHS + CONTROL_PATHS
+# Doctrine is what the projected skill sends agents to read, so a change to its text is an
+# instruction to them and is reviewed too. The one exception is what `tools/register.py` generates
+# in the register: the consumers block and each table's consumer columns, which move whenever any
+# consumer's status does and instruct nobody.
+DOCTRINE = "doctrine/"
+REGISTER = "doctrine/rules.md"
+REGISTER_BLOCK = re.compile(
+    re.escape("<!-- consumers:begin -->") + ".*?" + re.escape("<!-- consumers:end -->"), re.DOTALL
+)
+
+
+def changed_paths(before: dict[str, bytes], after: dict[str, bytes]) -> list[str]:
+    return sorted(
+        name for name in before.keys() | after.keys() if before.get(name) != after.get(name)
+    )
+
+
+def register_authored(data: bytes | None) -> str | None:
+    """The register with its generated parts removed: the consumers block, and every table cell
+    after a row's first two (the rule's id and statement, or a header's `Id | Rule`)."""
+    if data is None:
+        return None
+    text = REGISTER_BLOCK.sub("", data.decode("utf-8", errors="replace"))
+    lines = []
+    for line in text.splitlines():
+        if line.startswith("|"):
+            line = "|".join(re.split(r"(?<!\\)\|", line)[:3])
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def doctrine_changes(move: Move) -> list[str]:
+    """Changed doctrine files, leaving out a register whose only change is generated cells."""
+    found = []
+    for path in changed_paths(move.before, move.after):
+        if not path.startswith(DOCTRINE):
+            continue
+        if path == REGISTER and register_authored(move.before.get(path)) == register_authored(
+            move.after.get(path)
+        ):
+            continue
+        found.append(path)
+    return found
+
+
+def classify(move: Move) -> str:
+    if move.sha == move.previous:
+        return "none"
+    loud = [p for p in changed_paths(move.before, move.after) if p.startswith(LOUD_PATHS)]
+    return "loud" if move.rules or loud or doctrine_changes(move) else "quiet"
+
+
+def line_stat(old: bytes | None, new: bytes | None) -> str:
+    if old is None:
+        return "added"
+    if new is None:
+        return "removed"
+    plus = minus = 0
+    for line in difflib.unified_diff(
+        old.decode("utf-8", errors="replace").splitlines(),
+        new.decode("utf-8", errors="replace").splitlines(),
+        lineterm="",
+        n=0,
+    ):
+        if line.startswith("+") and not line.startswith("+++"):
+            plus += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            minus += 1
+    return f"+{plus} -{minus}"
+
+
+def proposal_body(move: Move, kind: str, url: str) -> str:
+    short, previous = move.sha[:12], move.previous[:12]
+    changed = changed_paths(move.before, move.after)
+    canonical = [p for p in changed if p.startswith(CANONICAL_PATHS)]
+    control = [p for p in changed if p.startswith(CONTROL_PATHS)]
+    doctrine = doctrine_changes(move)
+    others = [p for p in changed if not p.startswith(LOUD_PATHS) and p not in doctrine]
+    web = url.removesuffix(".git")
+    lines = [
+        f"Moves this repository's pin on the tasker-systems conventions baseline from "
+        f"`{previous}` to `{short}`, {move.behind} commit(s) "
+        f"([compare]({web}/compare/{move.previous}...{move.sha})). Opened by the canonical "
+        "`conventions-bump` workflow (CONS-9).",
+        "",
+    ]
+    if kind == "quiet":
+        lines += [
+            "**Quiet.** No rule was added, removed or changed, and no doctrine text, canonical "
+            "config, projected tool or skill changed. It merges on green CI.",
+        ]
+    else:
+        lines += ["**Loud: this waits for a person.**", ""]
+        for label, rule in move.rules:
+            lines.append(f"- Rule {label}: `{rule}`")
+        for path in canonical:
+            lines.append(
+                f"- Canonical file changed: `{path}` "
+                f"({line_stat(move.before.get(path), move.after.get(path))})"
+            )
+        for path in control:
+            lines.append(
+                f"- Tool or skill changed: `{path}` "
+                f"({line_stat(move.before.get(path), move.after.get(path))}). Read it: CI runs this "
+                "code, and agents follow this skill."
+            )
+        for path in doctrine:
+            lines.append(
+                f"- Doctrine changed: `{path}` "
+                f"({line_stat(move.before.get(path), move.after.get(path))}). Read it: the skill "
+                "sends agents to this text."
+            )
+        lines += ["", "To land it, in this branch:"]
+        if move.rules:
+            lines.append(
+                "- record each rule's status in `.conventions/status.toml`, then set "
+                f'`reviewed_at = "{move.sha}"`. Check F fails until you do.'
+            )
+        if canonical:
+            lines.append(
+                "- bring each adopted file into line with the changed canonical one. Check A names "
+                "every difference, and anything this repository tracks by hand beside it "
+                "(its status says so) moves too."
+            )
+    if others:
+        lines += ["", f"Other projected files changed ({len(others)}):", ""]
+        lines += [f"- `{p}`" for p in others[:30]]
+        if len(others) > 30:
+            lines.append(f"- … and {len(others) - 30} more")
+    return "\n".join(lines) + "\n"
+
+
+def propose(root: Path, url: str | None, body_file: Path) -> int:
+    def output(kind: str, move: Move | None = None) -> int:
+        print(f"class={kind}")
+        if move is not None:
+            print(f"revision={move.sha}")
+            print(f"previous={move.previous}")
+            print(f"skill={move.consumer.skill}")
+        return 0
+
+    if not (root / CONVENTIONS_DIR / "consumer.toml").is_file():
+        print("conventions: no .conventions/consumer.toml here; nothing to move", file=sys.stderr)
+        return output("none")
+    move = move_pin(root, "main", url, None, log=sys.stderr)
+    if isinstance(move, int):
+        return move
+    kind = classify(move)
+    print(f"conventions: the move is {kind}", file=sys.stderr)
+    if kind != "none":
+        body_file.write_text(
+            proposal_body(move, kind, url or move.consumer.baseline), encoding="utf-8"
+        )
+    return output(kind, move)
 
 
 INIT_CONSUMER = """\
@@ -1266,6 +1512,12 @@ def main(argv: list[str] | None = None) -> int:
     seeded = sub.add_parser("witness", help="show each check red on a seeded violation (TW-5)")
     seeded.add_argument("--root", type=Path, default=Path.cwd())
     seeded.add_argument("--baseline-repo", help="override the baseline URL (tests)")
+    proposed = sub.add_parser(
+        "propose", help="move the pin to main, classify the move, write the PR body (CONS-9)"
+    )
+    proposed.add_argument("--root", type=Path, default=Path.cwd())
+    proposed.add_argument("--baseline-repo", help="override the baseline URL (tests)")
+    proposed.add_argument("--body-file", type=Path, required=True, help="where to write the body")
     args = parser.parse_args(argv)
 
     root = args.root.resolve()
@@ -1273,6 +1525,8 @@ def main(argv: list[str] | None = None) -> int:
         return bump(root, args.revision, args.baseline_repo, args.init)
     if args.command == "witness":
         return witness(root, args.baseline_repo)
+    if args.command == "propose":
+        return propose(root, args.baseline_repo, args.body_file)
 
     report = Report()
     try:

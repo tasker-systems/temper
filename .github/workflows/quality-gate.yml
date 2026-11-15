@@ -266,6 +266,17 @@ jobs:
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         run: git fetch --depth=1 origin "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
 
+      # The wire cross-check measures against the last release (conventions COMPAT-1), and a
+      # release is only provable in a history that holds it (COMPAT-2): at depth 2 with no tags,
+      # the release derivation's fallback could be the PR head itself, and every break would
+      # pass. So the commit graph and the tags come down here, visibly. --filter=tree:0 keeps it
+      # cheap: commits and tags only, and the one tree the gate reads (openapi.json at the
+      # release) is fetched on demand. A failure fails the job here, as the base fetch above does;
+      # and were the history still shallow, the derivation would refuse it and the gate would give
+      # the base-only verdict, stricter and never looser.
+      - name: Fetch the commit history and release tags (for the last release)
+        run: git fetch --filter=tree:0 --unshallow --tags origin
+
       - name: Guard test — detect-ci-scope
         run: bash .github/scripts/test-detect-ci-scope.sh
 
