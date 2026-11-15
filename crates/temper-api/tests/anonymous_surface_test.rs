@@ -80,6 +80,16 @@ async fn send(
     }
 }
 
+/// The CORS actual-response headers and `vary`, every value (`send` joins repeated headers).
+fn cors_headers(answer: &Answer) -> BTreeMap<String, String> {
+    answer
+        .headers
+        .iter()
+        .filter(|(n, _)| n.starts_with("access-control-") || n.as_str() == "vary")
+        .map(|(n, v)| (n.clone(), v.clone()))
+        .collect()
+}
+
 fn assert_request_id_format(what: &str, answer: &Answer) {
     let id = answer
         .header("x-request-id")
@@ -210,12 +220,15 @@ async fn options_without_a_preflight_is_routed(pool: PgPool) {
         }
         // The CORS actual-response headers depend only on `Origin`, routed `OPTIONS` included.
         let routed = send(&app, Method::OPTIONS, "/api/profile", headers).await;
-        let expect_acao = (headers.first() == Some(&("origin", ORIGIN))).then_some(ORIGIN);
+        let get = send(&app, Method::GET, "/api/profile", headers).await;
         assert_eq!(
-            routed.header("access-control-allow-origin"),
-            expect_acao,
-            "OPTIONS /api/profile {headers:?}: {routed:?}"
+            cors_headers(&routed),
+            cors_headers(&get),
+            "OPTIONS /api/profile {headers:?} against GET: {routed:?}"
         );
+        if headers.first() == Some(&("origin", ORIGIN)) {
+            assert_eq!(routed.header("access-control-allow-origin"), Some(ORIGIN));
+        }
         // A designated public route keeps its own answer: 405 with `Allow`.
         let health = send(&app, Method::OPTIONS, "/api/health", headers).await;
         assert_eq!(
@@ -269,8 +282,8 @@ async fn a_permissive_preflight_is_path_independent(pool: PgPool) {
     }
 }
 
-// FAILS IF: the outer service changes a `HEAD` answer's headers: a different `content-length`
-// from the `GET`'s, or a body.
+// FAILS IF: wrapping the router in the outer one changes a `HEAD` answer: a different
+// `content-length` from the `GET`'s, or a body.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn head_keeps_the_get_headers(pool: PgPool) {
     let app = allowlisted_app(&pool).await;

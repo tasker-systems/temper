@@ -27,13 +27,6 @@
 //! so an undecodable `Content-Encoding` is a 415 before any gate runs, and on an unmounted method
 //! axum stamps the method map onto that 415 too. RFC 9110 requires `Allow` on a 405 and makes it
 //! optional elsewhere.
-//!
-//! **`HEAD` and `content-length`.** The outer router's fallback is a second top-level route, and
-//! axum's top-level route future inserts `content-length` from the body's exact size when the
-//! header is absent. The inner route has already emptied a `HEAD` body, so an inner answer that had
-//! no `content-length` (a body of unknown size) would read as exactly 0 and be told so. [`finish`]
-//! gives such an answer a body of unknown size, so the outer route adds nothing and the header set
-//! is the inner router's own.
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -48,9 +41,7 @@ use axum::Router;
 use tower::{Layer as _, Service, ServiceExt as _};
 
 use temper_services::cors::{Cors, CorsPolicy};
-use temper_services::transport::{
-    insert_security_headers, unsized_empty_body, RequestId, REQUEST_ID_HEADER,
-};
+use temper_services::transport::{insert_security_headers, RequestId, REQUEST_ID_HEADER};
 
 /// The most of a caller's own `x-request-id` the root span keeps. It is caller-chosen bytes, so
 /// it is bounded before it reaches a log line, like every other echoed header.
@@ -121,7 +112,6 @@ impl AnonymousSurface {
         if let Some(inbound) = inbound {
             request.extensions_mut().insert(inbound);
         }
-        let is_head = request.method() == Method::HEAD;
 
         let Ok(mut response) = if self
             .cors
@@ -145,10 +135,9 @@ impl AnonymousSurface {
             *view.headers_mut() = request.headers().clone();
             let Ok(cors) = self.headers_only.oneshot(view).await;
             self.inner.oneshot(request).await.map(|mut response| {
+                // The empty answer carries nothing but what the layer added.
                 for (name, value) in cors.headers() {
-                    if name != header::CONTENT_LENGTH {
-                        response.headers_mut().append(name, value.clone());
-                    }
+                    response.headers_mut().append(name, value.clone());
                 }
                 response
             })
@@ -156,14 +145,13 @@ impl AnonymousSurface {
             self.actual.oneshot(request).await
         };
 
-        finish(&mut response, &id, is_head);
+        finish(&mut response, &id);
         response
     }
 }
 
-/// The rules every answer leaves under: the request id, `Allow` only on a 405, and (for `HEAD`) no
-/// `content-length` the inner router did not set (see the module doc).
-fn finish(response: &mut Response, id: &RequestId, is_head: bool) {
+/// The two rules every answer leaves under: the request id, and `Allow` only on a 405.
+fn finish(response: &mut Response, id: &RequestId) {
     let headers = response.headers_mut();
     headers.insert(
         REQUEST_ID_HEADER,
@@ -171,9 +159,6 @@ fn finish(response: &mut Response, id: &RequestId, is_head: bool) {
     );
     if response.status() != StatusCode::METHOD_NOT_ALLOWED {
         response.headers_mut().remove(header::ALLOW);
-    }
-    if is_head && !response.headers().contains_key(header::CONTENT_LENGTH) {
-        *response.body_mut() = unsized_empty_body();
     }
 }
 
@@ -216,33 +201,5 @@ impl Service<Request> for CorsHeadersOnly {
 
     fn call(&mut self, _request: Request) -> Self::Future {
         std::future::ready(Ok(Response::new(axum::body::Body::empty())))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::body::Body;
-    use axum::routing::get;
-
-    // FAILS IF: a `HEAD` answer whose body is of unknown size (no `content-length` from the inner
-    // router) leaves the outer route advertising `content-length: 0`, a claim that the `GET` body
-    // is empty.
-    #[tokio::test]
-    async fn head_of_an_unsized_body_is_not_advertised_as_empty() {
-        let inner = Router::new().route("/s", get(|| async { unsized_empty_body() }));
-        let app = wrap(inner, CorsPolicy::new(&[]));
-        let head = app
-            .clone()
-            .oneshot(Request::head("/s").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(head.status(), StatusCode::OK);
-        assert_eq!(head.headers().get(header::CONTENT_LENGTH), None, "{head:?}");
-        let get = app
-            .oneshot(Request::get("/s").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(get.headers().get(header::CONTENT_LENGTH), None, "{get:?}");
     }
 }
