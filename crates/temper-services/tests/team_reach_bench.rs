@@ -194,17 +194,24 @@ struct Collateral {
     sql: Vec<(String, String, Uuid, Uuid)>,
 }
 
-async fn run_cases(pool: &PgPool, cases: &[Case], collateral: &Collateral) -> Vec<String> {
+/// The printed rows, and the gate's verdict per case (so before and after can be held equal).
+async fn run_cases(
+    pool: &PgPool,
+    cases: &[Case],
+    collateral: &Collateral,
+) -> (Vec<String>, Vec<bool>) {
     let mut rows = Vec::new();
+    let mut verdicts = Vec::new();
     for c in cases {
         let (p50, p95, v) = locked_gate(pool, c.reader, c.resource).await;
         rows.push(format!("{:<44} {p50:>8.3} {p95:>8.3}  {v}", c.name));
+        verdicts.push(v);
     }
     for (name, sql, a, b) in &collateral.sql {
         let (p50, p95) = statement(pool, sql, *a, *b).await;
         rows.push(format!("{name:<44} {p50:>8.3} {p95:>8.3}"));
     }
-    rows
+    (rows, verdicts)
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -370,12 +377,52 @@ async fn team_reach_before_and_after(pool: PgPool) {
         ],
     };
 
-    let after = run_cases(&pool, &cases, &collateral).await;
-    sqlx::raw_sql(BEFORE)
-        .execute(&pool)
-        .await
-        .expect("install the before bodies");
-    let before = run_cases(&pool, &cases, &collateral).await;
+    // A throwaway pass warms the buffers, then the two bodies are measured in alternating order
+    // (after, before, after, before) and the second pass of each is reported, so neither side is
+    // measured cold. The after body is reinstalled from its live definition between passes.
+    let after_bodies: String = sqlx::query_scalar(
+        "SELECT string_agg(pg_get_functiondef(p::regprocedure), E';\n') || ';' \
+           FROM unnest(ARRAY['team_ancestors(uuid)', 'profile_reachable_teams(uuid)']) p",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the migrated bodies");
+    let install = |sql: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::raw_sql(&sql)
+                .execute(&pool)
+                .await
+                .expect("install bodies")
+        }
+    };
+    run_cases(&pool, &cases, &collateral).await;
+    let mut after = run_cases(&pool, &cases, &collateral).await;
+    install(BEFORE.to_string()).await;
+    let mut before = run_cases(&pool, &cases, &collateral).await;
+    install(after_bodies.clone()).await;
+    after = {
+        let second = run_cases(&pool, &cases, &collateral).await;
+        assert_eq!(
+            after.1, second.1,
+            "the after body's verdicts moved between passes"
+        );
+        second
+    };
+    install(BEFORE.to_string()).await;
+    before = {
+        let second = run_cases(&pool, &cases, &collateral).await;
+        assert_eq!(
+            before.1, second.1,
+            "the before body's verdicts moved between passes"
+        );
+        second
+    };
+    assert_eq!(
+        before.1, after.1,
+        "a case's verdict differs between the pre-migration bodies and the one walk"
+    );
+    let (before, after) = (before.0, after.0);
 
     println!(
         "\n{:<44} {:>8} {:>8}  verdict",

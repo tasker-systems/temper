@@ -1,9 +1,10 @@
 -- Team reach in one walk: the up-walk is stated once, as team_ancestors_of(uuid[]), and both
 -- team_ancestors(t) and profile_reachable_teams(p) become body-only wrappers over it.
 --
--- profile_reachable_teams (20260804000010) ran one team_ancestors walk per membership, through
--- CROSS JOIN LATERAL, and each walk was planned and run separately. For a reader in 300 teams it
--- cost about 28 ms, most of a single-resource visibility check. One recursive walk seeded with every
+-- profile_reachable_teams (20260804000010) re-ran the inlined team_ancestors walk once per
+-- membership, through CROSS JOIN LATERAL. For a reader in 300 teams that cost about 24 ms, nearly
+-- all of a single-resource visibility check (the planner already pushes the resource id into every
+-- arm of resources_visible_to; the closure was the part that tracked the reader). One recursive walk seeded with every
 -- membership returns the same set: the closure of a union of seeds is the union of the seeds'
 -- closures, and UNION deduplicates. Every read set built on the closure gets the same rows.
 --
@@ -17,8 +18,10 @@
 --   * One statement of the walk. Neither wrapper restates the recursion, and nothing else may;
 --     reachable_teams_one_definition_test scans pg_proc for copies, inlined recursions included.
 --   * Cycles are admitted states, and UNION (not UNION ALL) is what terminates the walk on one.
---   * Signatures, return types and volatility of team_ancestors and profile_reachable_teams are
---     unchanged, so every caller reads the same columns.
+--   * The profile path is a function scan, not inlined: an argument holding a sub-select stops SQL
+--     function inlining. ROWS 200 keeps its row estimate near what the inlined per-membership form
+--     produced, instead of the 1000 default, so callers that join the closure plan as before.
+--     team_ancestors(t) passes a plain array and still inlines.
 --
 -- Design: temper-artifacts specs/2026-11-15-single-resource-visibility-design.md (PR A).
 
@@ -26,6 +29,7 @@ CREATE FUNCTION team_ancestors_of(p_teams uuid[])
 RETURNS TABLE(team_id uuid)
 LANGUAGE sql
 STABLE
+ROWS 200
 AS $$
     WITH RECURSIVE up AS (
         SELECT t.id AS team_id
@@ -76,14 +80,14 @@ COMMENT ON FUNCTION profile_reachable_teams(uuid) IS
     'The one definition of which teams a profile reaches: its effective (live) memberships, '
     'expanded up the enclosure chain through live teams, in one walk (team_ancestors_of). Join '
     'this; never restate it. Guarded by reachable_teams_one_definition_test.rs, which scans pg_proc '
-    'for copies. Same set as the per-membership form it replaced (20260804000010).';
+    'for copies.';
 
 SELECT declare_migration(
     20261129000010,
     'additive',
     'team reach in one walk: adds team_ancestors_of(uuid[]), and body-only CREATE OR REPLACE of '
     'team_ancestors(uuid) and profile_reachable_teams(uuid) with unchanged signatures, return types '
-    'and volatility, delegating to it. Every set they return is unchanged (the same two liveness '
+    'and volatility, delegating to it (team_ancestors_of declares ROWS 200). Every set they return is unchanged (the same two liveness '
     'floors, one walk instead of one per membership), so an older binary reads the same answers. '
     'No table, column, index or row changes.'
 );

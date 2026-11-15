@@ -870,7 +870,7 @@ impl DbBackend {
     /// Auth-before-writes gate (WS2): the caller (`self.profile_id`, the substrate principal directly)
     /// must be able to modify the target resource. Returns `Forbidden` otherwise. CONFORMs to
     /// production's `check_can_modify`. `can_modify_resource` and its nested
-    /// `profile_reachable_teams` → `profile_effective_teams`/`team_ancestors` resolve their
+    /// `profile_reachable_teams` → `profile_effective_teams`/`team_ancestors_of` resolve their
     /// unqualified references against the connection search_path (the one schema post-collapse), so
     /// no per-txn `SET LOCAL`.
     async fn check_can_modify_next(&self, new_id: uuid::Uuid) -> Result<(), TemperError> {

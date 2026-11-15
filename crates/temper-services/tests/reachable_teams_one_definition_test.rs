@@ -242,6 +242,26 @@ async fn the_reachable_teams_expression_has_exactly_one_home(pool: PgPool) -> sq
     // blind to whether the up-walk is named or inlined.
     let copies = structural_copies(&pool).await?;
 
+    // The named exclusion holds only while its reason does: the SAML door must still walk DOWN
+    // (child from parent) and never up (parent from child), and must not name the walk primitive.
+    // An upward walk added inside it would be a copy this gate can no longer see, so fail loudly.
+    let saml: String = sqlx::query_scalar(
+        "SELECT regexp_replace(pg_get_functiondef(p.oid), '\\s+', ' ', 'g') \
+           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+          WHERE n.nspname = 'public' AND p.proname = $1",
+    )
+    .bind(DOWNWARD_WALK)
+    .fetch_one(&pool)
+    .await?;
+    assert!(
+        saml.contains("SELECT tp.child_id FROM kb_teams_parents tp JOIN s ON tp.parent_id = s.id")
+            && !saml.contains("tp.parent_id FROM kb_teams_parents")
+            && !saml.contains("team_ancestors"),
+        "{DOWNWARD_WALK} is excluded from the gate because it walks DOWN the DAG only. Its body no \
+         longer has that shape, so the exclusion is stale: re-read it, and either route an upward \
+         walk through {AUTHORITATIVE}() or narrow the exclusion."
+    );
+
     assert!(
         copies.is_empty(),
         "{} function(s) walk `team_ancestors` over a profile's own memberships instead of joining \
@@ -320,8 +340,8 @@ async fn the_authoritative_relation_exists_and_is_principal_parameterized(
 /// not read this file, with whatever aliases they happen to pick. That claim needs evidence, or it
 /// is just a comment.
 ///
-/// So: plant decoys and assert the gate names them. **Four** decoys, because the gate has been wrong
-/// in three different ways and each correction needs its own standing evidence:
+/// So: plant decoys and assert the gate names them. **Four** decoys: three for the three ways the gate has been
+/// wrong, each correction with its own standing evidence, and one pinning a regression:
 ///
 /// 1. **Alias-renamed** — shares no alias with the nine originals, so a gate keyed to `e`/`a`
 ///    cannot see it.
@@ -329,6 +349,8 @@ async fn the_authoritative_relation_exists_and_is_principal_parameterized(
 ///    gate requiring that *name* cannot see it. Found by adversarial review after the first
 ///    correction shipped, and planted here so the second correction cannot silently regress.
 /// 3. **Seeded primitive** — calls the walk primitive `team_ancestors_of` with a membership array.
+///    The named half's `%team_ancestors%` substring already catches it; it is planted so a later
+///    narrowing of that pattern to `team_ancestors(` cannot open the hole silently.
 /// 4. **Inlined walk** — restates the up-walk's recursion itself, naming no walk function. The
 ///    walk got a single home in `20261129000010`, which made this the natural copy; the walk half
 ///    of the gate became a disjunction then.

@@ -82,11 +82,20 @@ async fn install_oracle(pool: &PgPool) {
 /// Every subject whose live closure differs from the oracle's, described for the failure message.
 /// Empty means equal everywhere.
 async fn closure_diffs(pool: &PgPool) -> Vec<String> {
+    closure_diffs_within(pool, "").await
+}
+
+/// [`closure_diffs`] restricted to the profiles and teams whose handle or slug starts with
+/// `prefix` (plus the NULL and the id with no row). The random worlds share one database, so each
+/// round checks only its own world rather than re-checking every earlier one.
+async fn closure_diffs_within(pool: &PgPool, prefix: &str) -> Vec<String> {
     sqlx::query_scalar(
         "WITH profiles AS (
-             SELECT id FROM kb_profiles UNION ALL SELECT NULL::uuid UNION ALL SELECT gen_random_uuid()
+             SELECT id FROM kb_profiles WHERE starts_with(handle, $1)
+             UNION ALL SELECT NULL::uuid UNION ALL SELECT gen_random_uuid()
          ), teams AS (
-             SELECT id FROM kb_teams UNION ALL SELECT NULL::uuid UNION ALL SELECT gen_random_uuid()
+             SELECT id FROM kb_teams WHERE starts_with(slug, $1)
+             UNION ALL SELECT NULL::uuid UNION ALL SELECT gen_random_uuid()
          )
          SELECT 'profile ' || coalesce(p.id::text, 'NULL') || ': live '
                 || live::text || ' vs oracle ' || oracle::text
@@ -106,6 +115,7 @@ async fn closure_diffs(pool: &PgPool) -> Vec<String> {
                                  FROM oracle_team_ancestors(t.id) x) o
           WHERE live IS DISTINCT FROM oracle",
     )
+    .bind(prefix)
     .fetch_all(pool)
     .await
     .expect("closure comparison")
@@ -419,13 +429,20 @@ async fn the_one_walk_returns_the_pre_migration_sets_on_random_worlds(pool: PgPo
     for k in 0..RANDOM_WORLDS {
         let seed = base.wrapping_add(k);
         random_world(&pool, seed).await;
-        let diffs = closure_diffs(&pool).await;
+        let diffs = closure_diffs_within(&pool, &format!("rw{seed}-")).await;
         assert!(
             diffs.is_empty(),
             "world seed {seed} (HARNESS_SEED={base}, world {k}): live closure differs from the \
              frozen oracle: {diffs:#?}"
         );
     }
+    // One full pass at the end, over every world together (and the personal teams the profile
+    // trigger made), so nothing outside a world's prefix escapes the comparison.
+    let diffs = closure_diffs(&pool).await;
+    assert!(
+        diffs.is_empty(),
+        "the accumulated worlds differ from the frozen oracle: {diffs:#?}"
+    );
 }
 
 // =================================================================================================
