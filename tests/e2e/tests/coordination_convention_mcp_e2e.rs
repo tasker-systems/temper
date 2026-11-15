@@ -826,56 +826,315 @@ async fn a_guarded_reclaim_makes_the_old_holders_heartbeat_fail(pool: PgPool) {
 
 // ── discovery ────────────────────────────────────────────────────────────────────────────────────
 
-/// **A workflow-maintained tag finds claimable work, and each row shows its claim.** The workflow
-/// adds a `claimable` marker with `open_meta_add`; `list_resources` by context and tag returns the
-/// marked item and not an unmarked one, and the row's `open_meta` carries `claim_id` once claimed.
-/// A claimed item can still be listed (a stale hit): the guarded claim decides, so a second
-/// claimant loses.
-///
-/// FAILS IF the tag filter or the row's `open_meta` stops serving the pattern the skill teaches.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_workflow_tag_lists_claimable_work_with_its_claim(pool: PgPool) {
-    let (app, svc, parts) = harness(pool).await;
-    let ctx = default_context_id(&app.pool).await;
-    let marked = work_item(&svc, &parts, ctx).await;
-    let unmarked = work_item(&svc, &parts, ctx).await;
+/// The workflow's own positive marker: an unguarded open-meta write, as any workflow key is.
+async fn mark(svc: &TemperMcpService, parts: &Parts, item: &str, state: &str) {
     one_text(
-        &temper_mcp::tools::resources::update_resource(
-            &svc,
-            &parts,
-            input(json!({"id": marked, "open_meta_add": {"tags": ["claimable"]}})),
+        &temper_mcp::tools::resources::update_resource_meta(
+            svc,
+            parts,
+            input(json!({"id": item, "managed_meta": {}, "open_meta": {"state": state}})),
         )
         .await
         .expect("mark the item"),
     );
-    let c = mint();
+}
+
+/// `run_query` with no trace, as the skill teaches discovery: the answer, or the plan's refusal.
+async fn query(
+    svc: &TemperMcpService,
+    parts: &Parts,
+    plan: Value,
+) -> Result<Value, rmcp::ErrorData> {
+    temper_mcp::tools::query::run_query(svc, parts, input(json!({"plan": plan, "trace": false})))
+        .await
+        .map(|r| one_text(&r))
+}
+
+/// A caller bound on one context: the anchor every discovery stage in the skill carries.
+fn anchored(ctx: Uuid) -> Value {
+    json!([{"from": "caller", "as": "bound", "ids": {"kind": "context", "ids": [ctx.to_string()]}}])
+}
+
+fn state_is(value: &str) -> Value {
+    json!({"properties": [{"key": "state", "op": {"op": "contains", "values": [value]}}]})
+}
+
+/// The simple case's plan: one returned `list-resources-with` stage over a filter.
+fn listing(ctx: Uuid, filter: Value, order: Option<&str>, terms: Value) -> Value {
+    let mut stage = json!({"name": "work", "act": "list-resources-with",
+        "inputs": anchored(ctx), "resource_filter": filter, "terms": terms});
+    if let Some(order) = order {
+        stage["order"] = json!(order);
+    }
+    json!({"stages": [stage], "outcome": {"returns": [{"stage": "work", "with": ["open-meta"]}]}})
+}
+
+/// The negation case's plan: ready minus has-a-claim, returned through a list stage bound on the
+/// difference, oldest first.
+fn unclaimed(ctx: Uuid) -> Value {
+    json!({"stages": [
+        {"name": "ready", "act": "find-resources-with", "inputs": anchored(ctx),
+         "resource_filter": state_is("ready")},
+        {"name": "claimed", "act": "find-resources-with", "inputs": anchored(ctx),
+         "resource_filter": {"properties": [{"key": "claim_id", "op": {"op": "has_key"}}]}},
+        {"name": "open", "op": "difference", "inputs": ["ready", "claimed"]},
+        {"name": "work", "act": "list-resources-with",
+         "inputs": [{"from": "upstream", "as": "bound", "stage": "open"}],
+         "order": "asc", "terms": {"limit": 20}}],
+     "outcome": {"returns": [{"stage": "work", "with": ["open-meta"]}]}})
+}
+
+/// The returned stage's row ids, in wire order.
+fn row_ids(answer: &Value) -> Vec<String> {
+    answer["returned"]["work"]["produced"]["hits"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a resources arm: {answer}"))
+        .iter()
+        .map(|h| h["resource"]["id"].as_str().expect("an id").to_string())
+        .collect()
+}
+
+/// Every refusal reason a refused plan carries, from the error's structured `data`.
+fn refusal_reasons(refused: &rmcp::ErrorData) -> Vec<String> {
+    refused
+        .data
+        .as_ref()
+        .and_then(|d| d["refusals"].as_array())
+        .unwrap_or_else(|| panic!("structured refusals: {refused:?}"))
+        .iter()
+        .map(|r| r["reason"].as_str().expect("a reason").to_string())
+        .collect()
+}
+
+/// **A workflow's marker key lists claimable work as rows, oldest first, paged, with each row's
+/// claim.** Three items carry `state: ready` and one carries another state; `contains` returns
+/// only the three. `order: asc` gives the oldest first and the omitted order the newest; `limit`
+/// and `offset` page it, and `total` counts the whole match set on every page, including an
+/// `empty` page past the end. `has_key` finds the claimed item, and its row's open meta shows the claim. A listed item that is already claimed
+/// (a stale hit) loses at the guarded claim.
+///
+/// FAILS IF a property predicate stops reading the open-meta keys the workflow writes, or the
+/// order, paging, `total` or the row's open meta stops serving the pattern the skill teaches.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_marker_key_lists_claimable_work_oldest_first_with_its_claim(pool: PgPool) {
+    let (app, svc, parts) = harness(pool).await;
+    let ctx = default_context_id(&app.pool).await;
+    let mut ready = Vec::new();
+    for _ in 0..3 {
+        let item = work_item(&svc, &parts, ctx).await;
+        mark(&svc, &parts, &item, "ready").await;
+        ready.push(item);
+    }
+    let other = work_item(&svc, &parts, ctx).await;
+    mark(&svc, &parts, &other, "done").await;
+
+    let first = query(
+        &svc,
+        &parts,
+        listing(ctx, state_is("ready"), Some("asc"), json!({"limit": 2})),
+    )
+    .await
+    .expect("the listing runs");
     assert_eq!(
-        verdict(&claim(&svc, &parts, &marked, &c).await, &c),
-        Verdict::Held
+        row_ids(&first),
+        ready[..2],
+        "the oldest two, oldest first: {first}"
+    );
+    assert_eq!(
+        first["returned"]["work"]["total"],
+        json!(3),
+        "every match, not the page"
+    );
+    let second = query(
+        &svc,
+        &parts,
+        listing(
+            ctx,
+            state_is("ready"),
+            Some("asc"),
+            json!({"limit": 2, "offset": 2}),
+        ),
+    )
+    .await
+    .expect("the next page runs");
+    assert_eq!(row_ids(&second), ready[2..], "{second}");
+    assert_eq!(
+        second["returned"]["work"]["total"],
+        json!(3),
+        "on every page"
+    );
+    let past = query(
+        &svc,
+        &parts,
+        listing(
+            ctx,
+            state_is("ready"),
+            Some("asc"),
+            json!({"limit": 2, "offset": 3}),
+        ),
+    )
+    .await
+    .expect("a page past the end runs");
+    assert!(row_ids(&past).is_empty(), "{past}");
+    assert_eq!(
+        past["returned"]["work"]["disposition"],
+        json!("empty"),
+        "the page: {past}"
+    );
+    assert_eq!(
+        past["returned"]["work"]["total"],
+        json!(3),
+        "the match set: {past}"
     );
 
-    let listed = one_text(
-        &temper_mcp::tools::resources::list_resources(
-            &svc,
-            &parts,
-            input(json!({"context_ref": ctx.to_string(), "tags": ["claimable"]})),
-        )
-        .await
-        .expect("list by tag"),
-    );
-    let rows = listed["rows"].as_array().expect("rows");
-    let ids: Vec<&str> = rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
+    let newest = query(
+        &svc,
+        &parts,
+        listing(ctx, state_is("ready"), None, json!({})),
+    )
+    .await
+    .expect("the default order runs");
+    let mut reversed = ready.clone();
+    reversed.reverse();
     assert_eq!(
-        ids,
-        [marked.as_str()],
-        "only the marked item, never {unmarked}: {listed}"
+        row_ids(&newest),
+        reversed,
+        "newest first unless asked: {newest}"
     );
-    assert_eq!(rows[0]["open_meta"]["claim_id"], json!(c), "{listed}");
+
+    let c = mint();
+    assert_eq!(
+        verdict(&claim(&svc, &parts, &ready[1], &c).await, &c),
+        Verdict::Held
+    );
+    let held = query(
+        &svc,
+        &parts,
+        listing(
+            ctx,
+            json!({"properties": [{"key": "claim_id", "op": {"op": "has_key"}}]}),
+            None,
+            json!({}),
+        ),
+    )
+    .await
+    .expect("has_key runs");
+    assert_eq!(row_ids(&held), [ready[1].clone()], "{held}");
+    assert_eq!(
+        held["returned"]["work"]["produced"]["hits"][0]["resource"]["open_meta"]["claim_id"],
+        json!(c),
+        "the row carries its claim: {held}"
+    );
 
     let late = mint();
     assert_eq!(
-        verdict(&claim(&svc, &parts, &marked, &late).await, &late),
+        verdict(&claim(&svc, &parts, &ready[1], &late).await, &late),
         Verdict::Lost(json!(c)),
         "a stale hit loses to the claim already there"
+    );
+}
+
+/// **Ready and not yet claimed comes back as rows through a difference bound.** Two
+/// `find-resources-with` selections (ready; has a `claim_id`) feed a `difference`, and a
+/// `list-resources-with` stage bound on it returns the unclaimed ready items oldest first with
+/// their `total`. A guarded reclaim clears `claim_id`, and the freed item is listed again.
+///
+/// FAILS IF the difference stops coming back as rows, `has_key` stops seeing a claim, or a cleared
+/// claim key still reads as present.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_difference_bound_lists_ready_work_with_no_claim(pool: PgPool) {
+    let (app, svc, parts) = harness(pool).await;
+    let ctx = default_context_id(&app.pool).await;
+    let mut ready = Vec::new();
+    for _ in 0..3 {
+        let item = work_item(&svc, &parts, ctx).await;
+        mark(&svc, &parts, &item, "ready").await;
+        ready.push(item);
+    }
+    let c = mint();
+    assert_eq!(
+        verdict(&claim(&svc, &parts, &ready[0], &c).await, &c),
+        Verdict::Held
+    );
+
+    let open = query(&svc, &parts, unclaimed(ctx))
+        .await
+        .expect("the negation runs");
+    assert_eq!(
+        row_ids(&open),
+        ready[1..],
+        "unclaimed, oldest first: {open}"
+    );
+    assert_eq!(open["returned"]["work"]["total"], json!(2), "{open}");
+
+    let freed = reclaim(&svc, &parts, &ready[0], &c).await;
+    assert!(
+        matches!(&freed, Ok(r) if r.is_error != Some(true)),
+        "{freed:?}"
+    );
+    let again = query(&svc, &parts, unclaimed(ctx))
+        .await
+        .expect("the negation runs again");
+    assert_eq!(
+        row_ids(&again),
+        ready,
+        "the reclaimed item is claimable again: {again}"
+    );
+    assert_eq!(again["returned"]["work"]["total"], json!(3), "{again}");
+}
+
+/// **The refusals the skill names.** A list stage named as another stage's input is refused
+/// `stage_not_pipeable`, a combinator named in `returns` is refused `stage_not_returnable`, and an
+/// `order` on any other act is refused `order_not_applicable`. Each reaches an MCP caller as an
+/// `invalid_params` error carrying structured refusals in its `data`.
+///
+/// FAILS IF either refusal is renamed, dropped, or stops reaching the MCP door as data.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_list_stage_feeds_nothing_and_only_it_takes_an_order(pool: PgPool) {
+    let (app, svc, parts) = harness(pool).await;
+    let ctx = default_context_id(&app.pool).await;
+
+    let piped = json!({"stages": [
+        {"name": "page", "act": "list-resources-with", "inputs": anchored(ctx),
+         "resource_filter": state_is("ready")},
+        {"name": "work", "act": "list-resources-with",
+         "inputs": [{"from": "upstream", "as": "bound", "stage": "page"}]}],
+     "outcome": {"returns": [{"stage": "work", "with": []}]}});
+    let refused = query(&svc, &parts, piped)
+        .await
+        .expect_err("a page cannot feed a stage");
+    assert!(
+        refusal_reasons(&refused).contains(&"stage_not_pipeable".to_string()),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.code,
+        rmcp::model::ErrorCode::INVALID_PARAMS,
+        "a refused plan is invalid params: {refused:?}"
+    );
+
+    let mut selection_returned = unclaimed(ctx);
+    selection_returned["outcome"]["returns"] = json!([{"stage": "open", "with": []}]);
+    let refused = query(&svc, &parts, selection_returned)
+        .await
+        .expect_err("a combinator cannot be returned");
+    assert!(
+        refusal_reasons(&refused).contains(&"stage_not_returnable".to_string()),
+        "{refused:?}"
+    );
+
+    let ordered = json!({"stages": [
+        {"name": "ready", "act": "find-resources-with", "inputs": anchored(ctx),
+         "resource_filter": state_is("ready"), "order": "asc"},
+        {"name": "work", "act": "list-resources-with",
+         "inputs": [{"from": "upstream", "as": "bound", "stage": "ready"}]}],
+     "outcome": {"returns": [{"stage": "work", "with": []}]}});
+    let refused = query(&svc, &parts, ordered)
+        .await
+        .expect_err("only a list stage takes an order");
+    assert_eq!(
+        refusal_reasons(&refused),
+        ["order_not_applicable"],
+        "{refused:?}"
     );
 }
