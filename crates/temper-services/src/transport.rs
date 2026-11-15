@@ -272,8 +272,8 @@ pub const ARTIFACT_READ_CANDIDATE_BYTES: usize = 4_096;
 /// | GitHub webhook intake | 25 MiB | `GITHUB_MAX_WEBHOOK_BYTES`, `temper-api/src/routes/webhook_intake.rs` |
 /// | `/mcp` | 25 MB | `MCP_MAX_BODY_BYTES`, `temper-mcp-server/src/router.rs` |
 ///
-/// So this constant governs temper-api's public, auth-only and self-gated routes that declare no
-/// limit, and temper-mcp's *axum* routes (discovery, registration, health).
+/// So this constant governs temper-api's public, auth-only, cron and self-gated routes that
+/// declare no limit, and temper-mcp's *axum* routes (discovery, registration, health).
 ///
 /// **`/mcp` is not merely an exception — this constant cannot reach it.** That door is mounted with
 /// `nest_service` over a raw tower service, so no axum extractor runs and `DefaultBodyLimit` is

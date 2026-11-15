@@ -122,12 +122,24 @@ async fn the_pinned_host_with_the_secret_is_admitted(pool: PgPool) {
     })
     .await;
     for door in cron_doors().into_iter().filter(|d| *d != "/api/embed/warm") {
-        let (code, body) = answer(&app, door, PINNED, Some(SECRET)).await;
-        assert_ne!(
-            code,
-            StatusCode::UNAUTHORIZED,
-            "{door} refused its caller: {body}"
-        );
+        // Vercel Cron sends GET; every door also mounts POST for a manual run. On an empty
+        // database each pass has nothing to claim and answers its summary.
+        for method in [reqwest::Method::GET, reqwest::Method::POST] {
+            let response = app
+                .client
+                .request(method.clone(), app.url(door))
+                .header(reqwest::header::HOST, PINNED)
+                .bearer_auth(SECRET)
+                .send()
+                .await
+                .expect("request");
+            let code = response.status();
+            let body = response.text().await.expect("body");
+            assert!(
+                code.is_success(),
+                "{method} {door} refused its caller: {code} {body}"
+            );
+        }
     }
 }
 

@@ -219,6 +219,20 @@ PYEOF2
 run_test "a cron handler named in another routes file: fails" "$FIX" 1 \
     "handlers::region::dispatch (gated by embed_internal.rs's tier) is also named in"
 
+# The same handler mounted through an aliased import names no `handlers::<mod>::<fn>` path at all.
+FIX="${FIXTURE_DIR}/cron_handler_aliased"
+copy_module "$FIX"
+python3 - "$FIX/slack_link_public.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("use crate::handlers;", "use crate::handlers;\nuse crate::handlers::erasure as e;", 1)
+open(p, "w").write(s)
+PYEOF2
+run_test "a handlers module imported under an alias: fails" "$FIX" 1 \
+    "imports handlers other than plainly: use crate::handlers::erasure as e;"
+
+
 # --- (d) a builder that stops consuming the table must fail ---
 # The internal function assembling its own router is a parallel wiring path the row pins
 # cannot see; the mount-from-table assertion is what catches it.

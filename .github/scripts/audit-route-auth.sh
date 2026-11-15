@@ -65,9 +65,9 @@
 #
 # A route added to auth_only/gated is authenticated by construction — safe, no review needed. WHO it
 # admits is a separate question, pinned by (d), (e) and (f): a person, or (opted in) a machine.
-# A route added to any of the OTHER groups is unauthenticated-at-the-middleware (public, a
-# self-checked secret, or a signature the handler trusts) and MUST be reviewed: does it really
-# self-gate / carry its own compensating control? This script freezes the set of routes in those
+# A route added to any of the OTHER groups is not bearer-authenticated (public, a shared secret,
+# a signature, a broker attestation, or a handler's own check) and MUST be reviewed: does it
+# really carry its compensating control? This script freezes the set of routes in those
 # review-required groups, and asserts the table's rows and tier stacks are still present, so:
 #   - a new unauthenticated/self-gated/signature route FAILS until acknowledged,
 #   - a silently deleted auth layer FAILS immediately,
@@ -811,17 +811,52 @@ if [[ -n "$ALIASED" ]]; then
   fail=1
 fi
 
-# (g) The cron and intake handlers check nothing themselves: their gate is the tier layer of the
-# one group that mounts them. Mounted from any other routes file, a handler would be served under
-# that file's gate, or none, so each handler those two groups name is named in no other.
+# (i) The cron and intake handlers check nothing themselves: their gate is the tier layer of the
+# one group that mounts them. Mounted from anywhere else, a handler would be served under that
+# place's gate, or none. So, outside the two files that mount them (whole-line comments aside):
+#   - no file under the API source names one of their `handlers::<mod>::<fn>` paths;
+#   - every routes file imports the handlers module only as `use crate::handlers;` (an alias, a
+#     brace or glob import, or a `handlers::<mod>` import would name a handler without its path);
+#   - the handlers module re-exports none of them (`pub use <mod>::<fn>` would give one a new path).
+# Fails closed if either mounting file is missing or names no handler.
+API_SRC_DIR_I="${API_SRC_DIR:-crates/temper-api/src}"
 for gated in embed_internal.rs webhook_intake.rs; do
-  for handler in $(grep -Eo 'handlers::[a-z_]+::[a-z_]+' "$ROUTES/$gated" | sort -u); do
-    ELSEWHERE="$(grep -ln "$handler" "$ROUTES"/*.rs | grep -v "/$gated\$" || true)"
+  if [[ ! -f "$ROUTES/$gated" ]]; then
+    echo "audit-route-auth: FAIL — $ROUTES/$gated (a tier-gated group's routes) is missing" >&2
+    fail=1
+    continue
+  fi
+  HANDLERS="$(grep -Eo 'handlers::[a-z0-9_]+::[a-z0-9_]+' "$ROUTES/$gated" | sort -u)"
+  if [[ -z "$HANDLERS" ]]; then
+    echo "audit-route-auth: FAIL — $ROUTES/$gated names no handler; the placement check read nothing" >&2
+    fail=1
+    continue
+  fi
+  for handler in $HANDLERS; do
+    ELSEWHERE="$(grep -rlE --include='*.rs' "^[^/]*${handler}([^A-Za-z0-9_]|$)" "$API_SRC_DIR_I" "$ROUTES" 2>/dev/null \
+      | grep -v "/routes/$gated\$" | grep -v "^$ROUTES/$gated\$" | sort -u || true)"
     if [[ -n "$ELSEWHERE" ]]; then
       echo "audit-route-auth: FAIL — $handler (gated by $gated's tier) is also named in: $ELSEWHERE" >&2
       fail=1
     fi
+    mod="${handler#handlers::}"; fn_name="${mod#*::}"; mod="${mod%%::*}"
+    REEXPORT="$(grep -rlE --include='mod.rs' "pub[[:space:]]+use[^;]*\\b${mod}::(\\{[^}]*\\b)?${fn_name}\\b" "$API_SRC_DIR_I/handlers" 2>/dev/null || true)"
+    if [[ -n "$REEXPORT" ]]; then
+      echo "audit-route-auth: FAIL — $handler is re-exported under another path in: $REEXPORT" >&2
+      fail=1
+    fi
   done
+done
+for f in "$ROUTES"/*.rs; do
+  # Each `use` statement, flattened, that mentions the handlers module.
+  IMPORTS="$(grep -v '^[[:space:]]*//' "$f" | tr '\n' ' ' | grep -Eo 'use[[:space:]][^;]*handlers[^;]*;' || true)"
+  while IFS= read -r imp; do
+    [[ -z "$imp" ]] && continue
+    if [[ "$(printf '%s' "$imp" | tr -s '[:space:]' ' ')" != "use crate::handlers;" ]]; then
+      echo "audit-route-auth: FAIL — $f imports handlers other than plainly: $imp" >&2
+      fail=1
+    fi
+  done <<< "$IMPORTS"
 done
 
 if [[ "$fail" == "0" ]]; then

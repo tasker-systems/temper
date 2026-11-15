@@ -94,7 +94,7 @@ pub async fn receive(
     // A precondition header is refused by the group's precondition layer, inside the tier gate:
     // a caller the gate refuses gets its 401 exactly as without the header, and an admitted one is
     // refused 400 before anything below runs. One refusal comes later and so is answered 400 when
-    // a header is sent: a replayed attestation (step 4), which can only be presented by a caller
+    // a header is sent: a replayed attestation (at the hand-over below), which can only be presented by a caller
     // that already held a valid one for a provisioned connection.
 
     // Observe GitHub's own signature on a receipt for a provisioned GitHub connection, before any
@@ -115,23 +115,23 @@ pub async fn receive(
     }
 
     // Read the provider's own event name. `provider` comes from the signed `trigger` claim, so
-    //    the dispatch is attested.
+    // the dispatch is attested.
     //
-    //    A provider with a rule whose header is absent is a FAILURE, not a refusal: the event name
-    //    steers the coarse radius, and landing the event without it would compute a radius from
-    //    an input temper knows it did not have — reading downstream exactly like a correct empty
-    //    radius. Whether Connect forwards a provider's own headers is explicitly unwitnessed
-    //    (research `019f62e6`: "whether Connect adds any provider-specific header for GitHub …
-    //    assume the same, verify when B5's read-only App exists"), so this is the branch that
-    //    makes that assumption fail loudly on the first real forward rather than quietly.
+    // A provider with a rule whose header is absent is a FAILURE, not a refusal: the event name
+    // steers the coarse radius, and landing the event without it would compute a radius from
+    // an input temper knows it did not have — reading downstream exactly like a correct empty
+    // radius. Whether Connect forwards a provider's own headers is explicitly unwitnessed
+    // (research `019f62e6`: "whether Connect adds any provider-specific header for GitHub …
+    // assume the same, verify when B5's read-only App exists"), so this is the branch that
+    // makes that assumption fail loudly on the first real forward rather than quietly.
     let event_type = provider_event_type(&verified.provider, &headers)?;
 
     // Hand over, recording the attestation in the same transaction as the event: it is
-    //    recorded exactly when a receipt lands, and a receipt that fails or is cut off never
-    //    records it. Connect sends one attestation for every delivery in a burst, so a repeat
-    //    within `ATTESTATION_REPEAT_WINDOW_SECS` of the first lands; a later one is a replay.
-    //    Whether a replay is refused or only reported is the broker's binding flag; refused, it
-    //    is the same 401 as every other refusal here.
+    // recorded exactly when a receipt lands, and a receipt that fails or is cut off never
+    // records it. Connect sends one attestation for every delivery in a burst, so a repeat
+    // within `ATTESTATION_REPEAT_WINDOW_SECS` of the first lands; a later one is a replay.
+    // Whether a replay is refused or only reported is the broker's binding flag; refused, it
+    // is the same 401 as every other refusal here.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

@@ -43,7 +43,9 @@ Review-owned.
 Witnesses: crates/temper-api/tests/anonymous_surface_test.rs (pre_identity_refusals_are_u401 now
 includes the unmounted methods, malformed queries and the corrupt intake body;
 the_cron_host_pin_is_the_uniform_refusal; intake_refuses_before_the_body on a raw socket),
-every_cron_door_is_the_uniform_401_off_the_pinned_host in cron_host_pin_test.rs, the route-table
+every_cron_door_is_the_uniform_401_off_the_pinned_host,
+the_pinned_host_with_the_secret_is_admitted and head_and_options_off_the_pinned_host_are_refused
+in cron_host_pin_test.rs, the_intake_is_one_post_route, the route-table
 tests self_gated_is_only_the_slack_callback and preconditions_refused_exactly_on_the_layer_gated_tiers,
 and .github/scripts/audit-route-auth.sh with its bite tests. Release relevance: signal-only.
 '''
