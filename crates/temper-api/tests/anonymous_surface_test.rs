@@ -581,6 +581,18 @@ fn refused_requests() -> Vec<(Method, String, Headers)> {
             out.push((Method::POST, path.to_string(), headers.clone()));
         }
     }
+    // The tier layers answer before routing detail: an unmounted method on a cron door or the
+    // intake, and a query the cron door's extractor would reject.
+    for (method, path) in [
+        (Method::PUT, "/api/embed/dispatch"),
+        (Method::DELETE, "/api/embed/warm"),
+        (Method::GET, "/api/embed/dispatch?shard=abc"),
+        (Method::GET, "/api/region/dispatch?cap=x"),
+        (Method::PUT, "/api/intake/webhook"),
+        (Method::GET, "/api/intake/webhook"),
+    ] {
+        out.push((method, path.to_string(), vec![]));
+    }
     // A stale signature, and a malformed nonce, are the same refusal as a bad one.
     let mut stale = bad_signature();
     stale[0].1 = "1".to_string();
@@ -618,6 +630,19 @@ async fn raw_refusals(app: &common::TestApp) -> Vec<(String, Answer)> {
             answer_of(response).await,
         ));
     }
+    // A body the intake's extractor could not decompress: the gate answers before the body is read.
+    let response = app
+        .client
+        .post(app.url("/api/intake/webhook"))
+        .header("content-encoding", "gzip")
+        .body("notgzip")
+        .send()
+        .await
+        .expect("sent");
+    out.push((
+        "corrupt gzip to the intake".to_string(),
+        answer_of(response).await,
+    ));
     out
 }
 
@@ -750,6 +775,86 @@ async fn primed_again(app: &common::TestApp) -> Answer {
         &[("authorization", "Bearer garbage")],
     )
     .await
+}
+
+// FAILS IF: on a host other than the pinned cron host, a cron door answers anything but `U401`: the
+// pin's old `404 "not found"`, a `405` with `Allow` for an unmounted method, or an extractor's
+// `400`, holding the secret or not.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_cron_host_pin_is_the_uniform_refusal(pool: PgPool) {
+    let app = common::setup_test_app_with_config(pool.clone(), |config| {
+        config.cron_host = Some("cron.internal.test".to_string());
+        config.embed_dispatch_secret = Some("dispatch-secret".to_string());
+    })
+    .await;
+    let mut answers = Vec::new();
+    for (method, path) in [
+        (Method::GET, "/api/embed/dispatch"),
+        (Method::POST, "/api/embed/dispatch"),
+        (Method::PUT, "/api/embed/dispatch"),
+        (Method::GET, "/api/embed/dispatch?shard=abc"),
+        (Method::GET, "/api/embed/warm"),
+        (Method::POST, "/api/as/reap"),
+    ] {
+        for bearer in [None, Some("Bearer dispatch-secret")] {
+            let mut headers = vec![("host", "public.example".to_string())];
+            if let Some(b) = bearer {
+                headers.push(("authorization", b.to_string()));
+            }
+            let answer = send_owned(&app, method.clone(), path, &headers).await;
+            answers.push((format!("{method} {path} {bearer:?}"), answer));
+        }
+    }
+    assert_refusals(&answers, &u401());
+}
+
+/// Send `head` (a request without its body) on a raw socket and return the first status line the
+/// server answers within `wait`, or `None` if it answers nothing in time.
+async fn first_status_line(
+    app: &common::TestApp,
+    head: &str,
+    wait: std::time::Duration,
+) -> Option<String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(app.addr)
+        .await
+        .expect("connect");
+    stream.write_all(head.as_bytes()).await.expect("write");
+    let mut buf = vec![0u8; 256];
+    match tokio::time::timeout(wait, stream.read(&mut buf)).await {
+        Ok(Ok(n)) if n > 0 => {
+            let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+            text.lines().next().map(str::to_string)
+        }
+        _ => None,
+    }
+}
+
+// FAILS IF: the intake reads (or asks for) the body before its gate refuses an unattested caller:
+// `Expect: 100-continue` would draw `100 Continue`, and a declared body that never arrives would
+// stall, where every other refused path answers the 401 at once.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn intake_refuses_before_the_body(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    let wait = std::time::Duration::from_millis(1500);
+    for path in ["/api/intake/webhook", "/api/profile"] {
+        let expect = format!(
+            "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 10\r\nexpect: 100-continue\r\n\r\n"
+        );
+        let line = first_status_line(&app, &expect, wait).await;
+        assert_eq!(
+            line.as_deref(),
+            Some("HTTP/1.1 401 Unauthorized"),
+            "{path} with Expect: 100-continue"
+        );
+        let stalled = format!("POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n\r\n");
+        let line = first_status_line(&app, &stalled, wait).await;
+        assert_eq!(
+            line.as_deref(),
+            Some("HTTP/1.1 401 Unauthorized"),
+            "{path} with a declared body that never arrives"
+        );
+    }
 }
 
 // ---- The key store's outage state is server-wide, bounded and self-healing ----------------------

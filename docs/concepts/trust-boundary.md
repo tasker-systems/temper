@@ -167,8 +167,9 @@ The residues, stated so nobody has to rediscover them:
 - **The cost of a hanging endpoint.** While the identity provider's key endpoint accepts
   connections and never answers, every refusal holds its connection, and on a serverless platform
   its billed function time, for about five seconds, then answers at once through the five-second
-  backoff that follows, and so on. That multiplies what each unauthenticated request costs the
-  instance for the length of the outage, which a caller cannot cause.
+  backoff that follows, and so on. At most 32 requests per instance wait at once; the rest answer
+  at once with what the store knows, so a flood during an outage costs at most that many held
+  connections for the wait. An unauthenticated caller cannot cause the outage.
 - **Each instance on its own.** Instances, including the separate functions of a split deployment,
   do not share the store. During an outage one may report it while another has not yet tried.
 - **The webhook intake's own key store.** The intake verifies a Vercel Connect attestation against

@@ -18,23 +18,22 @@
 #   blob_commit_routes           Gated (+ inner body limit)    Refused        same stack as gated_routes
 #   blob_segment_routes          Gated (+ inner body limit)    Refused        same stack as gated_routes
 #   shape_declare_routes         Gated (+ inner body limit)    Refused        same stack as gated_routes
-#   embed_internal_routes        SelfGated                     Exempt         (none)                                self-gated: EMBED_DISPATCH_SECRET
+#   embed_internal_routes        CronSecret                    Exempt         require_cron_secret                   host pin + EMBED_DISPATCH_SECRET
 #   internal_routes              InternalHmac(Reconcile)       Refused        require_internal_signature            HMAC (INTERNAL_RECONCILE_SECRET)
 #   slack_link_internal_routes   InternalHmac(SlackLink)       Refused        require_slack_link_signature          HMAC (SLACK_LINK_SECRET)
 #   slack_mint_internal_routes   InternalHmac(SlackMint)       Refused        require_slack_mint_signature          HMAC (SLACK_MINT_SECRET)
 #   slack_link_public_routes     SelfGated                     Exempt         (none)                                by-design public: PKCE+state callback
-#   webhook_intake_routes        SelfGated                     InHandler      (none)                                self-gated: broker RS256 attestation
+#   webhook_intake_routes        BrokerAttested                Refused        require_broker_attestation            broker RS256 attestation (headers only)
 #
 # PRECONDITIONS is the row's `preconditions:` designation (routes::Preconditions): Refused applies
 # the If-Match / If-None-Match / If-Unmodified-Since refusal INNERMOST in the tier stack, after
-# every gate; InHandler is the intake handler's own call right after its attestation verifies;
-# Exempt carries its reviewed reason on the row. The designation is part of each pinned row below,
+# every gate; Exempt carries its reviewed reason on the row. The designation is part of each pinned row below,
 # and the placement (inside mount_group, never in apply_transport_layers) is asserted after them.
 #
 # On webhook_intake_routes: the caller is Vercel Connect forwarding a third-party system's event.
 # It is not a temper principal, holds no temper token, and never will -- require_auth is not a
-# tightening available here, it is a category error. Its compensating control is inside the
-# handler: CredentialBroker::verify_inbound performs RS256-over-JWKS with set_required_spec_claims,
+# tightening available here, it is a category error. Its compensating control is the BrokerAttested
+# tier layer (require_broker_attestation): CredentialBroker::verify_inbound performs RS256-over-JWKS with set_required_spec_claims,
 # asserts issuer/audience, asserts the anti-decoy client_id ("api-connex"), and reads the connector
 # from the SIGNED trigger claim rather than the unsigned x-trigger-* mirror headers. The anti-decoy
 # assertion is load-bearing and non-obvious: the attestation is claim-for-claim identical to the
@@ -47,9 +46,13 @@
 # verifies a third party's signature against a remote JWKS. The baseline's job is that each entry
 # names the control it actually carries, and one shared group would blur exactly that.
 #
-# NOTE it gets no tier-stack assertion below, and that is not an omission -- SelfGated applies no
-# middleware. Like embed_internal_routes, its gate is inside the handler, so the baseline diff (c)
-# is the whole of its protection here: a second route added to this group fails until reviewed.
+# Its gate, like the cron doors' (CronSecret), is a tier LAYER, not a call in the handler: a layer
+# wraps the method router's fallback and every extractor, so no 405-with-Allow, no extractor 400 and
+# no body read answers an unattested caller before the gate does. Both get tier-stack assertions
+# below. The baseline diff (c) fails a second handler added to either group until reviewed; it is
+# keyed on group and handler, so a second path to the same handler is caught instead by the route
+# pins in temper-api (the cron group's nine paths in embed_internal's tests, the intake's one POST
+# in routes::tests::the_intake_is_one_post_route).
 #
 # On slack_mint_internal_routes specifically: it is a THIRD signature group rather than a route on
 # slack_link_internal_routes because the keys must differ. Link-state answers "is this principal
@@ -62,9 +65,9 @@
 #
 # A route added to auth_only/gated is authenticated by construction — safe, no review needed. WHO it
 # admits is a separate question, pinned by (d), (e) and (f): a person, or (opted in) a machine.
-# A route added to any of the OTHER groups is unauthenticated-at-the-middleware (public, a
-# self-checked secret, or a signature the handler trusts) and MUST be reviewed: does it really
-# self-gate / carry its own compensating control? This script freezes the set of routes in those
+# A route added to any of the OTHER groups is not bearer-authenticated (public, a shared secret,
+# a signature, a broker attestation, or a handler's own check) and MUST be reviewed: does it
+# really carry its compensating control? This script freezes the set of routes in those
 # review-required groups, and asserts the table's rows and tier stacks are still present, so:
 #   - a new unauthenticated/self-gated/signature route FAILS until acknowledged,
 #   - a silently deleted auth layer FAILS immediately,
@@ -242,8 +245,8 @@ require_row 'internal_routes'            'Group { key: "internal_routes", tier: 
 require_row 'slack_link_internal_routes' 'Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused },'
 require_row 'slack_mint_internal_routes' 'Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused },'
 require_row 'slack_link_public_routes'   'Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("the IdP PKCE redirect target: GET only, and the IdP sends no precondition") },'
-require_row 'embed_internal_routes'      'Group { key: "embed_internal_routes", tier: Tier::SelfGated, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition") },'
-require_row 'webhook_intake_routes'      'Group { key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::InHandler },'
+require_row 'embed_internal_routes'      'Group { key: "embed_internal_routes", tier: Tier::CronSecret, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition") },'
+require_row 'webhook_intake_routes'      'Group { key: "webhook_intake_routes", tier: Tier::BrokerAttested, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },'
 
 # The precondition refusal's placement. It must be applied in mount_group, keyed on the row's
 # designation and BEFORE apply_tier (so it is innermost, after every gate the tier applies), and
@@ -295,6 +298,8 @@ assert_in_body 'require_route_rate_limit'
 assert_in_body 'require_internal_signature'
 assert_in_body 'require_slack_link_signature'
 assert_in_body 'require_slack_mint_signature'
+assert_in_body 'cron_secret::require_cron_secret'
+assert_in_body 'broker_attested::require_broker_attestation'
 # The body ceilings are security controls too: the gated router's 25 MB inheritance and the
 # doors' inner limits. A name dropped here re-widens a streamed-body window silently.
 assert_in_body 'DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)'
@@ -350,7 +355,9 @@ require_order apply_tier 'Tier::AuthOnly =>' 'Tier::HumanAuthOnly =>' 'auth::req
 require_order apply_tier 'Tier::HumanAuthOnly =>' 'Tier::Gated =>' 'auth::refuse_machine' 'auth::require_auth'
 require_order apply_tier 'Tier::Gated =>' 'Tier::HumanGated =>' 'system_access::require_system_access' 'auth::require_auth' 'require_relay_trust' 'DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)'
 require_order apply_tier 'Tier::HumanGated =>' 'Tier::InternalHmac' 'system_access::require_system_access' 'auth::refuse_machine' 'auth::require_auth' 'require_relay_trust' 'DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)'
-require_order apply_tier 'Tier::InternalHmac' 'END' 'rate_limit::require_route_rate_limit' 'internal_auth::require_internal_signature'
+require_order apply_tier 'Tier::InternalHmac' 'Tier::CronSecret =>' 'rate_limit::require_route_rate_limit' 'internal_auth::require_internal_signature'
+require_order apply_tier 'Tier::CronSecret =>' 'Tier::BrokerAttested =>' 'cron_secret::require_cron_secret'
+require_order apply_tier 'Tier::BrokerAttested =>' 'END' 'broker_attested::require_broker_attestation'
 
 # Both builders must mount FROM the table. A builder that stops consuming it (e.g. re-derives its
 # own router) is a second, drift-prone wiring path — the exact thing the table exists to prevent.
@@ -803,6 +810,54 @@ if [[ -n "$ALIASED" ]]; then
   printf '%s\n' "$ALIASED" | sed 's/^/  /' >&2
   fail=1
 fi
+
+# (i) The cron and intake handlers check nothing themselves: their gate is the tier layer of the
+# one group that mounts them. Mounted from anywhere else, a handler would be served under that
+# place's gate, or none. So, outside the two files that mount them (whole-line comments aside):
+#   - no file under the API source names one of their `handlers::<mod>::<fn>` paths;
+#   - every routes file imports the handlers module only as `use crate::handlers;` (an alias, a
+#     brace or glob import, or a `handlers::<mod>` import would name a handler without its path);
+#   - the handlers module re-exports none of them (`pub use <mod>::<fn>` would give one a new path).
+# Fails closed if either mounting file is missing or names no handler.
+API_SRC_DIR_I="${API_SRC_DIR:-crates/temper-api/src}"
+for gated in embed_internal.rs webhook_intake.rs; do
+  if [[ ! -f "$ROUTES/$gated" ]]; then
+    echo "audit-route-auth: FAIL — $ROUTES/$gated (a tier-gated group's routes) is missing" >&2
+    fail=1
+    continue
+  fi
+  HANDLERS="$(grep -Eo 'handlers::[a-z0-9_]+::[a-z0-9_]+' "$ROUTES/$gated" | sort -u)"
+  if [[ -z "$HANDLERS" ]]; then
+    echo "audit-route-auth: FAIL — $ROUTES/$gated names no handler; the placement check read nothing" >&2
+    fail=1
+    continue
+  fi
+  for handler in $HANDLERS; do
+    ELSEWHERE="$(grep -rlE --include='*.rs' "^[^/]*${handler}([^A-Za-z0-9_]|$)" "$API_SRC_DIR_I" "$ROUTES" 2>/dev/null \
+      | grep -v "/routes/$gated\$" | grep -v "^$ROUTES/$gated\$" | sort -u || true)"
+    if [[ -n "$ELSEWHERE" ]]; then
+      echo "audit-route-auth: FAIL — $handler (gated by $gated's tier) is also named in: $ELSEWHERE" >&2
+      fail=1
+    fi
+    mod="${handler#handlers::}"; fn_name="${mod#*::}"; mod="${mod%%::*}"
+    REEXPORT="$(grep -rlE --include='mod.rs' "pub[[:space:]]+use[^;]*\\b${mod}::(\\{[^}]*\\b)?${fn_name}\\b" "$API_SRC_DIR_I/handlers" 2>/dev/null || true)"
+    if [[ -n "$REEXPORT" ]]; then
+      echo "audit-route-auth: FAIL — $handler is re-exported under another path in: $REEXPORT" >&2
+      fail=1
+    fi
+  done
+done
+for f in "$ROUTES"/*.rs; do
+  # Each `use` statement, flattened, that mentions the handlers module.
+  IMPORTS="$(grep -v '^[[:space:]]*//' "$f" | tr '\n' ' ' | grep -Eo 'use[[:space:]][^;]*handlers[^;]*;' || true)"
+  while IFS= read -r imp; do
+    [[ -z "$imp" ]] && continue
+    if [[ "$(printf '%s' "$imp" | tr -s '[:space:]' ' ')" != "use crate::handlers;" ]]; then
+      echo "audit-route-auth: FAIL — $f imports handlers other than plainly: $imp" >&2
+      fail=1
+    fi
+  done <<< "$IMPORTS"
+done
 
 if [[ "$fail" == "0" ]]; then
   echo "audit-route-auth: OK — $(printf '%s\n' "$REVIEW_CURRENT" | grep -c .) reviewed unauth routes; $(printf '%s\n' "$ALL" | grep -Ec "^($AUTH_COVERED)"$'\t') auth-covered; table rows and wiring present."

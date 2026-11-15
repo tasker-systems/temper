@@ -1,4 +1,6 @@
 pub mod auth;
+pub mod broker_attested;
+pub mod cron_secret;
 pub mod internal_auth;
 pub mod preconditions;
 pub mod relay_trust;

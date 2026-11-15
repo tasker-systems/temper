@@ -1,11 +1,12 @@
-//! The webhook intake transport — unauthenticated at the middleware and **self-gated on the
-//! broker attestation**, the same posture as `embed_internal_routes` and for the same reason:
-//! the caller is not a temper principal and holds no temper token. Vercel Connect forwards a
-//! remote system's event carrying an RS256 attestation, and the handler verifies it itself (signature, issuer, audience, the anti-decoy `client_id`, and the signed
-//! `trigger` claim) before anything reaches the database.
+//! The webhook intake transport — no temper token, gated by the **`BrokerAttested` tier** on the
+//! broker attestation, for the same reason `embed_internal_routes` has its own gate: the caller is
+//! not a temper principal and holds no temper token. Vercel Connect forwards a remote system's
+//! event carrying an RS256 attestation, and the tier's layer verifies it (signature, issuer,
+//! audience, the anti-decoy `client_id`, and the signed `trigger` claim) and resolves the
+//! connection it names before the handler, or anything that reads the body, runs.
 //!
 //! A router of its own rather than a route on `embed_internal_routes` because the controls are
-//! not the same control. That group self-checks a shared secret temper issues; this one verifies
+//! not the same control. That group's tier checks a shared secret temper issues; this one verifies
 //! a third party's signature against a remote JWKS. Folding them together would put a route whose
 //! gate is a bearer comparison in the same reviewed set as one whose gate is a JWKS verification,
 //! and the tripwire's whole job is that each entry names the control it actually carries.

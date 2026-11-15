@@ -205,6 +205,17 @@ struct Shared {
     /// joining a refresh waits on, for that refresh's own id. Ids rather than a bare "something
     /// finished", so the end of an earlier refresh never wakes a request waiting on a later one.
     poke_done: tokio::sync::watch::Sender<u64>,
+    /// How many requests are waiting on a refresh right now ([`JwksKeyStore::refresh_within`]).
+    refresh_waiters: std::sync::atomic::AtomicUsize,
+}
+
+/// Releases a request's place among the refresh waiters, however its wait ends.
+struct RefreshWaiter<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl Drop for RefreshWaiter<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// Marks a poke's refresh finished and announces its end when the task ends, by
@@ -359,6 +370,9 @@ impl JwksKeyStore {
     pub const REFRESH_WAIT: Duration =
         Duration::from_millis(JWKS_FETCH_TIMEOUT.as_millis() as u64 + 500);
 
+    /// The most requests that wait on a refresh at once; see [`Self::refresh_within`].
+    pub const MAX_REFRESH_WAITERS: usize = 32;
+
     /// If the cache is absent or past its TTL, start a refresh ([`Self::poke`]) or join the one in
     /// flight, and wait for it until `deadline` at most. Returns at once on a fresh cache. True if
     /// the cache is usable afterwards.
@@ -371,6 +385,15 @@ impl JwksKeyStore {
             return true;
         }
         self.poke();
+        // A bounded number of requests wait; the rest answer at once with what the store knows.
+        // Every refusal waits while a key endpoint hangs, so without a cap an unauthenticated
+        // flood during an outage would hold one connection per request for the whole wait. The
+        // cap is on the store, not the door, so whether a request waited says nothing about
+        // its path.
+        let _waiter = RefreshWaiter(&self.shared.refresh_waiters);
+        if self.shared.refresh_waiters.fetch_add(1, Ordering::SeqCst) >= Self::MAX_REFRESH_WAITERS {
+            return !self.shared.cache_is_stale();
+        }
         let state = self.shared.poke_flight.load(Ordering::SeqCst);
         if state & 1 == 1 {
             let flight = state >> 1;
@@ -473,6 +496,7 @@ impl Shared {
             refresh_generation: std::sync::atomic::AtomicU64::new(0),
             poke_flight: std::sync::atomic::AtomicU64::new(0),
             poke_done: tokio::sync::watch::Sender::new(0),
+            refresh_waiters: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -512,6 +536,7 @@ impl Shared {
             refresh_generation: std::sync::atomic::AtomicU64::new(0),
             poke_flight: std::sync::atomic::AtomicU64::new(0),
             poke_done: tokio::sync::watch::Sender::new(0),
+            refresh_waiters: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -1531,6 +1556,36 @@ mod tests {
         assert_eq!(
             server.received_requests().await.unwrap_or_default().len(),
             1
+        );
+    }
+
+    // FAILS IF: requests past the waiter cap still wait on a hanging refresh: an unauthenticated
+    // flood during an outage would hold a connection per request for the whole wait.
+    #[tokio::test]
+    async fn requests_past_the_waiter_cap_answer_at_once() {
+        let hanging = slow_jwks_server(vec![], Duration::from_secs(30)).await;
+        let store = JwksKeyStore::new(format!("{}/.well-known/jwks.json", hanging.uri()));
+        store.shared.refresh_waiters.store(
+            JwksKeyStore::MAX_REFRESH_WAITERS,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        let started = Instant::now();
+        let usable = store
+            .refresh_within(tokio::time::Instant::now() + JwksKeyStore::REFRESH_WAIT)
+            .await;
+        assert!(!usable);
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "held {:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            store
+                .shared
+                .refresh_waiters
+                .load(std::sync::atomic::Ordering::SeqCst),
+            JwksKeyStore::MAX_REFRESH_WAITERS,
+            "its place is released"
         );
     }
 

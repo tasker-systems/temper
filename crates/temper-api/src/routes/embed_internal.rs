@@ -1,8 +1,9 @@
-//! Internal cron-invoked endpoints — self-gated, NOT `require_auth`. Called by Vercel crons on a
-//! schedule; each handler calls `embed::require_dispatch_secret` itself, so no auth-middleware
-//! layer is applied. That gate first pins the request to the deployment's own host on Vercel
-//! (`ApiConfig::cron_host`, a 404 on any other host), then checks the EMBED_DISPATCH_SECRET bearer
-//! (fail-closed when unset). Excluded from the OpenAPI contract entirely.
+//! Internal cron-invoked endpoints — NOT `require_auth`. Called by Vercel crons on a schedule, and
+//! gated as a group by the `CronSecret` tier (`middleware::cron_secret`), a layer that runs before
+//! routing detail (the method router, every extractor). That gate first pins the request to the
+//! deployment's own host on Vercel (`ApiConfig::cron_host`), then checks the EMBED_DISPATCH_SECRET
+//! bearer (fail-closed when unset); every refusal is the uniform pre-identity refusal. Excluded
+//! from the OpenAPI contract entirely.
 //!
 //! - `/api/embed/dispatch` — the async-embed drain (issue #299).
 //! - `/api/embed/warm` — cold-start warmup for server-side query embedding (issue #427).
@@ -32,10 +33,10 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
         )
         // Cold-start warmup (issue #427): loads/exercises the ONNX embedder so a subsequent
         // server-side query embed on this instance is a cheap cached inference rather than a cold
-        // model load that blows the query-embed budget. Same self-gated posture as `dispatch`.
+        // model load that blows the query-embed budget. Same `CronSecret` tier as `dispatch`.
         .route("/api/embed/warm", get(handlers::embed::warm))
-        // Hourly retention sweep for Slack link intents (T4/Task 8). Same self-gated posture as
-        // `dispatch`/`warm` (`require_dispatch_secret`, reusing EMBED_DISPATCH_SECRET) and the same
+        // Hourly retention sweep for Slack link intents (T4/Task 8). Same `CronSecret` tier as
+        // `dispatch`/`warm` (reusing EMBED_DISPATCH_SECRET) and the same
         // GET+POST-on-one-handler shape.
         .route(
             "/api/slack/intents/reap",
@@ -45,8 +46,8 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
         // Daily retention sweep for the AS tables (TMPR-56) — kb_saml_replay, kb_oauth_flow and
         // kb_oauth_refresh_tokens, none of which anything had ever deleted from — plus the
         // abandoned-staged-blob-upload TTL reaper (task 01a0715d), which rides this scheduler
-        // entry by ruling rather than minting a second cron. Same self-gated
-        // posture and GET+POST-on-one-handler shape as `dispatch`/`warm`. It belongs in this group
+        // entry by ruling rather than minting a second cron. Same `CronSecret` tier
+        // and GET+POST-on-one-handler shape as `dispatch`/`warm`. It belongs in this group
         // rather than on the public function for the reason the group exists: the FIRST run drains
         // a backlog accumulated since 20260701000006, and a capped pass over months of rows is not
         // work to put behind the 60s public ceiling.
@@ -58,7 +59,7 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
         // a-de-provisioning-that-did-not-happen-is-visible-to-an-operator). Reads the fact
         // temper-cloud records when a fail-open internal call does not reach us and turns it into a
         // signal. It belongs in this group for the group's posture rather than its duration — the
-        // check is one indexed read — and specifically because `require_dispatch_secret` is already
+        // check is one indexed read — and specifically because the `CronSecret` tier is already
         // set on every deployment that runs the other crons, so this one cannot go dark for want of
         // a variable nobody knew to set. Same GET+POST-on-one-handler shape as `dispatch`/`warm`.
         .route(
@@ -67,7 +68,7 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
                 .post(handlers::internal_call_health::check_internal_calls),
         )
         // Region-clock drain (goal 019fc46c): runs T6's two clocks off the request path. Same
-        // self-gated posture and GET+POST-on-one-handler shape as `dispatch`/`warm`. It belongs in
+        // `CronSecret` tier and GET+POST-on-one-handler shape as `dispatch`/`warm`. It belongs in
         // this group specifically because a settling can run 55–94s, which exceeds the public
         // function's 60s ceiling — the very reason `api/internal` exists.
         .route(
@@ -76,7 +77,7 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
         )
         // The erasure byte-delete fence's tick (task 01a0577c Beat 4): derives pending deletes
         // from the `principal_erased` payloads, reaps expired leases, and drains due deletes
-        // through one batched `BlobStore::delete`. Same self-gated posture and GET+POST shape
+        // through one batched `BlobStore::delete`. Same `CronSecret` tier and GET+POST shape
         // as `dispatch`/`warm`; it belongs in this group because the substrate contract's fence
         // ("retry plus age alerting") is only as real as the cron that drives it — vercel.json
         // runs it every minute, the same cadence the retry ladder's backoff curve assumes.
@@ -85,16 +86,16 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
             get(handlers::erasure::drain).post(handlers::erasure::drain),
         )
         // The sensitivity sweep's tick (sensitivity-sweep spec D8, build order 3a PR D): claims one
-        // surface's work order and scans it inside its time budget. Same self-gated posture and
+        // surface's work order and scans it inside its time budget. Same `CronSecret` tier and
         // GET+POST shape as `dispatch`/`warm`. It belongs in this group for the 300s ceiling, and
-        // because `require_dispatch_secret` is already set wherever the other crons run.
+        // because the `CronSecret` tier is already set wherever the other crons run.
         .route(
             "/api/sensitivity/sweep",
             get(handlers::sensitivity_sweep::sweep).post(handlers::sensitivity_sweep::sweep),
         )
         // The shape-reconcile drain (task 01a15663): verdicts the artifacts a declare or a rehome
-        // left `declared_not_yet_checked`, in bounded batches under a deadline. Same self-gated
-        // posture and GET+POST shape as `dispatch`/`warm`. It belongs in this group for the 300s
+        // left `declared_not_yet_checked`, in bounded batches under a deadline. Same `CronSecret`
+        // tier and GET+POST shape as `dispatch`/`warm`. It belongs in this group for the 300s
         // ceiling: its first passes drain the backlog that accumulated while nothing ran the job.
         .route(
             "/api/shape/reconcile",
@@ -126,7 +127,7 @@ mod tests {
 
     // FAILS IF: a cron door is mounted here with no Vercel cron calling it, or `vercel.json` gains a
     // cron whose door is not in this group. Every door here is pinned to the deployment host by
-    // `require_dispatch_secret`, and `tests/cron_host_pin_test.rs` derives its door list from this
+    // the `CronSecret` tier, and `tests/cron_host_pin_test.rs` derives its door list from this
     // same file, so this pair is what keeps "the crons" and "the pinned doors" one set.
     #[test]
     fn every_mounted_door_is_a_vercel_cron_and_every_cron_is_mounted_here() {

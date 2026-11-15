@@ -44,8 +44,8 @@ verdict`. Entry points to enumerate:
   (`require_auth` + `refuse_machine`; its `auth_only_status_routes` profile read admits a machine),
   `gated` (`require_auth` + `require_system_access`), `admin` (the gated stack + `refuse_machine`),
   `internal`/
-  `slack_link_internal` (HMAC), `slack_link_public` (PKCE+state), `embed_internal` (self-gated
-  secret). Confirm `require_auth` rides the gated tier and that it **survives
+  `slack_link_internal` (HMAC), `slack_link_public` (PKCE+state; the one self-gated group), `embed_internal`
+  (`CronSecret` tier: the cron host pin and secret), `webhook_intake` (`BrokerAttested` tier). Confirm `require_auth` rides the gated tier and that it **survives
   `split_for_parts()`** (empirically proven by e2e `no_auth_returns_401` hitting a gated route —
   keep that test).
 - **temper-mcp** — `crates/temper-mcp-server/src/router.rs` (the deployed edge: which routes carry

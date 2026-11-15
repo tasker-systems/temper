@@ -1,8 +1,9 @@
 //! Vercel serverless function entry point for temper-api's internal/system surface.
 //!
-//! Serves ONLY the non-user-auth, infrastructure-invoked routes — the embed crons
-//! (`/api/embed/dispatch`, `/api/embed/warm`, self-gated by `EMBED_DISPATCH_SECRET`)
-//! and the server-to-server internal routes (`/internal/*`, signature-gated). It is a
+//! Serves ONLY the non-user-auth, infrastructure-invoked routes — the Vercel crons
+//! (`routes::embed_internal`, the `CronSecret` tier: the cron host pin and
+//! `EMBED_DISPATCH_SECRET`) and the server-to-server internal routes (`/internal/*`,
+//! signature-gated). It is a
 //! separate Vercel Function from `api/axum.rs` for one reason: Vercel's `maxDuration`
 //! is per-function, and the embed crons run ONNX warmups + drain passes that can
 //! exceed the 60s public-API ceiling. Isolating them here lets `vercel.json` give this

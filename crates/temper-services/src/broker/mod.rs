@@ -117,13 +117,17 @@ pub struct MintRequest<'a> {
 }
 
 /// An inbound webhook the broker forwarded, awaiting verification.
+///
+/// **Headers only, never the body.** The attestation is a bearer, so it verifies from the
+/// `Authorization` header alone; the intake verifies it as a tier layer, before anything reads the
+/// body, so a caller without a valid attestation cannot learn from how long the door waits, or
+/// whether it answers `100 Continue`, that the door reads bodies. The handler reads the body only
+/// after admission.
 #[derive(Debug, Clone)]
 pub struct InboundRequest<'a> {
     /// The `Authorization` header value (the attestation bearer). **Not**
     /// `x-vercel-oidc-token` — that is the receiver's own ambient identity.
     pub authorization: Option<&'a str>,
-    /// The raw request body — the provider's event.
-    pub body: &'a [u8],
 }
 
 /// A verified inbound webhook. The broker authenticates the attestation and
@@ -137,8 +141,6 @@ pub struct VerifiedInbound {
     pub connector_uid: String,
     /// The connector id from the signed `trigger` claim (e.g. `scl_…`).
     pub connector_id: String,
-    /// The event body as forwarded under the verified attestation.
-    pub payload: Vec<u8>,
     /// What identifies this attestation for single use: the lowercase-hex SHA-256 of the bearer as
     /// presented. A replay presents the same bearer, so it carries the same key; the bearer itself
     /// is never stored.

@@ -187,7 +187,6 @@ async fn verify_inbound_impl(
         provider: trigger.provider,
         connector_uid: trigger.connector_uid,
         connector_id: trigger.connector_id,
-        payload: req.body.to_vec(),
         replay_key: super::replay_key(token),
         expires_at,
         binding_enforced: binding.enforce,
@@ -487,7 +486,6 @@ mod verify_inbound_tests {
         let authz = format!("Bearer {token}");
         let req = InboundRequest {
             authorization: Some(&authz),
-            body: b"{\"event\":\"hi\"}",
         };
         let v = verify_inbound_impl(&store(), ISS, AUD, OBSERVE, req)
             .await
@@ -495,7 +493,6 @@ mod verify_inbound_tests {
         assert_eq!(v.provider, "slack");
         assert_eq!(v.connector_uid, "slack/acme");
         assert_eq!(v.connector_id, "scl_abc");
-        assert_eq!(v.payload, b"{\"event\":\"hi\"}");
     }
 
     /// An attestation carries what single use needs: a key derived from the bearer (never the
@@ -506,7 +503,6 @@ mod verify_inbound_tests {
         let authz = format!("Bearer {token}");
         let req = InboundRequest {
             authorization: Some(&authz),
-            body: b"{}",
         };
         let v = verify_inbound_impl(&store(), ISS, AUD, ENFORCE, req)
             .await
@@ -528,7 +524,6 @@ mod verify_inbound_tests {
         let authz = format!("Bearer {}", sign(&claims));
         let req = || InboundRequest {
             authorization: Some(&authz),
-            body: b"{}",
         };
         let err = verify_inbound_impl(&store(), ISS, AUD, ENFORCE, req())
             .await
@@ -550,7 +545,6 @@ mod verify_inbound_tests {
         let authz = format!("Bearer {}", sign(&claims));
         let req = InboundRequest {
             authorization: Some(&authz),
-            body: b"{}",
         };
         let err = verify_inbound_impl(&store(), ISS, AUD, ENFORCE, req)
             .await
@@ -562,7 +556,6 @@ mod verify_inbound_tests {
     async fn rejects_a_missing_authorization_header() {
         let req = InboundRequest {
             authorization: None,
-            body: b"{}",
         };
         let err = verify_inbound_impl(&store(), ISS, AUD, OBSERVE, req)
             .await
@@ -589,7 +582,6 @@ mod verify_inbound_tests {
         let authz = format!("Bearer {token}");
         let req = InboundRequest {
             authorization: Some(&authz),
-            body: b"{}",
         };
         let err = verify_inbound_impl(&store(), ISS, AUD, OBSERVE, req)
             .await

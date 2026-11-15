@@ -27,13 +27,10 @@
 //! Which route groups are policed is declared per group in the route table
 //! (`routes::Preconditions`), never inferred from the method, and every row must declare it:
 //!
-//! - **`Refused`**: every group behind a layer gate (the bearer tiers and the three HMAC
-//!   signature tiers). [`refuse_unhonoured_preconditions`] is applied by `routes::mount_group` to
-//!   each of these groups, in both app builders.
-//! - **`InHandler`**: the webhook intake, whose gate (the broker attestation) is inside its
-//!   handler, so no layer can run after it. The handler calls [`refuse_unhonoured`] once the
-//!   attestation verifies and its connector resolves (both are one `401`, which a header must not
-//!   split), before anything is written.
+//! - **`Refused`**: every group behind a layer gate (the bearer tiers, the three HMAC signature
+//!   tiers, and the webhook intake's `BrokerAttested` tier, after its attestation verifies and its
+//!   connector resolves). [`refuse_unhonoured_preconditions`] is applied by `routes::mount_group`
+//!   to each of these groups, in both app builders.
 //! - **`Exempt`**, each with its reason at the row:
 //!   - the nine Vercel crons: none is a client write to a resource, and the scheduler sends no
 //!     precondition, so the host pin and the secret answer exactly as they did before this layer;
@@ -68,7 +65,7 @@
 //! A route that starts evaluating one of these headers is listed in `HONOURED`, and from then on
 //! that header reaches its handler on that route. Nothing is listed yet. An entry must name a
 //! documented route mounted by a `Refused` group (`routes::tests` holds this): an exempt route is
-//! not policed at all, and an `InHandler` door honours nothing. Each entry owes witnesses against
+//! not policed at all. Each entry owes witnesses against
 //! its handler: a mismatched precondition is refused with `412` and nothing applied; a value the
 //! handler cannot parse is refused with `400`, never treated as absent; a caller who cannot see
 //! the target gets the masked `404`, never `412` (the handler applies visibility before it compares,
@@ -169,9 +166,10 @@ pub async fn refuse_unhonoured_preconditions(request: Request, next: Next) -> Re
     next.run(request).await
 }
 
-/// The same refusal, for an `InHandler` door: called by the handler once its own gate has
-/// admitted the caller, before it writes anything. Such a door honours no header (`HONOURED` may
-/// only name a `Refused` route), so the route is not consulted.
+/// The same refusal, for a door whose gate is inside its handler: called by the handler once its
+/// own gate has admitted the caller, before it writes anything. Such a door honours no header
+/// (`HONOURED` may only name a `Refused` route), so the route is not consulted. No door uses it
+/// today: every gate that admits writes is a tier layer.
 pub fn refuse_unhonoured(method: &Method, headers: &HeaderMap) -> Result<(), ApiError> {
     check(method, None, headers)
 }
