@@ -400,17 +400,23 @@ pub fn create_internal_app(state: AppState) -> Router {
 }
 
 /// Apply the shared transport-layer stack (fallback, request decompression, HTTP
-/// tracing, CORS) and bind `state`. Shared by [`create_app`] and
-/// [`create_internal_app`] so both surfaces observe and trace requests identically.
+/// tracing), bind `state`, and wrap the result in the service outside routing (CORS, the
+/// request id, the `Allow` rule: `anonymous_surface`). Shared by [`create_app`] and
+/// [`create_internal_app`] so both surfaces observe, trace and answer requests identically.
 fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
-    let cors = temper_services::cors::cors_layer(&state.config.cors_origins);
+    let cors = temper_services::cors::CorsPolicy::new(&state.config.cors_origins);
 
     // No precondition layer here: it runs inside each group's tier stack (`mount_group`), after
     // authentication. Applied here, it would answer an anonymous caller before its 401.
-    temper_services::transport::apply_base_layers(app)
+    //
+    // No CORS layer here either: CORS, the request id and the `Allow` rule live in the service
+    // OUTSIDE routing (`anonymous_surface`), because a `Router::layer` runs inside axum's `Allow`
+    // stamp and a CORS layer here answers every `OPTIONS` 200 with the path's methods.
+    let jwks = state.jwks_store.clone();
+    let inner = temper_services::transport::apply_base_layers(app)
         .layer(axum::middleware::from_fn(root_span))
-        .layer(cors)
-        .with_state(state)
+        .with_state(state);
+    crate::anonymous_surface::wrap(inner, cors, jwks)
 }
 
 /// The `http_request` root span, and the end of its life.
@@ -425,7 +431,21 @@ async fn root_span(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     temper_telemetry::traced_request(request, next, |request| {
-        temper_telemetry::root_span!("http_request", request)
+        let span = temper_telemetry::root_span!("http_request", request);
+        // Planted by the outer service, which runs before routing and so before this span exists.
+        if let Some(id) = request
+            .extensions()
+            .get::<temper_services::transport::RequestId>()
+        {
+            span.record("request_id", id.as_str());
+        }
+        if let Some(inbound) = request
+            .extensions()
+            .get::<crate::anonymous_surface::InboundRequestId>()
+        {
+            span.record("inbound_request_id", inbound.0.as_str());
+        }
+        span
     })
     .await
 }

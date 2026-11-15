@@ -1,0 +1,47 @@
+title    = "OPTIONS is a preflight only from an allowlisted origin, Allow rides only a 405, and every response carries a server-minted x-request-id"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "internal"]
+status   = "signal-only"
+body = '''
+What changed: temper-api's CORS layer, which answered every OPTIONS 200 on every path (with the
+path's Allow beside it, so an anonymous caller could map every route and its methods), moved from
+the per-endpoint layers to a service outside routing (temper_api's anonymous_surface). That
+service:
+- answers a CORS preflight (OPTIONS, an Origin on CORS_ORIGINS, and Access-Control-Request-Method)
+  identically on every path, matched or not, with the five security headers and never Allow;
+- routes every other OPTIONS like any other method, so it meets the route's own gate: 401 on a
+  gated route, 404 on an unmatched path, a designated public route's own 405;
+- removes Allow from every response that is not a 405 (it was stamped on the 401 for an unmounted
+  method, and on the 415 an undecodable Content-Encoding gets before any gate);
+- sets x-request-id on every response: 128 random bits as 32 lowercase hex digits, minted per
+  request, never taken from the request, recorded on the http_request root span as request_id,
+  and listed in Access-Control-Expose-Headers for an allowlisted origin. A caller's own
+  x-request-id is kept only as the span's inbound_request_id, bounded, and never echoed.
+
+Who observes it: an unauthenticated caller stops getting 200 plus Allow to OPTIONS and stops
+getting Allow on a 401. A routed OPTIONS meets the route's own answer, so on a door whose gate is
+inside its handler (the cron doors and the webhook intake), and on the public routes, it is that
+door's 405 with Allow, the same answer the door gives any other unmounted method today. An
+authenticated OPTIONS without a preflight's headers gets the route's 405 with Allow instead of 200.
+CORS actual-response headers ride every routed answer, routed OPTIONS included. A browser on an
+allowlisted origin is unchanged: its preflights carry Origin and Access-Control-Request-Method. A
+browser on a non-allowlisted origin was already blocked (no ACAO); its preflight now gets a 401
+instead of a 200, with the same browser result. No first-party client sends OPTIONS or reads
+Allow on a non-405. temper-mcp-server is unchanged.
+
+This supersedes one sentence of precondition-refusal-after-authentication, which is in this
+window, so the release carries only this behaviour. Its "including for a method the path does not
+mount (with the method router's Allow)" now reads "including for a method the path does not mount,
+without Allow": the admitted 400 keeps its status and code and loses the header, because Allow
+rides only a 405. Everything else in that entry stands.
+
+Why behavioral: no shape moved and openapi.json is unchanged; the answers to OPTIONS and the
+headers on non-405 answers changed. Review-owned.
+
+Witnesses: crates/temper-api/tests/anonymous_surface_test.rs (preflight bytes pinned on every kind
+of path, non-preflight OPTIONS routed, Allow only on 405 including the 415, the request id's format
+and that it is never adopted, the exposed headers), and
+an_admitted_unmounted_write_keeps_the_refusal_without_allow in unhonoured_precondition_test.rs.
+Release relevance: signal-only.
+'''

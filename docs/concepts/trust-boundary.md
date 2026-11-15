@@ -113,9 +113,8 @@ is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFU
 
 | status | code | means | caller does | retry |
 |---|---|---|---|---|
-| 401 | `UNAUTHORIZED` | missing or malformed Bearer | fix the header | no |
-| 401 | `UNAUTHORIZED` | invalid or expired token — signature, issuer, audience, expiry | refresh; re-check audience against discovery | once |
-| 401 | `UNAUTHORIZED` | auth service unavailable (JWKS fetch) | back off | yes |
+| 401 | `UNAUTHORIZED` | `Unauthorized: authentication required`: the credential was missing, malformed, invalid or expired (signature, issuer, audience, expiry), on every door alike; the answer does not say which | refresh the token, re-check its audience against discovery, and fix the header if it is not a Bearer | once |
+| 401 | `UNAUTHORIZED` | `Unauthorized: Authentication service unavailable`: the instance cannot currently verify credentials (its JWKS fetch is failing); every unauthenticated refusal says this while it lasts | back off | yes |
 | 401 | `UNAUTHORIZED` | account deactivated | stop; contact operator | no |
 | 401 | `UNAUTHORIZED` | machine client not registered — message names the exact provision command | hand the `client_id` to an operator | no |
 | 403 | `SYSTEM_ACCESS_REQUIRED` | authentic, no approved standing; `details.refusal.kind` says which | **human:** `request-access`. **machine:** an admin must approve | no |
@@ -132,6 +131,61 @@ is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFU
 MCP renders these as JSON-RPC errors with prose — no status, no `code`, no `details`: a
 caller fault the agent can repair (a refused or unreadable plan, a refused search) as `-32602`,
 the terminal auth refusals as `-32600`, everything else as `-32603`. An integrator writing a service targets HTTP; MCP is an agent-runtime target.
+
+### What an unauthenticated caller can learn
+
+Nothing but what the public routes answer. A refusal before identity is established is the same
+bytes on every path, whatever the door (bearer, signature, cron secret, broker attestation) and
+whatever was wrong with the credential: the status, the body, the security headers, the CORS
+headers for the caller's `Origin`, and an `x-request-id` minted for the request. The operator's
+log line for it, `auth error`, carries that request id and the real cause, so a caller who quotes
+the id can be helped without the answer saying anything.
+
+"Unavailable" is server-wide state, not a per-path answer. Each instance keeps one bearer key
+store. When its keys are stale, every refusal it gives joins one shared refresh of that store,
+whatever its door, and waits for it from the request's arrival until a little past the fetch's
+own five-second timeout; a bearer lookup joins the same refresh, with its wait counted from the
+lookup. So an instance whose routes never verify a bearer still learns of an outage, a failing
+store recovers without bearer traffic, and a refresh normally ends inside a request that is
+waiting on it, on a platform that suspends idle instances (one started late in a slow request
+can outlive it, and the next request that needs it finishes it).
+A request that arrived while the store was failing, or whose wait ended with no usable keys, is
+answered "unavailable" whatever its door.
+
+The residues, stated so nobody has to rediscover them:
+
+- **The moment of the change.** The state moves when a refresh completes, and a refresh is started
+  by a request. After the endpoint recovers, an instance answers "unavailable" until its next
+  refusal or bearer lookup past the five-second failed-refresh backoff refetches, and that request
+  too. Public routes, and requests that succeed without a bearer lookup, do not refresh the
+  store.
+- **A slow endpoint is slow for everyone.** While a refresh is in flight, every refusal on that
+  instance waits for it, up to the fetch's timeout. That is the same on every door, but it is
+  visible: a refusal that takes seconds says a refresh is running, never which path you hit. A
+  refusal that waited may also close its connection when its request body was large and unread;
+  above the 64 KiB a signature door reads, that framing is the same on every door.
+- **The cost of a hanging endpoint.** While the identity provider's key endpoint accepts
+  connections and never answers, every refusal holds its connection, and on a serverless platform
+  its billed function time, for about five seconds, then answers at once through the five-second
+  backoff that follows, and so on. That multiplies what each unauthenticated request costs the
+  instance for the length of the outage, which a caller cannot cause.
+- **Each instance on its own.** Instances, including the separate functions of a split deployment,
+  do not share the store. During an outage one may report it while another has not yet tried.
+- **The webhook intake's own key store.** The intake verifies a Vercel Connect attestation against
+  Vercel's key endpoint, in a store of its own that the refusal path does not wait on. If that
+  endpoint hangs while the identity provider's is healthy, or on the intake's first request on a
+  cold instance, an attested-looking request to the intake waits for that fetch where other doors
+  answer at once. The intake's refusal body is the constant one either way.
+- **An unpublished `kid`.** A bearer naming a key the cache does not hold refetches the JWKS at
+  most once a minute per instance, and that request waits for the fetch. Any caller can do this
+  with a healthy identity provider, so a bearer door can answer one request a minute more slowly
+  than a door that verifies no bearer. The refetch is what lets a newly rotated signing key verify
+  without waiting out the cache.
+- **Timing between doors.** Outside the refresh, the work before a refusal differs by door (a
+  signature is checked against its body, a bearer against a key), and no attempt is made to
+  equalise that.
+- **The MCP surface** answers its own outage as `503`, not `401`; it is a different host, already
+  told apart by its discovery documents.
 
 ## The machine-principal sharp edge
 

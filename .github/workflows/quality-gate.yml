@@ -245,26 +245,47 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      # depth 2, not 0. The wire diff needs ONE base revision, not 246 commits of history — a full
-      # clone is ~445 MB and this job exists to be cheap enough that nobody is ever tempted to scope
-      # it away. Depth 2 covers a push (HEAD~1); a pull_request gets its base fetched explicitly
-      # below, one commit deep.
+      # Full history and tags, no blobs. The wire cross-check measures against the last release
+      # (conventions COMPAT-1), and a release is only provable in a history that holds it, with
+      # its tags (COMPAT-2): in a depth-2, tag-less clone no release can be proved, so the gate
+      # could only ever give the stricter base-only verdict. A full clone is ~445 MB and this job
+      # exists to be cheap enough that nobody is ever tempted to scope it away, so the clone is
+      # blobless: every commit, tree and tag, and only the blobs a step reads (the checkout, the
+      # base diff, openapi.json at the release), fetched on demand.
+      #
+      # A blobless CLONE, not a shallow clone converted afterwards: `git fetch --filter=...
+      # --unshallow` aborts in pack-objects on the runner's git (2.56.1, a BUG() while repacking
+      # local links), so the history is taken whole at checkout instead.
       - name: Checkout code
         uses: actions/checkout@v7
         with:
-          fetch-depth: 2
+          fetch-depth: 0
+          filter: blob:none
+
+      # Visible and separate, so "the release cannot be proved here" shows up as this step failing
+      # rather than as the gate quietly falling back. It asserts what the checkout promised: the
+      # history is not cut short, and the release tags are present.
+      - name: Prove the history and release tags are present (for the last release)
+        run: |
+          git fetch --tags origin
+          test "$(git rev-parse --is-shallow-repository)" = false
+          git tag --list 'v*' | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
 
       # Named, visible, and separate so that "we could not get the base" shows up as this step
       # failing rather than as a check quietly deciding nothing moved. sqlx-wire-diff.sh also
       # attempts this fetch itself; if BOTH fail it exits 2, and the cross-check turns that into a
       # failure whenever the change carries a migration. "I could not look" never renders as
-      # "nothing moved".
+      # "nothing moved". With the full history above the base is normally present already; the
+      # fetch runs only when it is not (a one-commit-deep fetch would make the clone shallow
+      # again, and the release derivation would then refuse it — stricter, never looser).
       #
       # A merge-queue run fetches the group's parent instead: the exact base of this entry, which
       # behind other queued PRs is THEIR group commit, not main — so the diff is this PR alone.
       - name: Fetch the base revision (for the wire diff)
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        run: git fetch --depth=1 origin "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null || git fetch --depth=1 origin "${BASE_SHA}"
 
       - name: Guard test — detect-ci-scope
         run: bash .github/scripts/test-detect-ci-scope.sh

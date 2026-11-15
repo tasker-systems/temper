@@ -37,8 +37,23 @@ pub enum ApiError {
     /// restated: the client parses the id back out of it, so one literal owns it.
     #[error("{}", erased_sentence(.0))]
     ResourceErased(ResourceId),
+    /// A **verified-identity** 401: the caller presented a validly signed credential, and the
+    /// refusal is about who it names (`account is deactivated`, `machine credential refused: …`,
+    /// the email-ladder failure). Anything refused *before* a credential verifies is
+    /// [`Self::Unauthenticated`] instead, never this.
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
+    /// A **pre-identity** refusal: no credential that verifies at the gate the path applies. Every
+    /// such refusal renders the same bytes ([`UNAUTHENTICATED_MESSAGE`]), whatever the gate, the
+    /// door or the configuration, so an unauthenticated caller learns nothing about the route from
+    /// it. The cause is a fieldless enum, so neither a message nor any caller bytes can reach the
+    /// body; it is logged, with the request id the response carries, and never rendered.
+    ///
+    /// The response is marked [`PreIdentityRefusal`], which is how temper-api's outer service finds
+    /// it to answer "authentication service unavailable" instead while the bearer key store is
+    /// failing: unavailability is server-wide state, not something a path decides.
+    #[error("{}", UNAUTHENTICATED_MESSAGE)]
+    Unauthenticated(UnauthCause),
     #[error("Forbidden")]
     Forbidden,
     /// A `403` that **names the capability it refused**, for gates that have established the caller
@@ -229,6 +244,88 @@ pub fn bounded(s: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(format!("{}…", &s[..cut]))
 }
 
+/// The body message of every pre-identity refusal ([`ApiError::Unauthenticated`]). The
+/// `Unauthorized: ` prefix is kept because the MCP relay strips it to read the cause.
+pub const UNAUTHENTICATED_MESSAGE: &str = "Unauthorized: authentication required";
+
+/// The body message of a pre-identity refusal while the bearer key store is failing. The one
+/// retryable 401: the contract says back off and retry.
+pub const UNAVAILABLE_MESSAGE: &str = "Unauthorized: Authentication service unavailable";
+
+/// Why a pre-identity refusal was made. Logged as `cause` on the `auth error` line, never
+/// rendered. Fieldless by design: a cause that could carry a string could carry the caller's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnauthCause {
+    /// No `Authorization` header, or no auth layer planted a caller.
+    MissingBearer,
+    /// An `Authorization` header that is not valid UTF-8 or not the `Bearer` scheme.
+    BadScheme,
+    /// A bearer that does not verify: bad signature, expired, wrong audience or issuer, an
+    /// unpublished `kid`.
+    InvalidToken,
+    /// The bearer key store could not be read. Rendered like every other cause; the outer
+    /// service's swap is what answers "unavailable", for every pre-identity refusal at once.
+    AuthUnavailable,
+    /// A signature door's headers missing or unparseable, or the matched route is not a door.
+    HmacMissingHeaders,
+    /// A signature that does not verify: mismatched, stale, malformed nonce, replayed, or a body
+    /// that could not be read to check it.
+    HmacBadSignature,
+    /// A signature door's secret is unset (the door is disabled).
+    HmacDisabled,
+    /// The cron secret is unset (every cron door is disabled).
+    CronDisabled,
+    /// A missing or wrong cron secret.
+    CronBadSecret,
+    /// The webhook intake's broker attestation did not verify, named no live connection, or was
+    /// replayed.
+    IntakeUnattested,
+}
+
+impl UnauthCause {
+    /// Every cause, for the test that their responses are byte-identical.
+    pub const ALL: [UnauthCause; 10] = [
+        UnauthCause::MissingBearer,
+        UnauthCause::BadScheme,
+        UnauthCause::InvalidToken,
+        UnauthCause::AuthUnavailable,
+        UnauthCause::HmacMissingHeaders,
+        UnauthCause::HmacBadSignature,
+        UnauthCause::HmacDisabled,
+        UnauthCause::CronDisabled,
+        UnauthCause::CronBadSecret,
+        UnauthCause::IntakeUnattested,
+    ];
+
+    /// The fixed string logged as `cause`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnauthCause::MissingBearer => "missing_bearer",
+            UnauthCause::BadScheme => "bad_scheme",
+            UnauthCause::InvalidToken => "invalid_token",
+            UnauthCause::AuthUnavailable => "auth_unavailable",
+            UnauthCause::HmacMissingHeaders => "hmac_missing_headers",
+            UnauthCause::HmacBadSignature => "hmac_bad_signature",
+            UnauthCause::HmacDisabled => "hmac_disabled",
+            UnauthCause::CronDisabled => "cron_disabled",
+            UnauthCause::CronBadSecret => "cron_bad_secret",
+            UnauthCause::IntakeUnattested => "intake_unattested",
+        }
+    }
+}
+
+/// The response extension that marks a pre-identity refusal, so the service outside routing can
+/// find it without reading the body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreIdentityRefusal(pub UnauthCause);
+
+/// The answer to every pre-identity refusal while the bearer key store is failing: 401
+/// `UNAUTHORIZED` with [`UNAVAILABLE_MESSAGE`], the house error envelope, and nothing else.
+pub fn unavailable_response() -> Response {
+    let body = ErrorBody::new("UNAUTHORIZED", UNAVAILABLE_MESSAGE.to_string());
+    (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response()
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code) = match &self {
@@ -237,7 +334,9 @@ impl IntoResponse for ApiError {
             ApiError::ResourceErased(_) => {
                 (StatusCode::GONE, temper_core::error::RESOURCE_ERASED_CODE)
             }
-            ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
+            ApiError::Unauthorized(_) | ApiError::Unauthenticated(_) => {
+                (StatusCode::UNAUTHORIZED, "UNAUTHORIZED")
+            }
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
             ApiError::ForbiddenDetail(_) => (
                 StatusCode::FORBIDDEN,
@@ -330,6 +429,19 @@ impl IntoResponse for ApiError {
                     status_code,
                     error_code = code,
                     "resource busy (lock wait bound)"
+                );
+            }
+            // Debug here: the `auth error` WARN for a pre-identity refusal is emitted by temper-api's
+            // outer service, which holds the request id this response carries and reads the cause
+            // from the `PreIdentityRefusal` mark. Logged here at WARN it would depend on the root
+            // span being enabled for the log layer to carry the id, and at a `warn` filter it is
+            // not.
+            ApiError::Unauthenticated(cause) => {
+                tracing::debug!(
+                    status_code,
+                    error_code = code,
+                    cause = cause.as_str(),
+                    "pre-identity refusal"
                 );
             }
             ApiError::Unauthorized(_) | ApiError::Forbidden | ApiError::ForbiddenDetail(_) => {
@@ -436,6 +548,9 @@ impl IntoResponse for ApiError {
                 response.headers_mut().insert(header::RETRY_AFTER, value);
             }
         }
+        if let ApiError::Unauthenticated(cause) = &self {
+            response.extensions_mut().insert(PreIdentityRefusal(*cause));
+        }
         if let ApiError::ResourceBusy = &self {
             response.headers_mut().insert(
                 header::RETRY_AFTER,
@@ -494,6 +609,13 @@ impl From<ApiError> for temper_core::error::TemperError {
             ApiError::Forbidden => TemperError::Forbidden,
             ApiError::ForbiddenDetail(s) => TemperError::ForbiddenDetail(s),
             ApiError::Unauthorized(s) => TemperError::Unauthorized(s),
+            // Lossy, deliberately visible: the cause and the response mark do not survive, so a
+            // refusal that went out through `TemperError` would miss the outer service's
+            // unavailable swap. No HTTP path converts a refusal this way (this serves
+            // `db_backend`); a gate must return `ApiError::Unauthenticated` itself.
+            ApiError::Unauthenticated(_) => {
+                TemperError::Unauthorized("authentication required".to_string())
+            }
             ApiError::BadRequest(s) => TemperError::BadRequest(s),
             // Degrades to the joined text, not `TemperError::PlanRefused`. This conversion is the
             // server-side DbBackend → CLI-shaped-error path, which a route refusal never travels:
@@ -641,6 +763,46 @@ pub(crate) fn sqlstate_error(code: &'static str) -> sqlx::Error {
 mod tests {
     use super::*;
     use temper_core::error::TemperError;
+
+    async fn bytes_of(response: Response) -> (StatusCode, Vec<(String, String)>, Vec<u8>) {
+        let status = response.status();
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(n, v)| (n.to_string(), v.to_str().unwrap().to_string()))
+            .collect();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+        (status, headers, body)
+    }
+
+    // FAILS IF: the pre-identity refusal's bytes depend on its cause (a cause reached the body or a
+    // header), its body moves off the pinned constant, or a response is not marked for the outer
+    // service's swap.
+    #[tokio::test]
+    async fn every_pre_identity_cause_renders_the_same_bytes() {
+        const U401: &str = r#"{"error":{"code":"UNAUTHORIZED","message":"Unauthorized: authentication required"}}"#;
+        let first = bytes_of(ApiError::Unauthenticated(UnauthCause::ALL[0]).into_response()).await;
+        assert_eq!(first.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(String::from_utf8(first.2.clone()).unwrap(), U401);
+        for cause in UnauthCause::ALL {
+            let response = ApiError::Unauthenticated(cause).into_response();
+            assert_eq!(
+                response.extensions().get::<PreIdentityRefusal>(),
+                Some(&PreIdentityRefusal(cause)),
+                "{cause:?} is not marked"
+            );
+            assert_eq!(bytes_of(response).await, first, "{cause:?}");
+        }
+        let unavailable = bytes_of(unavailable_response()).await;
+        assert_eq!(unavailable.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            String::from_utf8(unavailable.2).unwrap(),
+            r#"{"error":{"code":"UNAUTHORIZED","message":"Unauthorized: Authentication service unavailable"}}"#
+        );
+    }
 
     /// An over-size value (`54000`, e.g. an index row past btree's 2704 bytes) reaches the wire as
     /// a `400` carrying the actionable sentence, from both the raw `sqlx` bridge and a write's

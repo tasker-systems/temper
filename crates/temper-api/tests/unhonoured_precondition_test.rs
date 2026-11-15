@@ -15,8 +15,9 @@
 //!   `400` and nothing is written;
 //! - every documented write refuses each header for an approved person and writes nothing, the same
 //!   writes without the header reach their handlers, and reads ignore the headers;
-//! - an authenticated unmounted write keeps the refusal with the fallback's `Allow`, a path shared
-//!   by two groups answers the same, and the refusal carries CORS and the security headers.
+//! - an authenticated unmounted write keeps the refusal without `Allow` (which rides only a 405), a
+//!   path shared by two groups answers the same, and the refusal carries CORS and the security
+//!   headers.
 #![cfg(feature = "test-db")]
 
 mod common;
@@ -763,10 +764,11 @@ async fn the_intake_refuses_only_once_attested_and_writes_nothing(pool: PgPool) 
 }
 
 // FAILS IF: an admitted caller sending a policed header with a method the path does not mount gets
-// the method router's 405 instead of the refusal, or the refusal loses the fallback's `Allow`. And,
-// for a path two groups share, the answer depends on which group's fallback axum kept.
+// the method router's 405 instead of the refusal, or the refusal carries `Allow` (which rides only a
+// 405: the outer service strips it from every other status). And, for a path two groups share, the
+// answer depends on which group's fallback axum kept.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn an_admitted_unmounted_write_keeps_the_refusal_and_its_allow(pool: PgPool) {
+async fn an_admitted_unmounted_write_keeps_the_refusal_without_allow(pool: PgPool) {
     let app = configured_app(&pool, None).await;
     let (token, context_id) = person(&pool, true).await;
     let authorization = bearer(&token);
@@ -800,8 +802,8 @@ async fn an_admitted_unmounted_write_keeps_the_refusal_and_its_allow(pool: PgPoo
             .await;
             assert_refused(&format!("{method} {path}"), header, &guarded);
             assert_eq!(
-                guarded.allow, plain.allow,
-                "{method} {path} with {}: the refusal keeps the fallback's Allow",
+                guarded.allow, None,
+                "{method} {path} with {}: the refusal is a 400, and Allow rides only a 405",
                 header.0
             );
         }
@@ -852,7 +854,11 @@ async fn an_admitted_unmounted_write_keeps_the_refusal_and_its_allow(pool: PgPoo
         )
         .await;
         assert_refused("PUT /api/profile as a machine", header, &guarded);
-        assert_eq!(guarded.allow, plain.allow);
+        assert!(plain.allow.is_some(), "the machine's 405 names Allow");
+        assert_eq!(
+            guarded.allow, None,
+            "the machine's refusal carries no Allow"
+        );
     }
 
     // The shared paths' mounted methods: refused for the write, untouched for the read.

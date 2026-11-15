@@ -109,9 +109,45 @@ runs. They use no secret: the baseline is public, and the only network read is t
 CONS-2. *Why:* a public repository's CI must not pass or fail depending on whether the person who
 triggered it can see something private.
 
+**CONS-9 — the pin moves itself; a quiet move merges on CI, a loud one waits for a person.** Each
+consumer adopts the canonical
+[`../.github/workflows/conventions-bump.yml`](../.github/workflows/conventions-bump.yml) in `exact`
+mode at the same path. Each day it runs `conventions.py propose`, which moves the pin to `main` and
+classifies the move:
+
+| Class | When | The bump PR |
+|---|---|---|
+| `none` | the pin is already `main` | none is opened, and an open one is closed |
+| `quiet` | no rule was added, removed or changed, nothing under `rust/`, `python/`, `typescript/`, `tools/` or `skill/` and not the bump workflow changed, and no doctrine text changed beyond the register's generated cells | merges on green CI |
+| `loud` | anything else | waits for a person; check F (a moved rule) or A (a changed canonical file) is red until they act |
+
+A canonical file the consumer has not adopted still makes a move loud, because adopting it later
+would bring in an unreviewed change. So does the projected tool, which the consumer's CI and this
+workflow execute, and the skill, which its agents follow. So does any change to doctrine text: the
+skill sends agents to it, so a reworded rule is a changed instruction even when its register row
+is not. The register's generated parts are the exception: the consumers block and each table's
+consumer columns, which `register.py` rewrites whenever a consumer's status changes. The workflow
+holds the one credential in the scheme, a GitHub App token for its own repository, and runs on a
+schedule and on manual dispatch only, never on a pull request, and it acts only on a bump PR from
+its own repository's branch, never a fork's of the same name. *Why:* a move that changes no rule,
+doctrine text, config, tool or skill (the README, the register's consumer columns) needs no
+reviewer, only its CI, and asking a person to approve one is how pins drifted. A move that does
+change something is still one reviewed act in one repository (CONS-5). Doctrine text joined the
+loud set when a security review of duet's adoption (the repository was then named making-music)
+showed that a reworded rule reached agents through an auto-merged bump.
+
+The canonical workflow lives in the baseline's own `.github/workflows/`, with its job skipped in
+the baseline, because that directory is the only place Dependabot reads workflow pins: the
+baseline's Dependabot keeps them current, and each update reaches consumers as a loud bump. A
+consumer's Dependabot leaves its copy alone: its `github-actions` entry lists
+`.github/workflows/conventions-bump.yml` under `exclude-paths`. *Why:* an action the consumer pins
+only in that file would otherwise draw a Dependabot PR that check A refuses, every time the action
+releases, while the baseline's copy, out of Dependabot's sight in `ci/`, never moved at all.
+
 ## Not specified
 
-- **How often to move the pin.** CONS-7 makes lag visible but sets no maximum.
+- **How far a pin may lag.** CONS-7 makes lag visible and sets no maximum. CONS-9 keeps it short
+  in practice, not by rule.
 - **Versioning the baseline beyond commits.** Tags, if ever added, are labels. The pin is always a
   SHA.
 - **Template and example code a consumer ships for users to copy** (tasker-contrib). It is

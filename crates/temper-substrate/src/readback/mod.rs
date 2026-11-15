@@ -179,7 +179,7 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     // `resources_visible_to` and its nested `profile_reachable_teams` → `profile_effective_teams`/
-    // `team_ancestors` resolve their unqualified references against the connection search_path
+    // `team_ancestors_of` resolve their unqualified references against the connection search_path
     // (`public` — the one schema), so no per-txn `SET LOCAL`.
     //
     // `EXISTS` never yields SQL-NULL, but sqlx infers every expression column as nullable, so the
