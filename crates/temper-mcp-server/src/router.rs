@@ -132,8 +132,10 @@ pub fn build_router(
         config,
     );
 
-    // The limit is the OUTERMOST layer here, above `require_mcp_auth`, so an oversized body is
-    // refused before the JWKS lookup and signature check that authentication performs. It is still INSIDE
+    // The limit is the OUTERMOST layer here, above `require_mcp_auth`, so a body whose declared
+    // `Content-Length` is over it is refused before the JWKS lookup and signature check that
+    // authentication performs; a chunked or compressed one (decompression drops the length) is cut
+    // off only when it is read, which is after the gate. It is still INSIDE
     // `apply_base_layers`' decompression, which is applied to the merged router below — so it
     // measures decompressed bytes, the property `/api/query`'s limit has and the one that matters.
     let mcp_routes = Router::new()

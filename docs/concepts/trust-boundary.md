@@ -135,15 +135,16 @@ The public routes are:
     the API's, whoever asks. `/mcp` and everything under it but `/mcp/health` keep the gate's
     `401` with `WWW-Authenticate`, which is how an MCP client finds the authorization server.
   - **The MCP function's headers.** It has no service outside routing, so its answers carry no
-    `x-request-id` (and, for an allowlisted origin, expose only `link`, where the API also
-    exposes `x-request-id`), and its CORS layer answers every `OPTIONS` itself, `200` on every path alike
-    (with `Allow` only on its public routes), where the API routes a non-preflight `OPTIONS` to the
-    refusal; its preflight answers carry none of the security headers, which the API's do. While
-    its key store is failing, `/mcp` answers a bearer `503` and its other answers do not change,
-    where the API answers every refusal "unavailable". Like the API, it answers an
-    undecodable `Content-Encoding` the `415` before anything else, and on `/mcp` a body over the
-    door's limit is the `413` before the gate. These sort the MCP function's paths from the API's; `vercel.json` already says which
-    paths those are.
+    `x-request-id` (and, with an allowlist configured, expose only `link`, where the API also
+    exposes `x-request-id`). Its CORS layer answers every `OPTIONS` itself, `200` on every path
+    alike (with `Allow` only on its public routes) and with none of the security headers, where
+    the API routes a non-preflight `OPTIONS` to the refusal and gives its preflight the security
+    headers. While its key store is failing, `/mcp` answers a bearer `503` and its other answers
+    do not change, where the API answers every refusal "unavailable". Like the API, it answers an
+    undecodable `Content-Encoding` the `415` before routing (an `OPTIONS` excepted), and on `/mcp`
+    a body declaring a `Content-Length` over the door's limit is the `413` before the gate. These
+    sort the MCP function's paths from the API's; `vercel.json` already says which paths those
+    are.
   - **Case.** If the platform matches routes without regard to case, a case variant of a door
     reaches that door's function. Every router here matches bytes, so the variant gets what its
     byte-exact spelling would get there: a public door's own answer, the family's `404` (for

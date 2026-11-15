@@ -103,6 +103,11 @@ async fn an_unmatched_path_outside_the_families_is_the_uniform_refusal() {
         "the render this test compares against"
     );
 
+    // The values temper-api's answers carry, from the one definition both surfaces apply.
+    let mut security = axum::http::HeaderMap::new();
+    temper_services::transport::insert_security_headers(&mut security);
+    assert_eq!(security.len(), 5, "the five baseline headers");
+
     let token = valid_token();
     for uri in OUTSIDE {
         for method in ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"] {
@@ -118,16 +123,11 @@ async fn an_unmatched_path_outside_the_families_is_the_uniform_refusal() {
                 // axum stamps `Allow` only on a matched route's method fallback, so this holds by
                 // construction; it pins the property temper-api's refusal has, not this fix.
                 assert!(response.headers().get(header::ALLOW).is_none(), "{label}");
-                for name in [
-                    "x-content-type-options",
-                    "x-frame-options",
-                    "referrer-policy",
-                    "strict-transport-security",
-                    "content-security-policy",
-                ] {
-                    assert!(
-                        response.headers().get(name).is_some(),
-                        "{label}: the refusal carries the security header {name}"
+                for (name, value) in &security {
+                    assert_eq!(
+                        response.headers().get(name),
+                        Some(value),
+                        "{label}: the refusal carries the API's security header {name}"
                     );
                 }
                 assert!(
