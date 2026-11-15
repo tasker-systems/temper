@@ -106,70 +106,98 @@ So the issuer a caller's token names is always the Temper instance, never the SA
 `resource` the flow requested is carried through the authorization code and every refresh of
 the session, so a refreshed token keeps the audience its login was granted.
 
-## The error contract
+## What an unauthenticated caller can learn
 
-Every error response carries `{"error":{"code":"…","message":"…","details"?:…}}`. The `code`
-is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFUSED`.
+The rule: an unauthenticated caller learns nothing except from the designated public routes.
 
-| status | code | means | caller does | retry |
-|---|---|---|---|---|
-| 401 | `UNAUTHORIZED` | `Unauthorized: authentication required`: no verified credential. It was missing, malformed, invalid or expired (signature, issuer, audience, expiry), a signature or secret was refused, or the path matches no route; on every path alike, and the answer does not say which | refresh the token, re-check its audience against discovery, and fix the header if it is not a Bearer | once |
-| 401 | `UNAUTHORIZED` | `Unauthorized: Authentication service unavailable`: the instance cannot currently verify credentials (its JWKS fetch is failing); every unauthenticated refusal says this while it lasts | back off | yes |
-| 401 | `UNAUTHORIZED` | account deactivated; a validly signed token is required to see this | stop; contact operator | no |
-| 401 | `UNAUTHORIZED` | machine client not registered — message names the exact provision command; a validly signed token is required to see this | hand the `client_id` to an operator | no |
-| 403 | `SYSTEM_ACCESS_REQUIRED` | authentic, no approved standing; `details.refusal.kind` says which | **human:** `request-access`. **machine:** an admin must approve | no |
-| 403 | `FORBIDDEN` | refused, deliberately message-less (no capability disclosure) | obtain the grant out of band | no |
-| 403 | `FORBIDDEN_DETAIL` | refused, message names the capability | obtain it | no |
-| 404 | `NOT_FOUND` | absent or masked (a probe is not an existence oracle). An unmatched path answers it only to a caller with a validly signed token; an unauthenticated caller gets the 401 above | infer nothing either way | no |
-| 400 | `PRECONDITION_NOT_HONOURED` | a write carried `If-Match`, `If-None-Match` or `If-Unmodified-Since` on a route that does not evaluate it; nothing was applied. Answered only to a caller the route already admits: an unauthenticated or refused caller gets the answer it gets without the header | resend without the header to write unconditionally | no |
-| 400 | `PLAN_REFUSED` | composition invalid; `details.refusals[]` lists every reason | repair all in one round trip | no |
-| 400, 413, 415, 422 | `UNREADABLE_PLAN` | the body is not a readable composition (malformed JSON, wrong content type, over the door's limit, a wrong type); no `details`, and the message repeats at most 1024 bytes of what failed | fix the body; there is no plan to refuse yet | no |
-| 409 | `INGEST_ENDED` | append or finalize on an ingest that has ended (`cancelled` or `abandoned`); not resumable | start a new upload | no |
-| 422 | `CONTENT_INTEGRITY` | stored bytes fail the hash; not resumable | re-upload from scratch | no |
-| 500 | `INTERNAL_ERROR` | server fault | back off | yes |
+The public routes are:
 
-MCP renders these as JSON-RPC errors with prose — no status, no `code`, no `details`: a
-caller fault the agent can repair (a refused or unreadable plan, a refused search) as `-32602`,
-the terminal auth refusals as `-32600`, everything else as `-32603`. An integrator writing a service targets HTTP; MCP is an agent-runtime target.
+- `GET /api/health`, which publishes the deployed crate version and commit;
+- the Slack link callback, `/api/auth/slack/callback`, a browser's redirect target from the identity
+  provider. It answers a link it cannot honour (unknown, expired, replayed, a `state` that is not a nonce, or on an
+  instance with no Slack linking configured) with one page, so its page does not say how the
+  instance is configured (its timing can; see the residues);
+- the discovery and OAuth doors the Node and MCP functions serve: `/.well-known/*`, `/oauth/*`,
+  `/mcp` and `/mcp/*`. On the Vercel deployment each of those functions is also reachable at its
+  own path under `/api/` (`/api/oauth/*`, `/api/auth/cli-callback`, `/api/auth/mcp-callback`,
+  `/api/mcp`; the two API functions, `/api/axum` and `/api/internal`, too), because `vercel.json` serves the function files before its rewrites. These
+  functions answer for themselves, not with this page's refusal: the MCP function answers a path
+  it does not serve under its prefixes with its own `404`, so a caller can tell those prefixes are
+  MCP's. Their answers are outside what this page holds the API to;
+- the API reference under `/api-docs/`, only when an operator enables it, so whether it answers
+  says whether it is enabled.
 
-### What an unauthenticated caller can learn
+Every other request is answered the same way, on any path, matched or not, by any method, with any
+credential that does not verify. (A `Content-Encoding` the server cannot decode is answered the 415
+in the table below, before any authentication, and that too is the same on every path.) A refusal
+before identity is established is the same bytes whatever the door (bearer, signature, cron secret,
+broker attestation) and whatever was wrong with the credential: the status, the body, the security
+headers, the CORS headers for the caller's `Origin`, and an `x-request-id` minted for the request.
+`Allow` rides only a `405`, so it never names a path's methods on a refusal. The operator's log line
+for it, `auth error`, carries that request id and the real cause, so a caller who quotes the id can
+be helped without the answer saying anything.
 
-Nothing but what the public routes answer. A refusal before identity is established is the same
-bytes on every path, whatever the door (bearer, signature, cron secret, broker attestation) and
-whatever was wrong with the credential: the status, the body, the security headers, the CORS
-headers for the caller's `Origin`, and an `x-request-id` minted for the request. The operator's
-log line for it, `auth error`, carries that request id and the real cause, so a caller who quotes
-the id can be helped without the answer saying anything.
+A CORS preflight from an allowlisted origin is answered with the same bytes on every path, before
+routing. Any other `OPTIONS` (no `Origin`, a foreign one, or no `Access-Control-Request-Method`) is
+an ordinary request, and an unauthenticated one gets the refusal.
 
-An unmatched path is answered the same way. Without a validly signed bearer it is that refusal.
-With one, it is the 404 `No route matches …`, whether or not the token's identity has a profile,
-unless a gated route would refuse the same token for itself (a deactivated account, an unregistered
-or revoked machine, an email that cannot be resolved), which keeps that answer. Resolving the caller
+An unmatched path is answered the same way. Without a validly signed bearer it is that refusal. With
+one, it is the 404 `No route matches …`, whether or not the token's identity has a profile, unless a
+gated route would refuse the same token for itself (a deactivated account, an unregistered or
+revoked machine, an email that cannot be resolved), which keeps that answer. Resolving the caller
 never creates a profile; like sign-in, it may refresh an auth link, attach a verified email's link
-to the profile that holds it, or touch a registered machine's last-seen time. Under `/internal/` (however many leading slashes, or the bare
-`/internal`), where no bearer route lives, every unmatched path is the refusal whoever asks. The
-cost of the bearer check on an unmatched path is one token verification and one profile lookup,
-plus the email lookup (and possibly one call to the identity provider's `/userinfo`) when the token
-carries no email claim and no link is cached. Reaching any of it takes a validly signed token.
+to the profile that holds it, or touch a registered machine's last-seen time. Under `/internal/`
+(however many leading slashes, or the bare `/internal`), where no bearer route lives, every
+unmatched path is the refusal whoever asks.
 
-"Unavailable" is server-wide state, not a per-path answer. Each instance keeps one bearer key
-store. When its keys are stale, every refusal it gives joins one shared refresh of that store,
-whatever its door, and waits for it from the request's arrival (for a signed request, from when
-its body is in) until a little past the fetch's own five-second timeout; a bearer lookup joins the same refresh, with its wait counted from the
-lookup. So an instance whose routes never verify a bearer still learns of an outage, a failing
-store recovers without bearer traffic, and a refresh normally ends inside a request that is
-waiting on it, on a platform that suspends idle instances (one started late in a slow request
-can outlive it, and the next request that needs it finishes it).
-A request that arrived while the store was failing, or whose wait ended with no usable keys, is
-answered "unavailable" whatever its door.
+"Unavailable" is server-wide state, not a per-path answer. Each instance keeps one bearer key store.
+When its keys are stale, every refusal it gives joins one shared refresh of that store, whatever its
+door, and waits for it from the request's arrival (for a signed request, from when its body is in)
+until a little past the fetch's own five-second timeout; a bearer lookup joins the same refresh,
+with its wait counted from the lookup. So an instance whose routes never verify a bearer still
+learns of an outage, a failing store recovers without bearer traffic, and a refresh normally ends
+inside a request that is waiting on it, on a platform that suspends idle instances (one started late
+in a slow request can outlive it, and the next request that needs it finishes it). A request that
+arrived while the store was failing, or whose wait ended with no usable keys, is answered
+"unavailable" whatever its door.
 
 The residues, stated so nobody has to rediscover them:
 
-- **The moment of the change.** The state moves when a refresh completes, and a refresh is started
-  by a request. After the endpoint recovers, an instance answers "unavailable" until its next
-  refusal or bearer lookup past the five-second failed-refresh backoff refetches, and that request
-  too. Public routes, and requests that succeed without a bearer lookup, do not refresh the
-  store.
+- **Whether an origin is allowlisted.** Anyone can send a preflight, or any request, with an
+  `Origin` and see whether the answer carries `Access-Control-Allow-Origin`. That is what CORS is.
+- **The CORS mode.** The CORS headers depend on the instance's configuration, never on the path or
+  the request: with no origins configured every answer carries `vary: origin`; with an allowlist,
+  `vary: origin, access-control-request-headers` and `access-control-expose-headers:
+  link,x-request-id`; in permissive mode (`*`), `access-control-allow-origin: *` and
+  `access-control-expose-headers: *`, with no `vary`. These are tower-http's bytes, so a caller can
+  tell the three configurations apart and nothing more.
+- **The cost of a signed caller's mistyped path.** A validly signed token on an unmatched path
+  costs one token verification and one profile lookup, plus the email lookup (and possibly one call
+  to the identity provider's `/userinfo`) when the token carries no email claim and no link is
+  cached. Reaching any of it takes a validly signed token, so it is no lever for an unauthenticated
+  caller.
+- **The Slack callback's own work.** On an instance with Slack linking configured, a callback
+  carrying a well-formed state looks it up in the database, and one without linking does not. So
+  the two can be told apart by timing, and by the "Something went wrong" page a configured instance
+  gives when its database cannot answer. Each such request costs the configured instance one
+  database round trip; the route has no rate limit of its own.
+- **Which function serves a path.** On a split deployment the cron doors and `/internal/*` are
+  served by one function and everything else by another (`vercel.json`, which is public); each can
+  also be reached at its own path, `/api/internal` and `/api/axum`. The two start cold separately
+  and keep separate key stores, so first-request latency, or an outage one function has noticed
+  and the other has not, sorts paths by function. That is the routing the public repository
+  already states. To an unauthenticated caller both answer the same refusal; a validly signed
+  caller gets a 404 on an unmatched path from one and the refusal from the other.
+- **An authenticated caller can map routes.** A signed caller tells an unmatched path (404) from a
+  route it is refused on, and a route's methods from its `405`. If the platform's routing matches
+  paths without regard to case, a path that differs from a door only in case may also reach a
+  different function and answer a signed caller differently. None of it is visible without a
+  validly signed token.
+- **The moment of the change.** "Unavailable" holds until a refresh succeeds. The state moves when a
+  refresh completes, and a refresh is started by a request. After the endpoint recovers, an instance
+  answers "unavailable" until its next refusal or bearer lookup past the five-second failed-refresh
+  backoff refetches, and that request too. Public routes, and requests that succeed without a bearer
+  lookup, do not refresh the store.
 - **A slow endpoint is slow for everyone.** While a refresh is in flight, every refusal on that
   instance waits for it, up to the fetch's timeout. That is the same on every door, but it is
   visible: a refusal that takes seconds says a refresh is running, never which path you hit. A
@@ -202,13 +230,42 @@ The residues, stated so nobody has to rediscover them:
   cannot send more than 64 KiB anywhere. A declared length over the cap is refused without
   reading the body, so without `100 Continue`. The 64 KiB counts the bytes on the wire; a
   signature door then checks the decompressed body against the same limit. A platform or proxy in
-  front that buffers bodies or answers `Expect` itself changes what the caller sees, the same way
-  on every path.
+  front that buffers bodies or answers `Expect` itself is outside this: it changes what the caller
+  sees, the same way on every path.
 - **Timing between doors.** Outside the refresh, the work before a refusal differs by door (a
   signature is checked against its body, a bearer against a key), and no attempt is made to
   equalise that.
-- **The MCP surface** answers its own outage as `503`, not `401`; it is a different host, already
-  told apart by its discovery documents.
+- **The MCP surface** answers its own outage as `503`, not `401`. It is a different function,
+  reached at `/mcp`, and already told apart by its discovery documents.
+
+## The error contract
+
+Every error response with a body carries `{"error":{"code":"…","message":"…","details"?:…}}`
+(the 405 row and the undecodable-encoding 415 row below have none). The `code`
+is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFUSED`.
+
+| status | code | means | caller does | retry |
+|---|---|---|---|---|
+| 401 | `UNAUTHORIZED` | `Unauthorized: authentication required`: no verified credential. It was missing, malformed, invalid or expired (signature, issuer, audience, expiry), a signature or secret was refused, or the path matches no route; on every path alike, and the answer does not say which | refresh the token, re-check its audience against discovery, and fix the header if it is not a Bearer | once |
+| 401 | `UNAUTHORIZED` | `Unauthorized: Authentication service unavailable`: the instance cannot currently verify credentials (its JWKS fetch is failing); server-wide: while it holds, every refusal before identity says this, whatever the path | back off | yes |
+| 401 | `UNAUTHORIZED` | account deactivated; a validly signed token is required to see this | stop; contact operator | no |
+| 401 | `UNAUTHORIZED` | machine client not registered — message names the exact provision command; a validly signed token is required to see this | hand the `client_id` to an operator | no |
+| 403 | `SYSTEM_ACCESS_REQUIRED` | authentic, no approved standing; `details.refusal.kind` says which | **human:** `request-access`. **machine:** an admin must approve | no |
+| 403 | `FORBIDDEN` | refused, deliberately message-less (no capability disclosure) | obtain the grant out of band | no |
+| 403 | `FORBIDDEN_DETAIL` | refused, message names the capability | obtain it | no |
+| 404 | `NOT_FOUND` | absent or masked (a probe is not an existence oracle). Answered only to an authenticated caller, on an unmatched path as anywhere; an unauthenticated caller gets the first 401 row | infer nothing either way | no |
+| 405 | (none) | the path does not mount that method; empty body, and `Allow` names the methods it does mount. Answered only to a caller the route admits, or on a public route; `Allow` rides only a 405 | use a method `Allow` names | no |
+| 415 | (none) | a `Content-Encoding` the server cannot decode; empty body, `accept-encoding: gzip`. Answered before any authentication, identically on every path, mounted or not, and never with `Allow` | send the body uncompressed or as gzip | no |
+| 400 | `PRECONDITION_NOT_HONOURED` | a write carried `If-Match`, `If-None-Match` or `If-Unmodified-Since` on a route that does not evaluate it; nothing was applied. Answered only to a caller the route already admits: an unauthenticated or refused caller gets the answer it gets without the header | resend without the header to write unconditionally | no |
+| 400 | `PLAN_REFUSED` | composition invalid; `details.refusals[]` lists every reason | repair all in one round trip | no |
+| 400, 413, 415, 422 | `UNREADABLE_PLAN` | the body is not a readable composition (malformed JSON, wrong content type, over the door's limit, a wrong type); no `details`, and the message repeats at most 1024 bytes of what failed | fix the body; there is no plan to refuse yet | no |
+| 409 | `INGEST_ENDED` | append or finalize on an ingest that has ended (`cancelled` or `abandoned`); not resumable | start a new upload | no |
+| 422 | `CONTENT_INTEGRITY` | stored bytes fail the hash; not resumable | re-upload from scratch | no |
+| 500 | `INTERNAL_ERROR` | server fault | back off | yes |
+
+MCP renders these as JSON-RPC errors with prose — no status, no `code`, no `details`: a
+caller fault the agent can repair (a refused or unreadable plan, a refused search) as `-32602`,
+the terminal auth refusals as `-32600`, everything else as `-32603`. An integrator writing a service targets HTTP; MCP is an agent-runtime target.
 
 ## The machine-principal sharp edge
 
@@ -268,6 +325,12 @@ MCP server's registered tool list). An integrator writing a service targets HTTP
 agent-runtime target. The SDKs are generated from the OpenAPI spec, i.e. HTTP-only.
 
 ## Further reading
+
+- **What changed for an unauthenticated caller, release by release:** the [release
+  register](https://github.com/tasker-systems/temper/blob/main/release-register/README.md); this
+  page's rule was built by the entries `anonymous-options-and-allow`,
+  `uniform-pre-identity-refusal`, `cron-and-intake-tier-gates`, `signed-body-read-before-routing`,
+  `unmatched-path-uniform-to-anonymous` and `slack-callback-unconfigured-page`.
 
 - **What a machine credential is and how to stand one up:**
   [Machine credentials](../playbooks/standing-up-a-machine-credential.md) (playbook).

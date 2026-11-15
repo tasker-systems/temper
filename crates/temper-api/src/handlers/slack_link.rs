@@ -124,6 +124,11 @@ enum CallbackOutcome {
     ConnectedPending { slug: String, reason: String },
 }
 
+/// The page for a link that cannot be honoured: unknown, expired, replayed, a state that is not a
+/// minted nonce, or on an instance with no account linking configured. One sentence for all of them, so the page tells nobody which.
+const EXPIRED_LINK: &str =
+    "That link has expired or was already used. Mention @temper again to get a fresh one.";
+
 /// The flow proper. Returns the linked profile's slug, or a user-actionable message.
 ///
 /// `Profile` has NO `handle` field — it is `slug` (`temper-core/src/types/profile.rs:23`).
@@ -143,11 +148,22 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<CallbackOutc
         return Err("That link is incomplete. Mention @temper again to get a fresh one.".into());
     };
 
-    let cfg = state
-        .config
-        .slack_link
-        .as_ref()
-        .ok_or_else(|| "Account linking is not configured on this instance.".to_string())?;
+    // A state this instance could have minted is a UUID. Anything else is refused here, before the
+    // configuration is read and before the database sees it: a state the database cannot take (a
+    // NUL byte) would otherwise answer "Something went wrong" on a configured instance and the
+    // expired page on an unconfigured one.
+    if uuid::Uuid::try_parse(&state_nonce).is_err() {
+        tracing::warn!("slack link: rejected (state is not a minted nonce)");
+        return Err(EXPIRED_LINK.into());
+    }
+
+    // This route is public, so an unconfigured instance answers exactly as an expired link does:
+    // the page must not tell an unauthenticated caller how the instance is configured. The cause
+    // is the operator's, and goes to the log.
+    let cfg = state.config.slack_link.as_ref().ok_or_else(|| {
+        tracing::warn!("slack link: rejected (account linking is not configured on this instance)");
+        EXPIRED_LINK.to_string()
+    })?;
     let provider = link_provider::derive(&state.config.auth, cfg);
 
     // Single-use + TTL + unguessability, in one atomic burn. Unknown, expired and replayed
@@ -157,8 +173,7 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<CallbackOutc
         .map_err(|_| "Something went wrong. Mention @temper again to retry.".to_string())?
         .ok_or_else(|| {
             tracing::warn!("slack link: rejected (unknown, expired or replayed state)");
-            "That link has expired or was already used. Mention @temper again to get a fresh one."
-                .to_string()
+            EXPIRED_LINK.to_string()
         })?;
 
     let tokens = oauth_client::exchange_code(
