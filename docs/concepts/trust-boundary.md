@@ -114,11 +114,13 @@ The public routes are:
 
 - `GET /api/health`, which publishes the deployed crate version and commit;
 - the Slack link callback, `/api/auth/slack/callback`, a browser's redirect target from the identity
-  provider. It answers a link it cannot honour (unknown, expired, replayed, or on an instance with
-  no Slack linking configured) with one page, so it does not say how the instance is configured;
+  provider. It answers a link it cannot honour (unknown, expired, replayed, malformed, or on an
+  instance with no Slack linking configured) with one page, so its page does not say how the
+  instance is configured (its timing can; see the residues);
 - the discovery and OAuth doors the Node and MCP functions serve: `/.well-known/*`, `/oauth/*`,
   `/mcp`;
-- the API reference under `/api-docs/`, only when an operator enables it.
+- the API reference under `/api-docs/`, only when an operator enables it, so whether it answers
+  says whether it is enabled.
 
 Every other request is answered the same way, on any path, matched or not, by any method, with any
 credential that does not verify. (A `Content-Encoding` the server cannot decode is answered the 415
@@ -169,6 +171,16 @@ The residues, stated so nobody has to rediscover them:
   to the identity provider's `/userinfo`) when the token carries no email claim and no link is
   cached. Reaching any of it takes a validly signed token, so it is no lever for an unauthenticated
   caller.
+- **The Slack callback's own work.** On an instance with Slack linking configured, a callback
+  carrying a well-formed state looks it up in the database, and one without linking does not. So
+  the two can be told apart by timing, and by the "Something went wrong" page a configured instance
+  gives when its database cannot answer. Each such request costs the configured instance one
+  database round trip; the route has no rate limit of its own.
+- **Which function serves a path.** On a split deployment the cron doors and `/internal/*` are
+  served by one function and everything else by another (`vercel.json`, which is public). The two
+  start cold separately and keep separate key stores, so first-request latency, or an outage one
+  function has noticed and the other has not, sorts paths by function. That is the routing the
+  public repository already states.
 - **An authenticated caller can map routes.** A signed caller tells an unmatched path (404) from a
   route it is refused on, and a route's methods from its `405`. If the platform's routing matches
   paths without regard to case, a path that differs from a door only in case may also reach a

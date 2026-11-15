@@ -148,6 +148,15 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<CallbackOutc
         return Err("That link is incomplete. Mention @temper again to get a fresh one.".into());
     };
 
+    // A state this instance could have minted is a UUID. Anything else is refused here, before the
+    // configuration is read and before the database sees it: a state the database cannot take (a
+    // NUL byte) would otherwise answer "Something went wrong" on a configured instance and the
+    // expired page on an unconfigured one.
+    if uuid::Uuid::try_parse(&state_nonce).is_err() {
+        tracing::warn!("slack link: rejected (state is not a minted nonce)");
+        return Err(EXPIRED_LINK.into());
+    }
+
     // This route is public, so an unconfigured instance answers exactly as an expired link does:
     // the page must not tell an unauthenticated caller how the instance is configured. The cause
     // is the operator's, and goes to the log.

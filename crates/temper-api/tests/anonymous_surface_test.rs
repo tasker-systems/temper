@@ -2191,16 +2191,36 @@ async fn the_slack_callback_does_not_say_how_it_is_configured(pool: PgPool) {
         });
     })
     .await;
-    let path = format!(
-        "/api/auth/slack/callback?code=abc&state={}",
-        Uuid::new_v4().simple()
-    );
-    let expired = send(&configured, Method::GET, &path, &[]).await;
-    assert_eq!(expired.status, 200, "{expired:?}");
+    let unknown = send(
+        &configured,
+        Method::GET,
+        &format!("/api/auth/slack/callback?code=abc&state={}", Uuid::new_v4()),
+        &[],
+    )
+    .await;
+    assert_eq!(unknown.status, 200, "{unknown:?}");
     assert!(
-        expired.body.contains("That link has expired"),
-        "{expired:?}"
+        unknown.body.contains("That link has expired"),
+        "{unknown:?}"
     );
-    let answer = send(&unconfigured, Method::GET, &path, &[]).await;
-    assert_eq!(answer.without_request_id(), expired.without_request_id());
+    // A state the database could not take (a NUL byte), one that is not a nonce's shape, and an
+    // over-long one: each is the same page, on either instance.
+    for state in [
+        Uuid::new_v4().to_string(),
+        Uuid::new_v4().simple().to_string(),
+        "%00".to_string(),
+        "not-a-nonce".to_string(),
+        "a".repeat(4096),
+    ] {
+        let path = format!("/api/auth/slack/callback?code=abc&state={state}");
+        for app in [&configured, &unconfigured] {
+            let answer = send(app, Method::GET, &path, &[]).await;
+            assert_eq!(
+                answer.without_request_id(),
+                unknown.without_request_id(),
+                "state {}",
+                &state[..state.len().min(40)]
+            );
+        }
+    }
 }
