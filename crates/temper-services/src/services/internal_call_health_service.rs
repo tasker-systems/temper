@@ -637,6 +637,28 @@ mod tests {
         assert!(!log.contains("INTERNAL_RECONCILE_SECRET"), "{log:?}");
     }
 
+    // FAILS IF: a channel with no row logs at error. A deployment that never makes the call (the
+    // resolve channel on a non-SAML deployment) must be silent at the levels anyone reads.
+    #[test]
+    fn a_channel_never_attempted_logs_no_error() {
+        for channel in [RECONCILE_CHANNEL, RESOLVE_CHANNEL] {
+            let report = ChannelReport {
+                channel: channel.to_owned(),
+                state: derive_state(None, Utc::now()),
+                consecutive_failures: 0,
+                failures_total: 0,
+                failure_cause: None,
+                failure_detail: None,
+                seconds_since_success: None,
+                failing_for_seconds: None,
+            };
+            assert_eq!(report.state, ChannelState::NoAttemptRecorded);
+            let log = captured_log(|| emit_channel_span(&report));
+            assert!(!log.contains("ERROR"), "{channel}: {log:?}");
+            assert!(!log.contains("WARN"), "{channel}: {log:?}");
+        }
+    }
+
     // FAILS IF: the check stops watching the resolve channel, so a deployment that can never name
     // a chain's owner reports `no_attempt_recorded` for the channel that would have said so.
     #[test]
