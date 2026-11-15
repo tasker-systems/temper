@@ -400,8 +400,9 @@ pub fn create_internal_app(state: AppState) -> Router {
 }
 
 /// Apply the shared transport-layer stack (fallback, request decompression, HTTP
-/// tracing, CORS) and bind `state`. Shared by [`create_app`] and
-/// [`create_internal_app`] so both surfaces observe and trace requests identically.
+/// tracing), bind `state`, and wrap the result in the service outside routing (CORS, the
+/// request id, the `Allow` rule: `anonymous_surface`). Shared by [`create_app`] and
+/// [`create_internal_app`] so both surfaces observe, trace and answer requests identically.
 fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
     let cors = temper_services::cors::CorsPolicy::new(&state.config.cors_origins);
 

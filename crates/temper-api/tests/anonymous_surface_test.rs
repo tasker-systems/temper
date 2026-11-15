@@ -11,7 +11,8 @@
 //! - **`Allow` rides only a 405**: never on a 401, never on the 415 an undecodable
 //!   `Content-Encoding` gets before any gate;
 //! - **the request id** is minted per request, 32 lowercase hex digits, and never adopted from the
-//!   request; an allowlisted origin can read it.
+//!   request; an allowlisted origin can read it (the root span's copy is witnessed in
+//!   `telemetry_request_id_test`).
 #![cfg(feature = "test-db")]
 
 mod common;
@@ -207,6 +208,14 @@ async fn options_without_a_preflight_is_routed(pool: PgPool) {
             assert_eq!(answer.header("allow"), None, "OPTIONS {path} {headers:?}");
             assert_request_id_format(&format!("OPTIONS {path}"), &answer);
         }
+        // The CORS actual-response headers depend only on `Origin`, routed `OPTIONS` included.
+        let routed = send(&app, Method::OPTIONS, "/api/profile", headers).await;
+        let expect_acao = (headers.first() == Some(&("origin", ORIGIN))).then_some(ORIGIN);
+        assert_eq!(
+            routed.header("access-control-allow-origin"),
+            expect_acao,
+            "OPTIONS /api/profile {headers:?}: {routed:?}"
+        );
         // A designated public route keeps its own answer: 405 with `Allow`.
         let health = send(&app, Method::OPTIONS, "/api/health", headers).await;
         assert_eq!(
@@ -232,7 +241,51 @@ async fn options_without_a_preflight_is_routed(pool: PgPool) {
     )
     .await;
     assert_eq!(answer.status, 401, "{answer:?}");
-    assert_eq!(answer.header("access-control-allow-origin"), None);
+}
+
+// FAILS IF: in permissive mode (`CORS_ORIGINS=*`) a preflight from any origin is not answered, or
+// its answer depends on the path.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_permissive_preflight_is_path_independent(pool: PgPool) {
+    let app = common::setup_test_app_with_config(pool.clone(), |config| {
+        config.cors_origins = vec!["*".to_string()];
+    })
+    .await;
+    let request = [
+        ("origin", FOREIGN),
+        ("access-control-request-method", "POST"),
+    ];
+    let first = send(&app, Method::OPTIONS, "/api/health", &request).await;
+    assert_eq!(first.status, 200, "{first:?}");
+    assert_eq!(first.header("access-control-allow-origin"), Some("*"));
+    assert_eq!(first.header("allow"), None);
+    for path in representative_paths() {
+        let answer = send(&app, Method::OPTIONS, &path, &request).await;
+        assert_eq!(
+            answer.without_request_id(),
+            first.without_request_id(),
+            "OPTIONS {path}"
+        );
+    }
+}
+
+// FAILS IF: the outer service changes a `HEAD` answer's headers: a different `content-length`
+// from the `GET`'s, or a body.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn head_keeps_the_get_headers(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    // Not an unmatched path: its 404 body echoes the method, so `HEAD` and `GET` differ by a byte.
+    for path in ["/api/health", "/api/profile"] {
+        let get = send(&app, Method::GET, path, &[]).await;
+        let head = send(&app, Method::HEAD, path, &[]).await;
+        assert_eq!(head.status, get.status, "HEAD {path}");
+        assert_eq!(head.body, "", "HEAD {path} has no body");
+        assert_eq!(
+            head.header("content-length"),
+            get.header("content-length"),
+            "HEAD {path}: {head:?} against {get:?}"
+        );
+    }
 }
 
 // FAILS IF: `Allow` rides any status but 405: the anonymous 401 on an unmounted method, or the 415

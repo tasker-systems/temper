@@ -20,7 +20,11 @@ service:
   x-request-id is kept only as the span's inbound_request_id, bounded, and never echoed.
 
 Who observes it: an unauthenticated caller stops getting 200 plus Allow to OPTIONS and stops
-getting Allow on a 401. A browser on an allowlisted origin is unchanged: its preflights carry
+getting Allow on a 401. A routed OPTIONS meets the route's own answer, so on a door whose gate is
+inside its handler (the cron doors and the webhook intake), and on the public routes, it is that
+door's 405 with Allow, the same answer the door gives any other unmounted method today. An
+authenticated OPTIONS without a preflight's headers gets the route's 405 with Allow instead of 200.
+CORS actual-response headers ride every routed answer, routed OPTIONS included. A browser on an allowlisted origin is unchanged: its preflights carry
 Origin and Access-Control-Request-Method. A browser on a non-allowlisted origin was already
 blocked (no ACAO); its preflight now gets a 401 instead of a 200, with the same browser result.
 No first-party client sends OPTIONS or reads Allow on a non-405. temper-mcp-server is unchanged.

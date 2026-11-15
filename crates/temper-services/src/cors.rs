@@ -1,20 +1,26 @@
 //! The cross-origin policy, derived from configuration — once, for every surface.
 //!
 //! This lives here rather than in a transport crate because both surfaces reach it and neither
-//! depends on the other: temper-api applies it in `apply_transport_layers` (shared by the public
-//! and internal apps) and temper-mcp-server applies it when assembling its own router. It takes
-//! the origins, not an `ApiConfig`, so the MCP server needs no API configuration to apply it.
+//! depends on the other. temper-mcp-server applies [`cors_layer`] when assembling its own router.
+//! temper-api applies [`CorsPolicy`] — the same layer, built by the same function, plus the
+//! predicate that decides which requests may see it as a preflight — in its service outside routing
+//! (`anonymous_surface`). It takes the origins, not an `ApiConfig`, so the MCP server needs no API
+//! configuration to apply it.
 //!
 //! It is shared for a reason paid for once. The MCP router previously ended in a literal
 //! `CorsLayer::permissive()`, so `CORS_ORIGINS` was read into `ApiConfig`, carried into
 //! `AppState`, and then dropped at the only layer that acts — on the surface that takes the most
 //! automated traffic. An operator tightening the allowlist saw no change there and nothing said
-//! so. Two hand-assembled stacks are what let that happen, so there is now one function and the
-//! surfaces call it.
+//! so. Two hand-assembled stacks are what let that happen, so the allowlist is parsed and the layer
+//! built in one place (`Allowed`, `build_layer`), and both surfaces call it. They differ only in
+//! the response headers an allowlist exposes: temper-api also exposes `x-request-id`.
 
 use axum::http::header::{self, HeaderName, HeaderValue};
 use axum::http::{HeaderMap, Method};
 use tower_http::cors::{AllowHeaders, Any, CorsLayer};
+
+/// The service [`CorsLayer`] produces, named so a surface can hold one built once.
+pub use tower_http::cors::Cors;
 
 /// Read `CORS_ORIGINS` — comma-separated, trimmed, empties dropped. The one parse both surfaces'
 /// boots run, so the allowlist the API applies and the one the MCP server applies cannot differ

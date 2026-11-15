@@ -80,6 +80,17 @@ pub fn insert_security_headers(headers: &mut header::HeaderMap) {
     }
 }
 
+/// An empty body whose size is **unknown** rather than exactly zero.
+///
+/// For a `HEAD` answer that had no `content-length`: axum's top-level route future fills that header
+/// in from an exact size hint, so an emptied body would be advertised as `content-length: 0` — a
+/// claim that the `GET` body is empty. A body of unknown size makes it add nothing.
+pub fn unsized_empty_body() -> axum::body::Body {
+    axum::body::Body::from_stream(futures_util::stream::empty::<
+        Result<axum::body::Bytes, std::convert::Infallible>,
+    >())
+}
+
 /// The response header that carries the server-minted request id. Never read from a request.
 pub const REQUEST_ID_HEADER: header::HeaderName = header::HeaderName::from_static("x-request-id");
 
