@@ -4,8 +4,8 @@
 -- profile_reachable_teams (20260804000010) re-ran the inlined team_ancestors walk once per
 -- membership, through CROSS JOIN LATERAL. For a reader in 300 teams that cost about 24 ms, nearly
 -- all of a single-resource visibility check (the planner already pushes the resource id into every
--- arm of resources_visible_to; the closure was the part that tracked the reader). One recursive walk seeded with every
--- membership returns the same set: the closure of a union of seeds is the union of the seeds'
+-- arm of resources_visible_to; the closure was the part that tracked the reader). One recursive
+-- walk seeded with every membership returns the same set: the closure of a union of seeds is the union of the seeds'
 -- closures, and UNION deduplicates. Every read set built on the closure gets the same rows.
 --
 -- What a later edit must not break:
@@ -16,8 +16,8 @@
 --     that seeds the walk with a team: public_within_row_effective relies on it to keep a dead T's
 --     row dormant.
 --   * One statement of the walk. Neither wrapper restates the recursion. A copy of reach (the walk
---     over a profile's memberships, named or inlined, in any function, procedure or view) fails
---     reachable_teams_one_definition_test.
+--     over a profile's memberships, named or inlined, in one body, or any caller of the walk
+--     primitive beyond the two wrappers) fails reachable_teams_one_definition_test.
 --   * Cycles are admitted states, and UNION (not UNION ALL) is what terminates the walk on one.
 --   * The profile path is a function scan, not inlined: an argument holding a sub-select stops SQL
 --     function inlining. ROWS 200 keeps its row estimate near what the inlined per-membership form
@@ -88,7 +88,8 @@ SELECT declare_migration(
     'additive',
     'team reach in one walk: adds team_ancestors_of(uuid[]), and body-only CREATE OR REPLACE of '
     'team_ancestors(uuid) and profile_reachable_teams(uuid) with unchanged signatures, return types '
-    'and volatility, delegating to it (team_ancestors_of declares ROWS 200). Every set they return is unchanged (the same two liveness '
-    'floors, one walk instead of one per membership), so an older binary reads the same answers. '
+    'and volatility, delegating to it (team_ancestors_of declares ROWS 200). Every set they return '
+    'is unchanged (the same two liveness floors, one walk instead of one per membership), so an '
+    'older binary reads the same answers. '
     'No table, column, index or row changes.'
 );
