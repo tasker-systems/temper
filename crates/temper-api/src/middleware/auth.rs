@@ -129,7 +129,13 @@ pub async fn require_auth(
             // service outside routing, for every such refusal at once, while the key store says it
             // is failing: answered here alone, it would tell a prober which paths verify a bearer.
             e => {
-                tracing::error!("JWKS key retrieval failed: {e}");
+                // Once the store is failing, any caller can repeat this with a garbage bearer: the
+                // outage is reported where the store marks it, not once per such request.
+                if state.jwks_store.is_failing() {
+                    tracing::debug!("JWKS key retrieval failed: {e}");
+                } else {
+                    tracing::error!("JWKS key retrieval failed: {e}");
+                }
                 ApiError::Unauthenticated(UnauthCause::AuthUnavailable)
             }
         })?;

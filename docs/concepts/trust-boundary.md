@@ -142,26 +142,34 @@ log line for it, `auth error`, carries that request id and the real cause, so a 
 the id can be helped without the answer saying anything.
 
 "Unavailable" is server-wide state, not a per-path answer. Each instance keeps one bearer key
-store, and every refusal it gives starts a background refresh of that store when its keys are
-stale, so an instance whose routes never verify a bearer still learns of an outage, and recovers
-without bearer traffic. While the store is failing, a bearer request is refused at once rather
-than waiting on the fetch.
+store. When its keys are stale, every refusal it gives joins one shared refresh of that store for
+at most one second from the request's arrival, whatever its door, and a bearer lookup joins the
+same refresh for the same bounded wait. So an instance whose routes never verify a bearer still
+learns of an outage, a failing store recovers without bearer traffic, and the refresh runs while
+a request is live rather than after it, on a platform that suspends idle instances.
 
 The residues, stated so nobody has to rediscover them:
 
 - **The moment of the change.** The state moves when a refresh completes, and a refresh is started
-  by a request. On a cold instance, and at the moment its keys pass their TTL, the first refusals
-  are answered before any refresh has failed, and a bearer request then waits for the fetch (up
-  to the client's five-second timeout). After the endpoint recovers, an instance answers
-  "unavailable" until its next refusal, past the failed-refresh backoff, refetches.
+  by a request. On a cold instance, and at the moment its keys pass their TTL, refusals answered
+  before a slow or hanging fetch gives up (up to the client's five-second timeout) answer as if
+  nothing had failed. After the endpoint recovers, an instance answers "unavailable" until its next
+  refusal past the five-second failed-refresh backoff refetches.
+- **A slow endpoint is slow for everyone.** While a refresh is in flight, every refusal on that
+  instance waits for it, up to the one-second bound. That is the same on every door, but it is
+  visible: a refusal that takes a second says a refresh is running, never which path you hit.
 - **Each instance on its own.** Instances, including the separate functions of a split deployment,
   do not share the store. During an outage one may report it while another has not yet tried.
-- **Timing.** The refusal itself never waits on a fetch once the store is failing, but the work
-  before it differs by door (a signature is checked against a body, a bearer against a key), and
-  no attempt is made to equalise that.
-
-Each needs a real outage of the identity provider's key endpoint, which an unauthenticated caller
-cannot cause.
+- **An unpublished `kid`.** A bearer naming a key the cache does not hold refetches the JWKS at
+  most once a minute per instance, and that request waits for the fetch. Any caller can do this
+  with a healthy identity provider, so a bearer door can answer one request a minute more slowly
+  than a door that verifies no bearer. The refetch is what lets a newly rotated signing key verify
+  without waiting out the cache.
+- **Timing between doors.** Outside the refresh, the work before a refusal differs by door (a
+  signature is checked against its body, a bearer against a key), and no attempt is made to
+  equalise that.
+- **The MCP surface** answers its own outage as `503`, not `401`; it is a different host, already
+  told apart by its discovery documents.
 
 ## The machine-principal sharp edge
 

@@ -22,12 +22,16 @@ request_id (the one returned in x-request-id), and never rendered.
 bearer key store is failing (the cache is unusable and the most recent refresh failed, until one
 succeeds), every pre-identity refusal on every path renders
 {"error":{"code":"UNAUTHORIZED","message":"Unauthorized: Authentication service unavailable"}}.
-Status and code are unchanged, so the retry contract stands. Every pre-identity refusal also starts
-a background refresh of the key store when its keys are stale (never waiting on it), so an
-instance whose routes verify no bearer, such as a separately deployed internal function, learns of
-an outage too, and a failing store recovers without bearer traffic. While the store is failing, a
-bearer is refused at once instead of waiting on the JWKS fetch. The residues (the first refusals
-on a cold instance or at the TTL's lapse, each instance learning on its own) are stated in
+Status and code are unchanged, so the retry contract stands. When the key store's keys are stale,
+every pre-identity refusal joins one shared refresh of the store for at most one second from the
+request's arrival, whatever its door, and a bearer lookup joins the same refresh for the same
+bound instead of waiting for the JWKS fetch's five-second timeout. So an instance whose routes
+verify no bearer, such as a separately deployed internal function, learns of an outage too, a
+failing store recovers without bearer traffic, and the refresh runs inside a live request. A
+bearer on a cold instance whose JWKS takes longer than a second is refused as unavailable (the
+API's 401, temper-mcp's 503) until the fetch lands, where it used to wait for it. The store logs
+the outage once, at error, when it marks itself failing, and its recovery at info; the
+per-request lines are debug while it is failing. The residues are stated in
 docs/concepts/trust-boundary.md.
 
 Unchanged: every refusal that needs a validly signed credential (account is deactivated,
@@ -53,7 +57,7 @@ across every gate kind and credential shape, with the reconcile, mint and cron s
 unset;
 a_failing_key_store_makes_every_refusal_unavailable,
 an_internal_app_no_bearer_reaches_still_reports_the_outage,
-a_hanging_key_endpoint_never_holds_a_refusal, a_failing_store_recovers_with_no_bearer),
+a_hanging_key_endpoint_holds_every_refusal_alike, a_failing_store_recovers_with_no_bearer),
 crates/temper-api/tests/auth_error_log_test.rs, every_pre_identity_cause_renders_the_same_bytes
 in temper-services' error module, the sticky failure flag's tests in temper-services' state module,
 and the_uniform_pre_identity_401_maps_to_reauthentication in temper-mcp. Release relevance:

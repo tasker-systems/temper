@@ -24,10 +24,11 @@
 //! 4. While the bearer key store is failing, answers every pre-identity refusal (a response marked
 //!    [`PreIdentityRefusal`]) with the "authentication service unavailable" bytes instead, whatever
 //!    its path or cause. Unavailability is server-wide state: answered only where a bearer is
-//!    verified, it would tell a prober which paths verify one. Every such refusal first pokes the
-//!    store ([`JwksKeyStore::poke`]: a background refresh if the cache is stale, never a wait), so
-//!    an instance whose routes never verify a bearer still learns of an outage, and a failing
-//!    store recovers without bearer traffic.
+//!    verified, it would tell a prober which paths verify one. Every such refusal first joins the
+//!    store's refresh when its keys are stale ([`JwksKeyStore::refresh_within`]), for at most
+//!    [`JwksKeyStore::REFRESH_WAIT`] from the request's arrival whatever its door, so an instance
+//!    whose routes never verify a bearer still learns of an outage, a failing store recovers
+//!    without bearer traffic, and the refresh runs inside a live request.
 //! 5. Sets `x-request-id`, and removes `Allow` from every response that is not a 405.
 //!
 //! The strip is keyed "unless 405", never "on 401": request decompression wraps every tier gate,
@@ -87,7 +88,7 @@ struct AnonymousSurface {
     /// CORS around an empty answer: the actual-response headers for a routed `OPTIONS`.
     headers_only: Cors<CorsHeadersOnly>,
     cors: Arc<CorsPolicy>,
-    /// Poked on every pre-identity refusal, then read through `is_failing` for the unavailable
+    /// Joined on every pre-identity refusal, then read through `is_failing` for the unavailable
     /// swap.
     jwks: Arc<JwksKeyStore>,
 }
@@ -110,6 +111,7 @@ impl Service<Request> for AnonymousSurface {
 
 impl AnonymousSurface {
     async fn handle(self, mut request: Request) -> Response {
+        let entered = tokio::time::Instant::now();
         let id = RequestId::mint();
         request.extensions_mut().insert(id.clone());
         // `to_str` succeeds only on visible ASCII, so any byte offset is a cut point.
@@ -159,10 +161,15 @@ impl AnonymousSurface {
         };
 
         if let Some(PreIdentityRefusal(cause)) = response.extensions().get().copied() {
-            // Non-blocking: at most a spawned refresh. The answer below uses what the store knows
-            // now, so this refusal is never held for a fetch.
-            self.jwks.poke();
-            let unavailable = self.jwks.is_failing();
+            // Join the store's refresh if its keys are stale, until the same deadline from the
+            // request's arrival for every door (a bearer lookup that already waited has used it
+            // up). "Unavailable" if the store was failing when the refusal was made or still is:
+            // a refusal whose wait saw the endpoint recover still tells its caller to retry.
+            let was_failing = self.jwks.is_failing();
+            self.jwks
+                .refresh_within(entered + JwksKeyStore::REFRESH_WAIT)
+                .await;
+            let unavailable = was_failing || self.jwks.is_failing();
             // The one line an operator joins a caller's quoted `x-request-id` to. Emitted here, not
             // under the root span, so it carries the id whatever the log filter does to spans.
             tracing::warn!(
