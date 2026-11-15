@@ -259,8 +259,9 @@ CONS-9 = "uncovered: conventions-bump.yml is not adopted; the pin is moved by ha
 #   * the pre-publish check (release-prepare.sh judging the candidate against the last tag, and
 #     refusing a break no window entry declares) is not built: a break that landed under the
 #     base-only verdict is not caught before publish (bite 13);
-#   * the comparator's own residue carries over: a constraint key gained on an existing property
-#     (enum, maxLength, pattern, ...) still reads as growth;
+#   * the comparator's own residues carry over: a constraint key gained on an existing property
+#     (enum, maxLength, pattern, ...) still reads as growth, and so does an operation gaining a
+#     required request body where it had none;
 #   * MCP output and CLI stdout have no committed shape artifact, so no gate judges them (the
 #     gate's own accepted residue).
 # Continuous deploy, ruled by the owner (2026-11-15): tag releases are the compatibility

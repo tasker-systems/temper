@@ -36,7 +36,8 @@ The resolved form of an operation is the operation object with:
   * each discriminator's effective mapping (explicit entries, plus the implicit entry for every
     `$ref` arm of the sibling oneOf/anyOf), each value resolved in place;
   * the dialect its schemas are read in: {"openapi", "jsonSchemaDialect"} under `x-dialect`;
-  * in a webhook, and in every callback, the request is SERVER-SENT: its `requestBody` and
+  * each callback operation built as a webhook's is (callback_forms), and in a webhook and in
+    every callback the request is SERVER-SENT: its `requestBody` and
     `parameters` are renamed (SERVER_SENT below) so broke_node judges them on the strict side,
     never with the input-side tolerance a client's request gets.
 
@@ -231,27 +232,64 @@ def with_required(x: Any) -> Any:
     return {"required": False, **x} if isinstance(x, dict) else x
 
 
+def with_required_content(content: Any) -> Any:
+    """The same default on every encoding header under a `content` map."""
+    if not isinstance(content, dict):
+        return content
+    for media in content.values():
+        if isinstance(media, dict) and isinstance(media.get("encoding"), dict):
+            for enc in media["encoding"].values():
+                if isinstance(enc, dict) and isinstance(enc.get("headers"), dict):
+                    enc["headers"] = {k: with_required(h) for k, h in enc["headers"].items()}
+    return content
+
+
 def normalize_operation(form: dict, where: str) -> dict:
-    """The `required` defaults inside one resolved operation (parameters, request body, response
-    headers), and the same for every callback operation it declares, judged server-sent."""
+    """The `required` defaults inside one resolved operation: parameters, request body, and the
+    headers of responses and of encodings."""
     if "parameters" in form:
         form["parameters"] = parameter_list(form["parameters"] or [], where)
     if isinstance(form.get("requestBody"), dict):
         form["requestBody"] = with_required(form["requestBody"])
+        with_required_content(form["requestBody"].get("content"))
     for response in (form.get("responses") or {}).values():
-        if isinstance(response, dict) and isinstance(response.get("headers"), dict):
-            response["headers"] = {k: with_required(h) for k, h in response["headers"].items()}
-    if isinstance(form.get("callbacks"), dict):
-        for name, cb in form["callbacks"].items():
-            if not isinstance(cb, dict):
-                continue
-            for expr, item in cb.items():
-                if not isinstance(item, dict):
-                    continue
-                for k, v in list(item.items()):
-                    if k in METHODS and isinstance(v, dict):
-                        item[k] = server_sent(normalize_operation(v, f"callback {name} {expr}"))
+        if isinstance(response, dict):
+            if isinstance(response.get("headers"), dict):
+                response["headers"] = {k: with_required(h) for k, h in response["headers"].items()}
+            with_required_content(response.get("content"))
     return form
+
+
+def callback_forms(r: Resolver, doc: dict, raw_callbacks: Any) -> Any:
+    """An operation's callbacks, each callback operation built exactly as a webhook's is: its
+    path item resolved through path_item (siblings overlaid, clashes refused), its path-item
+    parameters merged in, and the whole judged server-sent."""
+    if not isinstance(raw_callbacks, dict):
+        return raw_callbacks
+    out: dict[str, Any] = {}
+    for name, cb in raw_callbacks.items():
+        if isinstance(cb, dict) and isinstance(cb.get("$ref"), str):
+            comp = component_of(cb["$ref"])
+            if comp:
+                r.touched.add(comp)
+            cb = pointer_get(doc, cb["$ref"])
+        if not isinstance(cb, dict):
+            raise Unresolvable(f"callback {name} is not an object")
+        resolved: dict[str, Any] = {}
+        for expr, raw_item in cb.items():
+            if not isinstance(raw_item, dict):
+                raise Unresolvable(f"callback {name} {expr} is not a path item")
+            item = r.path_item(raw_item)
+            ops = {
+                m.upper(): operation_form(r, doc, None, item, item[m], sent=True)
+                for m in METHODS
+                if isinstance(item.get(m), dict)
+            }
+            if not ops:
+                raise Unresolvable(f"callback {name} {expr} declares no operation")
+            resolved[expr] = ops
+        out[name] = resolved
+    return out
 
 
 def server_sent(form: dict) -> dict:
@@ -302,8 +340,12 @@ def operation_form(
         "openapi": doc.get("openapi"),
         "jsonSchemaDialect": doc.get("jsonSchemaDialect"),
     }
-    # Request-body and header defaults, and callbacks (server-sent wherever they appear).
+    # Request-body and header defaults; callbacks rebuilt from the raw operation, so each is
+    # judged as a server-sent operation of its own (path-item parameters and $ref'd path items
+    # included), never as the generic resolution of a nested map.
     form = normalize_operation(form, where)
+    if "callbacks" in op:
+        form["callbacks"] = callback_forms(r, doc, op["callbacks"])
     return server_sent(form) if sent else form
 
 

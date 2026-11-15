@@ -1030,6 +1030,23 @@ derive_contract lone-param lone-param-req '.components.parameters.L.required = t
 out="$(compat_check lone-param lone-param lone-param-req)"; rc=$?
 expect_charged "COMPAT-1: an unreached parameter component gaining required is judged, not a crash" "$out" "$rc" "component parameters/L"
 
+# A callback is built as a webhook is: its path-item-level parameters are server-sent too, and a
+# $ref'd callback path item with a sibling keeps its operations.
+derive_contract release cb-item '.paths."/items".post.callbacks = {"cb":{"{$request.body#/url}":{"parameters":[{"in":"query","name":"q","schema":{"type":"string","enum":["a"]}}],"post":{"responses":{"200":{"description":"ok"}}}}}}'
+derive_contract cb-item cb-item-grown '.paths."/items".post.callbacks.cb."{$request.body#/url}".parameters[0].schema.enum += ["b"]'
+out="$(compat_check cb-item cb-item cb-item-grown)"; rc=$?
+expect_charged "COMPAT-1: enum growth in a callback's path-item parameter fails" "$out" "$rc" "op POST /items"
+derive_contract release cb-ref '.paths."/items".post.callbacks = {"cb":{"{$request.body#/url}":{"$ref":"#/components/pathItems/CB","x-note":1}}}
+  | .components.pathItems = {"CB":{"post":{"requestBody":{"content":{"application/json":{"schema":{"type":"string","enum":["a"]}}}},"responses":{"200":{"description":"ok"}}}}}'
+derive_contract cb-ref cb-ref-grown '.components.pathItems.CB.post.requestBody.content."application/json".schema.enum += ["b"]'
+out="$(compat_check cb-ref cb-ref cb-ref-grown)"; rc=$?
+expect_charged "COMPAT-1: a \$ref'd callback path item with a sibling keeps its operations" "$out" "$rc" "op POST /items"
+# An encoding header gaining required is judged, not a crash.
+derive_contract release enc '.paths."/items".post.requestBody.content."multipart/form-data" = {"schema":{"type":"object"},"encoding":{"f":{"headers":{"X-A":{"schema":{"type":"string"}}}}}}'
+derive_contract enc enc-req '.paths."/items".post.requestBody.content."multipart/form-data".encoding.f.headers."X-A".required = true'
+out="$(compat_check enc enc enc-req)"; rc=$?
+expect_charged "COMPAT-1: an encoding header gaining required is judged, not a crash" "$out" "$rc" "op POST /items"
+
 # example/examples beside a $ref are prose, as broke_node reads them.
 derive_contract release ex '.paths."/items/{id}".get.responses."200".content."application/json".schema.examples = [{"id":"z"}]'
 out="$(compat_check release release ex)"; rc=$?
