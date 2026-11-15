@@ -909,8 +909,8 @@ fn refusal_reasons(refused: &rmcp::ErrorData) -> Vec<String> {
 /// **A workflow's marker key lists claimable work as rows, oldest first, paged, with each row's
 /// claim.** Three items carry `state: ready` and one carries another state; `contains` returns
 /// only the three. `order: asc` gives the oldest first and the omitted order the newest; `limit`
-/// and `offset` page it, and `total` counts the whole match set on every page. `has_key` finds the
-/// claimed item, and its row's open meta shows the claim. A listed item that is already claimed
+/// and `offset` page it, and `total` counts the whole match set on every page, including an
+/// `empty` page past the end. `has_key` finds the claimed item, and its row's open meta shows the claim. A listed item that is already claimed
 /// (a stale hit) loses at the guarded claim.
 ///
 /// FAILS IF a property predicate stops reading the open-meta keys the workflow writes, or the
@@ -962,6 +962,29 @@ async fn a_marker_key_lists_claimable_work_oldest_first_with_its_claim(pool: PgP
         second["returned"]["work"]["total"],
         json!(3),
         "on every page"
+    );
+    let past = query(
+        &svc,
+        &parts,
+        listing(
+            ctx,
+            state_is("ready"),
+            Some("asc"),
+            json!({"limit": 2, "offset": 3}),
+        ),
+    )
+    .await
+    .expect("a page past the end runs");
+    assert!(row_ids(&past).is_empty(), "{past}");
+    assert_eq!(
+        past["returned"]["work"]["disposition"],
+        json!("empty"),
+        "the page: {past}"
+    );
+    assert_eq!(
+        past["returned"]["work"]["total"],
+        json!(3),
+        "the match set: {past}"
     );
 
     let newest = query(
@@ -1060,9 +1083,10 @@ async fn a_difference_bound_lists_ready_work_with_no_claim(pool: PgPool) {
     assert_eq!(again["returned"]["work"]["total"], json!(3), "{again}");
 }
 
-/// **The two refusals the skill names.** A list stage named as another stage's input is refused
-/// `stage_not_pipeable`, and an `order` on any other act is refused `order_not_applicable`. Both
-/// reach an MCP caller as structured refusals in the error's `data`.
+/// **The refusals the skill names.** A list stage named as another stage's input is refused
+/// `stage_not_pipeable`, a combinator named in `returns` is refused `stage_not_returnable`, and an
+/// `order` on any other act is refused `order_not_applicable`. Each reaches an MCP caller as an
+/// `invalid_params` error carrying structured refusals in its `data`.
 ///
 /// FAILS IF either refusal is renamed, dropped, or stops reaching the MCP door as data.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -1081,6 +1105,21 @@ async fn a_list_stage_feeds_nothing_and_only_it_takes_an_order(pool: PgPool) {
         .expect_err("a page cannot feed a stage");
     assert!(
         refusal_reasons(&refused).contains(&"stage_not_pipeable".to_string()),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.code,
+        rmcp::model::ErrorCode::INVALID_PARAMS,
+        "a refused plan is invalid params: {refused:?}"
+    );
+
+    let mut selection_returned = unclaimed(ctx);
+    selection_returned["outcome"]["returns"] = json!([{"stage": "open", "with": []}]);
+    let refused = query(&svc, &parts, selection_returned)
+        .await
+        .expect_err("a combinator cannot be returned");
+    assert!(
+        refusal_reasons(&refused).contains(&"stage_not_returnable".to_string()),
         "{refused:?}"
     );
 

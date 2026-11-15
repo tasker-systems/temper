@@ -177,7 +177,8 @@ each item that can be claimed, and lists by it:
 ```
 
 - **Three operators, closed.** `{"op": "has_key"}` matches any item carrying the key.
-  `{"op": "contains", "values": [...]}` matches the stored value whole, and several values OR.
+  `{"op": "contains", "values": [...]}` tests containment against the whole stored value (a
+  scalar probe also matches an array holding it), and several values OR.
   `{"op": "compare", "direction": "gte", "value": ...}` (`gt`, `gte`, `lt`, `lte`) compares only
   values of the bound's JSON type. Several predicates AND.
 - **`with: ["open-meta"]`** puts each row's `open_meta` on its `resource`, so you see `claim_id`
@@ -214,32 +215,36 @@ a list stage bound on the difference:
 - **`difference` is ordered:** the first input minus the second. `intersect` and `union` come back
   as rows the same way.
 - **A stage takes one input per relation**, so the list stage holds either the context anchor or
-  the resource bound, never both. Here the selections carry the context.
+  the resource bound, never both (`duplicate_input_relation`). Here the selections carry the
+  context.
 - **A reclaim makes an item claimable again here:** writing `claim_id: null` removes the key, so
   `has_key` stops matching it.
 
 **Reading it as a work queue.**
 - **`"order": "asc"` is oldest first** by the item's `created`. The default is newest first, and
   ties break on id ascending in either direction.
-- **Page with `terms`:** `limit` (at most 50, and 50 when omitted) and `offset`. Each page is its
+- **Page with `terms`:** `limit` and `offset`. `limit` is 50 when omitted, and a larger value is
+  clamped to 50 (`terms_applied` shows what ran). Each page is its
   own statement, so a page can repeat or skip a row when items are added or claimed between reads.
 - **Read `total`** on the returned stage. It counts every match you can see, unpaged, on every page,
   `0` included. `disposition` describes the page, so a page past the end is `empty` beside a
   `total` above zero.
 - **A stale hit is harmless.** A listed item may already be claimed. The guarded claim decides, so
   a claimant that loses simply moves on.
-- **Under contention the losers retry systematically.** The order is total, so every agent reading
-  page 1 sees the same first row: one claim wins and the rest retry against the next. Taking a
-  random row from page 1 spreads claimants without any new mechanism. Which order your queue runs
-  in is your workflow's policy.
+- **Under contention the same row loses systematically.** The order is total, so every agent
+  reading page 1 sees the same first row: if all take it, one claim wins and the rest lose it.
+  What a loser does next is your workflow's choice, as is the queue's order. Taking a random row
+  from page 1 spreads claimants without any new mechanism.
 - **Re-read your candidates periodically** anyway, as the feed section says.
 
-**Two refusals you can hit.** A refused plan runs nothing and reports every refusal at once, each
-naming its stage and `reason`:
+**Refusals you can hit.** A refused plan runs nothing and reports every refusal at once, each with
+its `reason` and, if it has one, its stage:
 an `invalid_params` error whose `data.refusals` carries them.
 - **`stage_not_pipeable`:** a list stage was named as another stage's input. A page is a sample of
   the match set, so it feeds nothing. Pipe a `find-resources-with` selection instead, and return a
   list stage at the end.
+- **`stage_not_returnable`:** a `find-resources-with` or combinator stage was named in `returns`.
+  Bind a list stage on it and return that.
 - **`order_not_applicable`:** an `order` was sent to an act other than `list-resources-with`.
 
 ### Claim with `expect`
