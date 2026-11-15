@@ -337,7 +337,9 @@ fn slack_link_config() -> temper_services::config::SlackLinkConfig {
     }
 }
 
-/// Every door's secret set, so each door is refused by its gate, not as disabled.
+/// Every door's secret set, so each signature, cron and Slack link door is refused by its gate,
+/// not as disabled. The intake is the exception: no broker is configured in the tests, so it
+/// refuses as unattested whatever this sets.
 fn configure_doors(config: &mut temper_services::config::ApiConfig) {
     config.internal_reconcile_secret = Some("reconcile-secret".to_string());
     config.slack_mint_secret = Some("mint-secret".to_string());
@@ -2074,10 +2076,14 @@ async fn sweep_b_one_factor_at_a_time(pool: PgPool) {
         assert_eq!(answer.without_request_id(), preflight_constant(), "{what}");
     }
     assert_refusals(&rest, &u401());
-    let public = send_all(&app, public).await;
-    for (what, answer) in public.iter().filter(|(w, _)| w.starts_with("OPTIONS ")) {
+    let (public_options, public_rest): (Vec<_>, Vec<_>) = send_all(&app, public)
+        .await
+        .into_iter()
+        .partition(|(what, _)| what.starts_with("OPTIONS "));
+    for (what, answer) in &public_options {
         assert_eq!(answer.without_request_id(), preflight_constant(), "{what}");
     }
+    assert_public_answers_for_itself(&public_rest);
 
     // A foreign `Origin`: the refusal, and nothing a browser on that origin may read.
     let (gated, _) = sweep_b_probes(&Factor::Headers(vec![("origin", FOREIGN.to_string())]));

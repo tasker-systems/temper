@@ -114,13 +114,13 @@ The public routes are:
 
 - `GET /api/health`, which publishes the deployed crate version and commit;
 - the Slack link callback, `/api/auth/slack/callback`, a browser's redirect target from the identity
-  provider. It answers a link it cannot honour (unknown, expired, replayed, malformed, or on an
+  provider. It answers a link it cannot honour (unknown, expired, replayed, a `state` that is not a nonce, or on an
   instance with no Slack linking configured) with one page, so its page does not say how the
   instance is configured (its timing can; see the residues);
 - the discovery and OAuth doors the Node and MCP functions serve: `/.well-known/*`, `/oauth/*`,
   `/mcp` and `/mcp/*`. On the Vercel deployment each of those functions is also reachable at its
   own path under `/api/` (`/api/oauth/*`, `/api/auth/cli-callback`, `/api/auth/mcp-callback`,
-  `/api/mcp`), because `vercel.json` serves the function files before its rewrites. These
+  `/api/mcp`; the two API functions, `/api/axum` and `/api/internal`, too), because `vercel.json` serves the function files before its rewrites. These
   functions answer for themselves, not with this page's refusal: the MCP function answers a path
   it does not serve under its prefixes with its own `404`, so a caller can tell those prefixes are
   MCP's. Their answers are outside what this page holds the API to;
@@ -182,10 +182,12 @@ The residues, stated so nobody has to rediscover them:
   gives when its database cannot answer. Each such request costs the configured instance one
   database round trip; the route has no rate limit of its own.
 - **Which function serves a path.** On a split deployment the cron doors and `/internal/*` are
-  served by one function and everything else by another (`vercel.json`, which is public). The two
-  start cold separately and keep separate key stores, so first-request latency, or an outage one
-  function has noticed and the other has not, sorts paths by function. That is the routing the
-  public repository already states.
+  served by one function and everything else by another (`vercel.json`, which is public); each can
+  also be reached at its own path, `/api/internal` and `/api/axum`. The two start cold separately
+  and keep separate key stores, so first-request latency, or an outage one function has noticed
+  and the other has not, sorts paths by function. That is the routing the public repository
+  already states. To an unauthenticated caller both answer the same refusal; a validly signed
+  caller gets a 404 on an unmatched path from one and the refusal from the other.
 - **An authenticated caller can map routes.** A signed caller tells an unmatched path (404) from a
   route it is refused on, and a route's methods from its `405`. If the platform's routing matches
   paths without regard to case, a path that differs from a door only in case may also reach a
@@ -239,7 +241,7 @@ The residues, stated so nobody has to rediscover them:
 ## The error contract
 
 Every error response with a body carries `{"error":{"code":"…","message":"…","details"?:…}}`
-(the 405 and 415 below have none). The `code`
+(the 405 row and the undecodable-encoding 415 row below have none). The `code`
 is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFUSED`.
 
 | status | code | means | caller does | retry |

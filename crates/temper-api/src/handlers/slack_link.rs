@@ -124,8 +124,8 @@ enum CallbackOutcome {
     ConnectedPending { slug: String, reason: String },
 }
 
-/// The page for a link that cannot be honoured: unknown, expired, replayed, or on an instance with
-/// no account linking configured. One sentence for all of them, so the page tells nobody which.
+/// The page for a link that cannot be honoured: unknown, expired, replayed, a state that is not a
+/// minted nonce, or on an instance with no account linking configured. One sentence for all of them, so the page tells nobody which.
 const EXPIRED_LINK: &str =
     "That link has expired or was already used. Mention @temper again to get a fresh one.";
 
