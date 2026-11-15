@@ -163,7 +163,7 @@ The residues, stated so nobody has to rediscover them:
   instance waits for it, up to the fetch's timeout. That is the same on every door, but it is
   visible: a refusal that takes seconds says a refresh is running, never which path you hit. A
   refusal that waited may also close its connection when its request body was large and unread;
-  above the 64 KiB a signature door reads, that framing is the same on every door.
+  that framing is the same on every door.
 - **The cost of a hanging endpoint.** While the identity provider's key endpoint accepts
   connections and never answers, every refusal holds its connection, and on a serverless platform
   its billed function time, for about five seconds, then answers at once through the five-second
@@ -185,11 +185,14 @@ The residues, stated so nobody has to rediscover them:
 - **A signed request's body is read before routing, on every path.** A request carrying all three
   `X-Temper-*` signature headers has its body read, up to 64 KiB, before the server decides which
   door it reached, so a declared body that never arrives waits on every path alike, and
-  `Expect: 100-continue` is answered `100 Continue` on every path alike. Over 64 KiB, or
-  unreadable, it is the refusal on every path, the public routes included. There is no deadline on
-  that read: a caller who never sends the body holds its own connection, as it already could at a
-  signature door. A platform or proxy in front that buffers bodies or answers `Expect` itself
-  changes what the caller sees, the same way on every path.
+  `Expect: 100-continue` is answered `100 Continue` on every path alike. Over 64 KiB, unreadable,
+  or not all in within ten seconds of the headers, it is the refusal on every path, the public
+  routes and the routes that take larger bodies included, so a request carrying those headers
+  cannot send more than 64 KiB anywhere. A declared length over the cap is refused without
+  reading the body, so without `100 Continue`. The 64 KiB counts the bytes on the wire; a
+  signature door then checks the decompressed body against the same limit. A platform or proxy in
+  front that buffers bodies or answers `Expect` itself changes what the caller sees, the same way
+  on every path.
 - **Timing between doors.** Outside the refresh, the work before a refusal differs by door (a
   signature is checked against its body, a bearer against a key), and no attempt is made to
   equalise that.

@@ -20,7 +20,8 @@
 //!    there and nowhere else, the read itself told a prober which paths are doors (a declared
 //!    `Content-Length` with no body stalled only there, and `Expect: 100-continue` got its `100`
 //!    only there). Read here, every path waits alike and continues alike for the same request.
-//!    Over the cap, or unreadable, it is the uniform refusal (`hmac_body`) on every path alike.
+//!    Over the cap, unreadable, or not in by [`SIGNED_BODY_DEADLINE`], it is the uniform refusal
+//!    (`hmac_body`) on every path alike.
 //! 3. Answers a CORS preflight from an admitted origin, identically on every path, with the
 //!    security headers the per-endpoint layers would have added. Every other `OPTIONS` is routed
 //!    like any other method, so it meets the route's own gate.
@@ -157,9 +158,7 @@ impl AnonymousSurface {
                 for (name, value) in cors.headers() {
                     refusal.headers_mut().append(name, value.clone());
                 }
-                return self
-                    .finish_refusal(refusal, &id, entered, was_failing)
-                    .await;
+                return self.finish_answer(refusal, &id, entered, was_failing).await;
             }
         };
 
@@ -202,13 +201,13 @@ impl AnonymousSurface {
         } else {
             self.actual.clone().oneshot(request).await
         };
-        self.finish_refusal(response, &id, entered, was_failing)
+        self.finish_answer(response, &id, entered, was_failing)
             .await
     }
 
-    /// Every answer's tail: a pre-identity refusal joins the key store's refresh, is logged, and is
+    /// Every answer's tail, routed or refused before routing: a pre-identity refusal joins the key store's refresh, is logged, and is
     /// swapped while the store is failing; then [`finish`].
-    async fn finish_refusal(
+    async fn finish_answer(
         &self,
         mut response: Response,
         id: &RequestId,
@@ -245,6 +244,15 @@ impl AnonymousSurface {
     }
 }
 
+/// How long a signed request's body may take to arrive once its headers have.
+///
+/// Without one, a caller that sends the signature headers and then drips its body a byte at a
+/// time holds a task and up to [`MAX_BODY_BYTES`] for as long as it likes, and since the read now
+/// happens on every path it could do so on every path. A real signer sends a body under a kilobyte
+/// in one write, so ten seconds is far past any honest delivery. The same deadline on every path,
+/// from the same point, keeps the wait equal: an expired read is the same refusal everywhere.
+const SIGNED_BODY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Whether a request carries all three signature headers. Presence only: whether they parse is the
 /// gate's question, and a gate is not reached before routing.
 fn carries_signature(headers: &HeaderMap) -> bool {
@@ -259,7 +267,12 @@ fn carries_signature(headers: &HeaderMap) -> bool {
 ///
 /// The request is the only input, never its path, so every path waits for the same body and sends
 /// `100 Continue` for the same request. A declared length over the cap is refused without reading
-/// it; a body that turns out larger, or cannot be read, is refused when it does. The refusal hands
+/// it (and so without `100 Continue`); a body that turns out larger, cannot be read, or has not
+/// arrived by [`SIGNED_BODY_DEADLINE`] is refused when that is known.
+///
+/// The cap counts the bytes on the wire. Request decompression runs inside routing, so a
+/// compressed body is buffered compressed, and a signature gate's own read, after decompression,
+/// counts the decompressed bytes against the same constant. The refusal hands
 /// back the request's headers, which the caller needs for its CORS answer.
 ///
 /// It adds no read a caller could not already force: any signed request reached a door's gate and
@@ -278,9 +291,14 @@ async fn equalise_signed_body(request: Request) -> Result<Request, HeaderMap> {
     if declared_over {
         return Err(parts.headers);
     }
-    match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
-        Ok(bytes) => Ok(Request::from_parts(parts, Body::from(bytes))),
-        Err(_) => Err(parts.headers),
+    match tokio::time::timeout(
+        SIGNED_BODY_DEADLINE,
+        axum::body::to_bytes(body, MAX_BODY_BYTES),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) => Ok(Request::from_parts(parts, Body::from(bytes))),
+        Ok(Err(_)) | Err(_) => Err(parts.headers),
     }
 }
 

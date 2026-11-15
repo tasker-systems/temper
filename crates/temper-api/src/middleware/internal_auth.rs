@@ -110,9 +110,11 @@ async fn buffer_signed_request(request: Request<Body>, label: &str) -> Result<Bu
         return Err(ApiError::Unauthenticated(UnauthCause::HmacMissingHeaders));
     }
 
-    // Already in memory for every request that reached a door signed: the outer service buffered it
-    // before routing (`anonymous_surface`), so this read never touches the socket. It stays a
-    // bounded read, under the same cap, so a gate reached any other way still bounds what it reads.
+    // For a request that came through the outer service signed, the bytes are already in memory: it
+    // buffered them before routing (`anonymous_surface`), so this read does not wait on the socket.
+    // They are the bytes after request decompression, which runs inside routing, so for a
+    // compressed body the signature is checked over the decompressed bytes and this cap counts
+    // those. It stays a bounded read, so a gate reached any other way still bounds what it reads.
     let body = axum::body::to_bytes(body, MAX_BODY_BYTES)
         .await
         .map_err(|_| {
@@ -134,7 +136,7 @@ async fn buffer_signed_request(request: Request<Body>, label: &str) -> Result<Bu
 }
 
 /// The shared gate for the signature surfaces that guard a *report*: a v2 signature over the exact
-/// bytes received, for this route, accepted once.
+/// body bytes (after any request decompression), for this route, accepted once.
 ///
 /// `secret` is passed in rather than read from state because these gates use one scheme with
 /// different keys — the co-deployed AS (`INTERNAL_RECONCILE_SECRET`) and the mention agent's

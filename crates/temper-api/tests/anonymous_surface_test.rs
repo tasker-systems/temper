@@ -1136,7 +1136,7 @@ async fn the_recovering_request_answers_unavailable_on_a_bearer_door(pool: PgPoo
 
 /// The representative paths that are not public. A public route answers by its own rules, and an
 /// unmatched one is still the 404 fallback until the declared fallback lands, so the unsigned arms
-/// below assert timing on every non-public path and the status only where a gate refuses.
+/// below assert timing on every path and the status only where a gate refuses.
 fn non_public_paths() -> Vec<String> {
     representative_paths()
         .into_iter()
@@ -1156,78 +1156,164 @@ fn signature_lines() -> String {
         .collect()
 }
 
+/// Two of the three signature headers: not a signed request, so never read early.
+fn two_of_three_lines() -> String {
+    bad_signature()
+        .into_iter()
+        .skip(1)
+        .map(|(n, v)| format!("{n}: {v}\r\n"))
+        .collect()
+}
+
+/// How long an answer that is not waiting on a body may take. Generous: every refusal passes the
+/// key store's refresh check, and a loaded runner is slow.
+const AT_ONCE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How long a waiting request is watched before it is called waiting.
+const WAITING: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Send a raw request and read until the server closes, reading concurrently with the write so an
+/// early answer is never lost to a reset when the server closes on unread bytes.
+async fn raw_exchange(app: &common::TestApp, head: String, body: Vec<u8>) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let stream = tokio::net::TcpStream::connect(app.addr)
+        .await
+        .expect("connect");
+    let (mut read, mut write) = stream.into_split();
+    let reader = tokio::spawn(async move {
+        let mut raw = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), read.read(&mut buf)).await
+            {
+                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                Ok(Ok(n)) => raw.extend_from_slice(&buf[..n]),
+            }
+        }
+        raw
+    });
+    let _ = write.write_all(head.as_bytes()).await;
+    let _ = write.write_all(&body).await;
+    String::from_utf8_lossy(&reader.await.expect("reader")).into_owned()
+}
+
 // FAILS IF: a signed request's body is read on some paths and not others. A declared body that
 // never arrives would then stall only where a signature gate reads it, which names the doors.
-// Unsigned, nothing reads it before refusing, so every path answers at once.
+// Unsigned, or with only two of the three headers, nothing reads it before refusing, so every path
+// answers at once.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn signed_requests_wait_alike(pool: PgPool) {
     let app = allowlisted_app(&pool).await;
-    let bound = std::time::Duration::from_millis(500);
-    for path in non_public_paths() {
+    for path in representative_paths() {
         let signed = format!(
             "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{}\r\n",
             signature_lines()
         );
         assert_eq!(
-            first_status_line(&app, &signed, bound).await,
+            first_status_line(&app, &signed, WAITING).await,
             None,
             "{path}: a signed request with a declared body must wait for it"
         );
-        let unsigned = format!("POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n\r\n");
-        let line = first_status_line(&app, &unsigned, bound).await;
-        assert!(
-            line.is_some(),
-            "{path}: an unsigned request must answer at once"
+        for (what, lines) in [
+            ("unsigned", String::new()),
+            ("two of three", two_of_three_lines()),
+        ] {
+            let head =
+                format!("POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{lines}\r\n");
+            let line = first_status_line(&app, &head, AT_ONCE).await;
+            assert!(line.is_some(), "{path} {what}: must answer at once");
+            if non_public_paths().contains(&path) && !is_unmatched(&path) {
+                assert_eq!(
+                    line.as_deref(),
+                    Some("HTTP/1.1 401 Unauthorized"),
+                    "{path} {what}"
+                );
+            }
+        }
+    }
+}
+
+// FAILS IF: a signed body that never arrives is waited on forever, or the deadline answers with
+// anything but the uniform refusal. Without it, a caller dripping a signed body holds a connection
+// on every path for as long as it likes.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_signed_body_that_never_arrives_is_refused_at_the_deadline(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    for path in ["/api/profile", "/internal/saml/reconcile", "/api/health"] {
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{}\r\n",
+            signature_lines()
         );
-        if !is_unmatched(&path) {
+        let line = first_status_line(&app, &head, std::time::Duration::from_secs(15)).await;
+        assert_eq!(line.as_deref(), Some("HTTP/1.1 401 Unauthorized"), "{path}");
+    }
+}
+
+// FAILS IF: `Expect: 100-continue` on a signed request draws `100 Continue` on some paths and the
+// refusal on others: the first line would name the paths whose gate reads the body. A declared
+// length over the cap is refused before any `100`, on every path.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn signed_expect_continue_is_uniform(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    let wait = std::time::Duration::from_millis(1500);
+    for (length, expected) in [
+        (10, "HTTP/1.1 100 Continue"),
+        (70 * 1024, "HTTP/1.1 401 Unauthorized"),
+    ] {
+        for path in representative_paths() {
+            let head = format!(
+                "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: {length}\r\n\
+                 expect: 100-continue\r\n{}\r\n",
+                signature_lines()
+            );
             assert_eq!(
-                line.as_deref(),
-                Some("HTTP/1.1 401 Unauthorized"),
-                "{path}: unsigned"
+                first_status_line(&app, &head, wait).await.as_deref(),
+                Some(expected),
+                "{path}, content-length {length}"
             );
         }
     }
 }
 
-// FAILS IF: `Expect: 100-continue` on a signed request draws `100 Continue` on some paths and the
-// refusal on others: the first line would name the paths whose gate reads the body.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn signed_expect_continue_is_uniform(pool: PgPool) {
-    let app = allowlisted_app(&pool).await;
-    let wait = std::time::Duration::from_millis(1500);
-    let mut lines = BTreeMap::new();
-    for path in non_public_paths() {
-        let head = format!(
-            "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 10\r\nexpect: 100-continue\r\n{}\r\n",
-            signature_lines()
-        );
-        lines.insert(path, first_status_line(&app, &head, wait).await);
-    }
-    let first = lines.values().next().cloned().flatten();
-    assert_eq!(first.as_deref(), Some("HTTP/1.1 100 Continue"));
-    for (path, line) in &lines {
-        assert_eq!(line, &lines.values().next().cloned().unwrap(), "{path}");
-    }
-}
-
-// FAILS IF: a signed body over the cap is refused only where a gate reads it, or is refused with
-// anything but the uniform 401, or a public route lets it through. Declared and chunked alike.
+// FAILS IF: a signed body over the cap is refused only where a gate reads it, or with anything but
+// the uniform 401, or a public route lets it through; declared, chunked, or with an `Origin`, whose
+// CORS headers must be those a routed refusal carries for the same origin.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_70_kib_signed_body_is_u401_everywhere(pool: PgPool) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let app = allowlisted_app(&pool).await;
     let body = "x".repeat(70 * 1024);
-    let mut answers = Vec::new();
-    for path in representative_paths() {
-        let mut declared = app.client.post(app.url(&path)).body(body.clone());
-        for (n, v) in bad_signature() {
-            declared = declared.header(n, v);
+    for origin in [None, Some(ORIGIN), Some("https://foreign.example")] {
+        let mut answers = Vec::new();
+        let routed = {
+            let mut headers = Vec::new();
+            if let Some(origin) = origin {
+                headers.push(("origin", origin.to_string()));
+            }
+            send_owned(&app, Method::POST, "/api/profile", &headers).await
+        };
+        for path in representative_paths() {
+            let mut declared = app.client.post(app.url(&path)).body(body.clone());
+            for (n, v) in bad_signature() {
+                declared = declared.header(n, v);
+            }
+            if let Some(origin) = origin {
+                declared = declared.header("origin", origin);
+            }
+            let answer = answer_of(declared.send().await.expect("sent")).await;
+            assert_eq!(
+                cors_headers(&answer),
+                cors_headers(&routed),
+                "{path} {origin:?}: the CORS headers of a routed refusal"
+            );
+            answers.push((format!("{path} {origin:?}"), answer));
         }
-        answers.push((
-            path.clone(),
-            answer_of(declared.send().await.expect("sent")).await,
-        ));
+        // Refused on its declared length, so its body is never read and the connection closes:
+        // framed alike on every path, then left out of the comparison with the constant.
+        assert_connection_alike_then_drop(&mut answers);
+        assert_refusals(&answers, &u401());
+    }
 
+    for path in representative_paths() {
         // Chunked: no declared length, so the cap is met while reading.
         let head = format!(
             "POST {path} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\
@@ -1235,27 +1321,64 @@ async fn a_70_kib_signed_body_is_u401_everywhere(pool: PgPool) {
             signature_lines(),
             body.len()
         );
-        let mut stream = tokio::net::TcpStream::connect(app.addr)
-            .await
-            .expect("connect");
-        stream.write_all(head.as_bytes()).await.expect("write head");
-        // The server may answer and close before the whole chunk is written.
-        let _ = stream.write_all(body.as_bytes()).await;
-        let _ = stream.write_all(b"\r\n0\r\n\r\n").await;
-        let mut raw = Vec::new();
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            stream.read_to_end(&mut raw),
-        )
-        .await;
-        let raw = String::from_utf8_lossy(&raw);
+        let mut chunk = body.clone().into_bytes();
+        chunk.extend_from_slice(b"\r\n0\r\n\r\n");
+        let raw = raw_exchange(&app, head, chunk).await;
         assert!(
             raw.starts_with("HTTP/1.1 401 Unauthorized"),
             "{path} chunked: {raw}"
         );
         assert!(raw.ends_with(&u401().body), "{path} chunked: {raw}");
     }
-    assert_refusals(&answers, &u401());
+}
+
+// FAILS IF: an oversize signed request, refused before routing, is not swapped to "unavailable"
+// while the key store is failing, as every other pre-identity refusal is.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_oversize_signed_body_is_unavailable_while_the_store_fails(pool: PgPool) {
+    let app = common::setup_test_app_with_state(pool.clone(), |state| {
+        state.jwks_store = std::sync::Arc::new(temper_services::state::JwksKeyStore::new(
+            "http://127.0.0.1:1/.well-known/jwks.json".to_string(),
+        ));
+    })
+    .await;
+    let primed = send(
+        &app,
+        Method::GET,
+        "/api/profile",
+        &[("authorization", "Bearer garbage")],
+    )
+    .await;
+    let mut answers = Vec::new();
+    for path in ["/api/profile", "/internal/saml/reconcile", "/api/health"] {
+        let mut request = app.client.post(app.url(path)).body("x".repeat(70 * 1024));
+        for (n, v) in bad_signature() {
+            request = request.header(n, v);
+        }
+        answers.push((
+            path.to_string(),
+            answer_of(request.send().await.expect("sent")).await,
+        ));
+    }
+    assert_connection_alike_then_drop(&mut answers);
+    answers.push(("the priming request".to_string(), primed));
+    assert_refusals(&answers, &unavailable());
+}
+
+/// A refusal that leaves a body unread closes its connection. That framing must be the same on
+/// every path in `answers`; it is then removed so the rest compares with the small-body constant.
+fn assert_connection_alike_then_drop(answers: &mut [(String, Answer)]) {
+    let framing: Vec<_> = answers
+        .iter()
+        .map(|(what, a)| (what.clone(), a.header("connection").map(str::to_owned)))
+        .collect();
+    assert!(
+        framing.windows(2).all(|w| w[0].1 == w[1].1),
+        "framed alike on every path: {framing:?}"
+    );
+    for (_, answer) in answers.iter_mut() {
+        answer.headers.remove("connection");
+    }
 }
 
 /// A resolve request signed with the test app's reconcile secret.
@@ -1286,8 +1409,9 @@ fn signed_resolve() -> (String, Vec<(&'static str, String)>) {
     (body, headers)
 }
 
-// FAILS IF: the equaliser loses or alters a signed body on its way to the gate, or an admitted
-// caller that asks to continue is not continued. Either breaks every real signer.
+// FAILS IF: the equaliser loses or alters a signed body on its way to the gate, declared or
+// chunked, or an admitted caller that asks to continue is not continued. Any of these breaks every
+// real signer.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_signed_request_reaches_its_handler_with_and_without_expect(pool: PgPool) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1304,6 +1428,20 @@ async fn a_signed_request_reaches_its_handler_with_and_without_expect(pool: PgPo
     let answer = answer_of(request.send().await.expect("sent")).await;
     assert_eq!(answer.status, 200, "{answer:?}");
     assert!(answer.body.contains("profile_id"), "{answer:?}");
+
+    let (body, headers) = signed_resolve();
+    let lines: String = headers
+        .iter()
+        .map(|(n, v)| format!("{n}: {v}\r\n"))
+        .collect();
+    let head = format!(
+        "POST /internal/principal/resolve HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\
+         transfer-encoding: chunked\r\n{lines}\r\n"
+    );
+    let chunked = format!("{:x}\r\n{body}\r\n0\r\n\r\n", body.len()).into_bytes();
+    let raw = raw_exchange(&app, head, chunked).await;
+    assert!(raw.contains("HTTP/1.1 200 OK"), "chunked: {raw}");
+    assert!(raw.contains("profile_id"), "chunked: {raw}");
 
     let (body, headers) = signed_resolve();
     let lines: String = headers
