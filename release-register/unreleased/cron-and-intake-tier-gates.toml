@@ -1,0 +1,46 @@
+title    = "The cron doors and the webhook intake are gated by tier layers, so nothing on their paths answers an unauthenticated caller before the gate"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "internal"]
+status   = "signal-only"
+body = '''
+What changed: the nine Vercel cron doors and the webhook intake checked their credential inside
+the handler, after axum had already run the method router and the extractors. So an
+unauthenticated caller got answers the gate never saw: 405 with the path's Allow for an
+unmounted method (PUT /api/embed/dispatch), the Query extractor's 400 text/plain for a malformed
+?shard= or ?cap=, the Bytes extractor's 400 for an intake body it could not buffer or decompress,
+and, at the intake, `100 Continue` to `Expect` and a stall on a declared body that never came,
+because the handler read the body before refusing.
+
+Both gates are now tier layers in the route table, which wrap the method router's fallback and
+every extractor:
+- Tier::CronSecret (middleware::cron_secret): the host pin, then EMBED_DISPATCH_SECRET. On a host
+  other than the deployment's cron host it answers the uniform pre-identity 401 (it answered 404
+  "not found"), holding the secret or not. The handlers no longer check anything themselves.
+- Tier::BrokerAttested (middleware::broker_attested): the broker attestation, verified from the
+  Authorization header alone, then the connection it names; the handler reads the body only after
+  admission. CredentialBroker::verify_inbound no longer takes the body (InboundRequest lost `body`,
+  VerifiedInbound lost `payload`, which nothing read). The intake's precondition refusal is now the
+  route table's layer (Preconditions::Refused) rather than a call in the handler, and the
+  InHandler designation is gone. Tier::SelfGated now holds only the Slack link callback.
+
+Who observes it: an unauthenticated caller of a cron door or the intake gets the uniform 401 for
+every method, query and body. Vercel Cron (the pinned host, the secret, GET or POST) and Vercel
+Connect (an attested POST) are unchanged.
+
+This supersedes one sentence of precondition-refusal-after-authentication, which is in this
+window, so the release carries only this behaviour. Its "on the public host the cron host pin's
+404 is again the answer to a header-bearing request" no longer holds: the cron doors are now the
+CronSecret tier, and a cron door on the public host gets the uniform 401, header or not.
+Everything else in that entry stands.
+
+Why behavioral: no shape moved and openapi.json is unchanged (none of these doors is documented).
+Review-owned.
+
+Witnesses: crates/temper-api/tests/anonymous_surface_test.rs (pre_identity_refusals_are_u401 now
+includes the unmounted methods, malformed queries and the corrupt intake body;
+the_cron_host_pin_is_the_uniform_refusal; intake_refuses_before_the_body on a raw socket),
+every_cron_door_is_the_uniform_401_off_the_pinned_host in cron_host_pin_test.rs, the route-table
+tests self_gated_is_only_the_slack_callback and preconditions_refused_exactly_on_the_layer_gated_tiers,
+and .github/scripts/audit-route-auth.sh with its bite tests. Release relevance: signal-only.
+'''

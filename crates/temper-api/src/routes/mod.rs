@@ -33,7 +33,9 @@ use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::middleware::{auth, internal_auth, preconditions, relay_trust, system_access};
+use crate::middleware::{
+    auth, broker_attested, cron_secret, internal_auth, preconditions, relay_trust, system_access,
+};
 use crate::openapi::ApiDoc;
 use admin::admin_routes;
 use auth_only::{auth_only_routes, auth_only_status_routes};
@@ -67,9 +69,18 @@ enum Tier {
     /// Rate limit inside a shared-secret HMAC signature gate; the kind names WHICH
     /// signature — three groups, three secrets, one scheme.
     InternalHmac(SignatureKind),
-    /// No middleware: the gate is inside the handler (a self-checked secret, a JWKS
-    /// attestation, or a PKCE callback).
+    /// No middleware: the gate is inside the handler. Only the Slack link callback, a PKCE redirect
+    /// target whose authentication is the code exchange plus the burned state nonce, and which is a
+    /// designated public route (`tests::self_gated_is_only_the_slack_callback`).
     SelfGated,
+    /// The Vercel cron doors' gate as a layer: the host pin, then `EMBED_DISPATCH_SECRET`
+    /// (`middleware::cron_secret`). A layer, so it runs before the method router's fallback and
+    /// every extractor on the doors.
+    CronSecret,
+    /// The webhook intake's gate as a layer: the broker attestation, verified from headers alone,
+    /// and the connection it names (`middleware::broker_attested`). A layer, so it runs before the
+    /// body is read.
+    BrokerAttested,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -92,12 +103,9 @@ enum SignatureKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Preconditions {
     /// The refusal layer is inside every gate of the group's tier stack, so it runs after all of
-    /// them (only a group's own `DefaultBodyLimit`, which gates nothing, sits inside it). Legal only on a tier that has a layer gate: [`Tier::AuthOnly`],
-    /// [`Tier::HumanAuthOnly`], [`Tier::Gated`], [`Tier::HumanGated`], [`Tier::InternalHmac`].
+    /// them (only a group's own `DefaultBodyLimit`, which gates nothing, sits inside it). Legal only
+    /// on a tier that has a layer gate: every tier but [`Tier::Public`] and [`Tier::SelfGated`].
     Refused,
-    /// The tier has no layer gate; the handler calls `preconditions::refuse_unhonoured` itself,
-    /// right after its own gate succeeds. For a self-gated door that takes writes.
-    InHandler,
     /// Not policed. The reason is the review record; the audit script asserts it textually.
     Exempt(&'static str),
 }
@@ -202,17 +210,18 @@ fn route_table() -> Vec<Group> {
         // The IdP's PKCE redirect target — carries no bearer and no signature by
         // design; its authentication is the code exchange plus the burned state nonce.
         Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("the IdP PKCE redirect target: GET only, and the IdP sends no precondition") },
-        // Vercel crons — each handler checks EMBED_DISPATCH_SECRET itself, fail-closed
-        // when unset. Served by both builders so the internal function keeps its
-        // longer maxDuration for the same paths.
-        Group { key: "embed_internal_routes", tier: Tier::SelfGated, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition") },
-        // Vercel Connect's webhook intake — self-gated on the broker's RS256
-        // attestation (a third party's signature against a remote JWKS, not a shared
-        // secret), and create_app only: Connect forwards to the public host. The row's
+        // Vercel crons — the CronSecret tier pins the host and checks EMBED_DISPATCH_SECRET as a
+        // layer over the group, fail-closed when unset. Served by both builders so the internal
+        // function keeps its longer maxDuration for the same paths.
+        Group { key: "embed_internal_routes", tier: Tier::CronSecret, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition") },
+        // Vercel Connect's webhook intake — the BrokerAttested tier verifies the broker's RS256
+        // attestation (a third party's signature against a remote JWKS, not a shared secret)
+        // from its headers, as a layer, before the body is read. create_app only: Connect
+        // forwards to the public host. The row's
         // body_limit is None because the door sets its own 25 MiB
         // (GITHUB_MAX_WEBHOOK_BYTES) INSIDE the group fn — the table column is not the
         // whole truth for this one door; the limit is not config-derivable at the table.
-        Group { key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::InHandler },
+        Group { key: "webhook_intake_routes", tier: Tier::BrokerAttested, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },
     ]
 }
 
@@ -244,7 +253,7 @@ fn mount_group(group: &Group, state: &AppState) -> Router<AppState> {
         Preconditions::Refused => {
             router.layer(from_fn(preconditions::refuse_unhonoured_preconditions))
         }
-        Preconditions::InHandler | Preconditions::Exempt(_) => router,
+        Preconditions::Exempt(_) => router,
     };
     apply_tier(router, group.tier, state)
 }
@@ -319,6 +328,16 @@ fn apply_tier(router: Router<AppState>, tier: Tier, state: &AppState) -> Router<
                 )),
             }
         }
+        // The cron doors' gate and the intake's gate, each one layer. Their refusals are the
+        // uniform pre-identity refusal; see the middleware modules.
+        Tier::CronSecret => router.layer(from_fn_with_state(
+            state.clone(),
+            cron_secret::require_cron_secret,
+        )),
+        Tier::BrokerAttested => router.layer(from_fn_with_state(
+            state.clone(),
+            broker_attested::require_broker_attestation,
+        )),
     }
 }
 
@@ -497,8 +516,13 @@ mod tests {
                 | Tier::Gated
                 | Tier::HumanGated
                 | Tier::InternalHmac(_)
+                | Tier::CronSecret
+                | Tier::BrokerAttested
         )
     }
+
+    /// The layer-gated groups that are nonetheless not policed, each for its row's reason.
+    const LAYER_GATED_EXEMPT: [&str; 1] = ["embed_internal_routes"];
 
     fn keys_where(pick: impl Fn(Preconditions) -> bool) -> BTreeSet<&'static str> {
         route_table()
@@ -509,20 +533,45 @@ mod tests {
     }
 
     // FAILS IF: a `Refused` row sits on a tier with no layer gate (a self-gated door or the public
-    // route would answer an anonymous caller 400 instead of its own answer), or a gated row is not
-    // `Refused` (its writes would drop a client's precondition unrefused).
+    // route would answer an anonymous caller 400 instead of its own answer), or a layer-gated row
+    // outside the reviewed exemptions is not `Refused` (its writes would drop a client's
+    // precondition unrefused).
     #[test]
     fn preconditions_refused_exactly_on_the_layer_gated_tiers() {
         for group in route_table() {
+            let expected = has_layer_gate(group.tier) && !LAYER_GATED_EXEMPT.contains(&group.key);
             assert_eq!(
                 group.preconditions == Preconditions::Refused,
-                has_layer_gate(group.tier),
+                expected,
                 "{}: tier {:?} is designated {:?}",
                 group.key,
                 group.tier,
                 group.preconditions
             );
         }
+    }
+
+    // FAILS IF: a group other than the Slack link callback is self-gated again. A self-gated gate
+    // runs inside the handler, after the method router and the extractors have already answered an
+    // unauthenticated caller (405 with `Allow`, a `Query` or `Bytes` 400), which is why the cron
+    // doors and the intake are tier layers. The callback is a designated public route.
+    #[test]
+    fn self_gated_is_only_the_slack_callback() {
+        let self_gated: BTreeSet<&str> = route_table()
+            .into_iter()
+            .filter(|g| g.tier == Tier::SelfGated)
+            .map(|g| g.key)
+            .collect();
+        assert_eq!(self_gated, BTreeSet::from(["slack_link_public_routes"]));
+        let tiered = |key: &str| {
+            route_table()
+                .into_iter()
+                .find(|g| g.key == key)
+                .unwrap()
+                .tier
+        };
+        assert_eq!(tiered("embed_internal_routes"), Tier::CronSecret);
+        assert_eq!(tiered("webhook_intake_routes"), Tier::BrokerAttested);
     }
 
     // FAILS IF: a group is exempted, or moved into the handler, without this list (the reviewed
@@ -536,10 +585,6 @@ mod tests {
                 "public_routes",
                 "slack_link_public_routes"
             ]),
-        );
-        assert_eq!(
-            keys_where(|p| p == Preconditions::InHandler),
-            BTreeSet::from(["webhook_intake_routes"]),
         );
         for group in route_table() {
             if let Preconditions::Exempt(reason) = group.preconditions {
@@ -592,9 +637,9 @@ mod tests {
             .collect()
     }
 
-    // FAILS IF: the undocumented groups that are not `Refused` gain a method or a route without
-    // review: the Slack callback's exemption is for one GET, and the intake's in-handler check is
-    // in one handler, so a second route or a write on either would take a precondition unrefused.
+    // FAILS IF: the undocumented group that is not `Refused` and has no layer gate gains a method
+    // or a route without review: the Slack callback's exemption is for one GET, so a second route
+    // or a write would take a precondition unrefused.
     // (The cron group is pinned to its nine paths in `embed_internal`'s own tests.) The literals
     // name no full mount, so `check-openapi-routes.sh` does not read this test as one.
     #[test]
@@ -602,14 +647,6 @@ mod tests {
         let callback = route_code(include_str!("slack_link_public.rs"));
         assert_eq!(mounted_methods(&callback), BTreeSet::from(["get("]));
         assert_eq!(callback.matches("route(").count(), 1);
-        let intake = route_code(include_str!("webhook_intake.rs"));
-        assert_eq!(mounted_methods(&intake), BTreeSet::from(["post("]));
-        assert_eq!(intake.matches("route(").count(), 1);
-        assert!(
-            include_str!("../handlers/webhook_intake.rs")
-                .contains("preconditions::refuse_unhonoured(&method, &headers)?;"),
-            "the intake handler must call the precondition check"
-        );
     }
 
     /// Every `(METHOD, route template)` a `Refused`, documented group mounts, read from the group's

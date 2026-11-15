@@ -1,11 +1,13 @@
 #![cfg(feature = "test-db")]
-//! The self-gated cron doors answer only on the deployment's own host.
+//! The cron doors answer only on the deployment's own host.
 //!
 //! On Vercel, the nine routes in `routes::embed_internal` are reachable through the public
 //! production alias and through the UI's `/api` proxy, as well as through the generated
 //! deployment URL that Vercel Cron calls. `ApiConfig::cron_host` pins them to the last of those.
-//! These tests drive every door through the real router: a request on any other host is a 404
-//! before the bearer is read, and a request on the pinned host still meets the bearer.
+//! These tests drive every door through the real router: a request on any other host is refused
+//! before the bearer is read, with the uniform pre-identity refusal (the same bytes as a missing or
+//! wrong bearer, so the pin tells a caller nothing the bearer does not), and a request on the
+//! pinned host still meets the bearer.
 
 mod common;
 
@@ -35,7 +37,12 @@ fn cron_doors() -> Vec<&'static str> {
 const PINNED: &str = "temper-cloud-a1b2c3d4e-team.vercel.app";
 const SECRET: &str = "cron-host-pin-test-secret-0123456789";
 
-async fn status(app: &common::TestApp, path: &str, host: &str, bearer: Option<&str>) -> StatusCode {
+async fn answer(
+    app: &common::TestApp,
+    path: &str,
+    host: &str,
+    bearer: Option<&str>,
+) -> (StatusCode, String) {
     let mut req = app
         .client
         .get(app.url(path))
@@ -43,11 +50,17 @@ async fn status(app: &common::TestApp, path: &str, host: &str, bearer: Option<&s
     if let Some(b) = bearer {
         req = req.bearer_auth(b);
     }
-    req.send().await.expect("request").status()
+    let response = req.send().await.expect("request");
+    let status = response.status();
+    (status, response.text().await.expect("body"))
+}
+
+async fn status(app: &common::TestApp, path: &str, host: &str, bearer: Option<&str>) -> StatusCode {
+    answer(app, path, host, bearer).await.0
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn every_cron_door_is_a_404_off_the_pinned_host(pool: PgPool) {
+async fn every_cron_door_is_the_uniform_401_off_the_pinned_host(pool: PgPool) {
     let app = common::setup_test_app_with_config(pool, |c| {
         c.cron_host = Some(PINNED.to_string());
         c.embed_dispatch_secret = Some(SECRET.to_string());
@@ -56,10 +69,16 @@ async fn every_cron_door_is_a_404_off_the_pinned_host(pool: PgPool) {
 
     for door in cron_doors() {
         for public in ["temper-cloud.vercel.app", "temperkb.io"] {
+            let (off_host, off_body) = answer(&app, door, public, Some(SECRET)).await;
             assert_eq!(
-                status(&app, door, public, Some(SECRET)).await,
-                StatusCode::NOT_FOUND,
-                "{door} on {public}, even holding the secret, must not exist"
+                off_host,
+                StatusCode::UNAUTHORIZED,
+                "{door} on {public}, even holding the secret, is refused"
+            );
+            let (_, no_bearer_body) = answer(&app, door, PINNED, None).await;
+            assert_eq!(
+                off_body, no_bearer_body,
+                "{door}: the pin's refusal is byte-identical to the missing bearer's"
             );
         }
         // On the pinned host the bearer is still the second check.

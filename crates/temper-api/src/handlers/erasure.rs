@@ -19,11 +19,10 @@
 //!
 //! **The drain is the fence's only driver.** Same internal-cron posture as
 //! `/api/embed/dispatch`: bearer-gated by the shared `EMBED_DISPATCH_SECRET` (no new secret —
-//! the fail-closed-variable hazard `require_dispatch_secret` exists to avoid), GET+POST on one
+//! the fail-closed-variable hazard the `CronSecret` tier exists to avoid), GET+POST on one
 //! handler, excluded from the contract entirely.
 
 use axum::extract::{Path, State};
-use axum::http::HeaderMap;
 use axum::Json;
 use serde::Serialize;
 
@@ -269,12 +268,7 @@ pub struct FenceDrainResponse {
 /// store-configured precondition, and a deployment that HAD a provider and lost its
 /// configuration must go LOUD about its stranded deletes, never quiet. Only the provider CALLS
 /// (claim → delete → resolve) require the store.
-pub async fn drain(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Json<FenceDrainResponse>> {
-    crate::handlers::embed::require_dispatch_secret(&state, &headers, "erasure delete drain")?;
-
+pub async fn drain(State(state): State<AppState>) -> ApiResult<Json<FenceDrainResponse>> {
     let (drain, store_configured) = match state.blob_store.as_deref() {
         Some(store) => {
             let summary = erasure_fence_service::drain(&state.pool, store).await;

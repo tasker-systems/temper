@@ -1,8 +1,9 @@
-//! Internal cron-invoked endpoints — self-gated, NOT `require_auth`. Called by Vercel crons on a
-//! schedule; each handler calls `embed::require_dispatch_secret` itself, so no auth-middleware
-//! layer is applied. That gate first pins the request to the deployment's own host on Vercel
-//! (`ApiConfig::cron_host`, a 404 on any other host), then checks the EMBED_DISPATCH_SECRET bearer
-//! (fail-closed when unset). Excluded from the OpenAPI contract entirely.
+//! Internal cron-invoked endpoints — NOT `require_auth`. Called by Vercel crons on a schedule, and
+//! gated as a group by the `CronSecret` tier (`middleware::cron_secret`), a layer that runs before
+//! routing detail (the method router, every extractor). That gate first pins the request to the
+//! deployment's own host on Vercel (`ApiConfig::cron_host`), then checks the EMBED_DISPATCH_SECRET
+//! bearer (fail-closed when unset); every refusal is the uniform pre-identity refusal. Excluded
+//! from the OpenAPI contract entirely.
 //!
 //! - `/api/embed/dispatch` — the async-embed drain (issue #299).
 //! - `/api/embed/warm` — cold-start warmup for server-side query embedding (issue #427).
@@ -35,7 +36,7 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
         // model load that blows the query-embed budget. Same self-gated posture as `dispatch`.
         .route("/api/embed/warm", get(handlers::embed::warm))
         // Hourly retention sweep for Slack link intents (T4/Task 8). Same self-gated posture as
-        // `dispatch`/`warm` (`require_dispatch_secret`, reusing EMBED_DISPATCH_SECRET) and the same
+        // `dispatch`/`warm` (the `CronSecret` tier, reusing EMBED_DISPATCH_SECRET) and the same
         // GET+POST-on-one-handler shape.
         .route(
             "/api/slack/intents/reap",
@@ -58,7 +59,7 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
         // a-de-provisioning-that-did-not-happen-is-visible-to-an-operator). Reads the fact
         // temper-cloud records when a fail-open internal call does not reach us and turns it into a
         // signal. It belongs in this group for the group's posture rather than its duration — the
-        // check is one indexed read — and specifically because `require_dispatch_secret` is already
+        // check is one indexed read — and specifically because the `CronSecret` tier is already
         // set on every deployment that runs the other crons, so this one cannot go dark for want of
         // a variable nobody knew to set. Same GET+POST-on-one-handler shape as `dispatch`/`warm`.
         .route(
@@ -87,7 +88,7 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
         // The sensitivity sweep's tick (sensitivity-sweep spec D8, build order 3a PR D): claims one
         // surface's work order and scans it inside its time budget. Same self-gated posture and
         // GET+POST shape as `dispatch`/`warm`. It belongs in this group for the 300s ceiling, and
-        // because `require_dispatch_secret` is already set wherever the other crons run.
+        // because the `CronSecret` tier is already set wherever the other crons run.
         .route(
             "/api/sensitivity/sweep",
             get(handlers::sensitivity_sweep::sweep).post(handlers::sensitivity_sweep::sweep),
@@ -126,7 +127,7 @@ mod tests {
 
     // FAILS IF: a cron door is mounted here with no Vercel cron calling it, or `vercel.json` gains a
     // cron whose door is not in this group. Every door here is pinned to the deployment host by
-    // `require_dispatch_secret`, and `tests/cron_host_pin_test.rs` derives its door list from this
+    // the `CronSecret` tier, and `tests/cron_host_pin_test.rs` derives its door list from this
     // same file, so this pair is what keeps "the crons" and "the pinned doors" one set.
     #[test]
     fn every_mounted_door_is_a_vercel_cron_and_every_cron_is_mounted_here() {

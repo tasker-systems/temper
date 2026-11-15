@@ -2,7 +2,7 @@
 //! the handler runs one [`shape_service::dispatch_tick`] pass (reap → claim → verdict each anchor's
 //! backlog in bounded batches → complete or hand back) and returns a summary.
 //!
-//! Same posture as the region drain it mirrors: bearer-secret gated (`require_dispatch_secret`,
+//! Same posture as the region drain it mirrors: bearer-secret gated (the `CronSecret` tier,
 //! reusing `EMBED_DISPATCH_SECRET`), fail-closed when unset, no user auth. Reconciliation writes
 //! verdicts, a system projection of what the shape in force says about stored content, and takes
 //! no request from a caller.
@@ -12,7 +12,6 @@
 //! deadline (240 s by default), past the public 60 s `maxDuration`.
 
 use axum::extract::{Query, State};
-use axum::http::HeaderMap;
 use axum::Json;
 use serde::Deserialize;
 
@@ -21,7 +20,6 @@ use temper_services::services::shape_service::{self, ShapeReconcileSummary};
 use temper_services::state::AppState;
 
 use crate::handlers::auditor::validate_cap;
-use crate::handlers::embed::require_dispatch_secret;
 
 /// Query params for the shape-reconcile drain.
 #[derive(Debug, Deserialize)]
@@ -37,11 +35,9 @@ pub struct ShapeReconcileQuery {
 /// posture as `region::dispatch` — it is a cron target, not a public API.
 pub async fn dispatch(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Query(q): Query<ShapeReconcileQuery>,
 ) -> ApiResult<Json<ShapeReconcileSummary>> {
     // Fail-closed when unconfigured: no secret ⇒ endpoint disabled.
-    require_dispatch_secret(&state, &headers, "shape reconcile")?;
     // A `cap` below 1 is the caller's fault, refused as the auditor door refuses it; above the
     // ceiling the service clamps it.
     validate_cap(q.cap.map(i64::from))?;

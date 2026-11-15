@@ -7,11 +7,11 @@
 //!
 //! ## Auth posture
 //!
-//! Unauthenticated at the middleware and **self-gated on the broker attestation**, the same
-//! posture as `embed_internal_routes` — see `routes::webhook_intake_routes`. There is no
-//! `require_auth` because the caller is Vercel Connect forwarding a remote system's event; it
-//! holds no temper token and never will. Its compensating control is the RS256/JWKS attestation
-//! plus the anti-decoy `client_id` assertion, both inside
+//! Gated by the **`BrokerAttested` tier** (`middleware::broker_attested`), a layer that verifies the
+//! broker attestation from its headers and resolves the connection before routing detail or the
+//! body runs. There is no `require_auth` because the caller is Vercel Connect forwarding a remote
+//! system's event; it holds no temper token and never will. Its control is the RS256/JWKS
+//! attestation plus the anti-decoy `client_id` assertion, both inside
 //! [`CredentialBroker::verify_inbound`](temper_services::broker::CredentialBroker::verify_inbound).
 //!
 //! ## What the attestation establishes
@@ -45,18 +45,17 @@
 
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::{HeaderMap, Method, StatusCode};
-use axum::Json;
+use axum::http::{HeaderMap, StatusCode};
+use axum::{Extension, Json};
 use serde::Serialize;
 use uuid::Uuid;
 
-use temper_services::broker::InboundRequest;
 use temper_services::error::{ApiError, ApiResult, UnauthCause};
+use temper_services::services::intake_service as intake;
 use temper_services::services::intake_service::{self, AttestationSeen, ProviderEvent, Receipt};
-use temper_services::services::{connection_service, intake_service as intake};
 use temper_services::state::AppState;
 
-use crate::middleware::preconditions;
+use crate::middleware::broker_attested::AttestedConnection;
 
 /// The one refusal for every way an inbound webhook is turned away before it is accepted: the
 /// attestation did not verify, it names no live connection, or it was replayed. The uniform
@@ -74,69 +73,29 @@ pub struct WebhookAccepted {
     pub event_id: Uuid,
 }
 
-/// Receive one webhook.
+/// Receive one webhook, already admitted by the `BrokerAttested` tier
+/// (`middleware::broker_attested`), which verified the attestation from its headers and resolved
+/// the connection before anything read the body.
 ///
-/// The body is taken as raw [`Bytes`], not `Json<Value>`: `verify_inbound` takes `&[u8]` and the
-/// payload is stored verbatim, so a deserialize-then-reserialize round trip in between would
-/// silently normalize the bytes the ledger claims to have preserved.
+/// The body is taken as raw [`Bytes`], not `Json<Value>`: the payload is stored verbatim, so a
+/// deserialize-then-reserialize round trip would silently normalize the bytes the ledger claims to
+/// have preserved.
 pub async fn receive(
     State(state): State<AppState>,
-    method: Method,
+    Extension(attested): Extension<AttestedConnection>,
     headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<(StatusCode, Json<WebhookAccepted>)> {
-    // 1. Authenticate the connector. The `Authorization` bearer is the attestation — NOT
-    //    `x-vercel-oidc-token`, which is this deployment's own ambient identity and is present on
-    //    every inbound request (the decoy the anti-decoy `client_id` check exists to refuse).
-    let authorization = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
+    let AttestedConnection {
+        verified,
+        connection,
+    } = attested;
 
-    let verified = state
-        .broker
-        .verify_inbound(InboundRequest {
-            authorization,
-            body: &body,
-        })
-        .await
-        .map_err(|e| {
-            // The reason is logged, never returned: "no Authorization header", "issuer mismatch"
-            // and "not a Connect-forwarded attestation" each tell a prober something different
-            // about how far it got.
-            tracing::warn!(error = %e, "inbound webhook attestation refused");
-            refusal()
-        })?;
-
-    // 2. Resolve the SIGNED connector identity to the connection that receives it. The broker
-    //    stops before this deliberately (it stays DB-free, hence swappable), so this is the
-    //    caller's job. A no-match is rendered as the same refusal as step 1.
-    let connection = connection_service::resolve_inbound(
-        &state.pool,
-        &verified.provider,
-        &verified.connector_uid,
-    )
-    .await
-    .map_err(|e| match e {
-        ApiError::Unauthenticated(_) => {
-            tracing::warn!(
-                provider = %verified.provider,
-                "verified attestation names no live credentialed connection"
-            );
-            refusal()
-        }
-        other => other,
-    })?;
-
-    // The precondition refusal runs here: this door's gate is inside the handler, so no layer can
-    // run after it (the route table marks the group `InHandler`). It runs after the connector
-    // resolves, not merely after the attestation verifies, because both failures are one refusal:
-    // checked between them, a header would turn "verified, but no connection" into a 400 and tell
-    // it apart from "not verified". Both steps so far only read; nothing is written before it. A
-    // caller refused at either step gets its 401 exactly as without the header; an accepted one
-    // sending a precondition is refused, not applied unconditionally. One refusal comes later and
-    // so is answered 400 when a header is sent: a replayed attestation (step 4), which can only be
-    // presented by a caller that already held a valid one for a provisioned connection.
-    preconditions::refuse_unhonoured(&method, &headers)?;
+    // A precondition header is refused by the group's precondition layer, inside the tier gate:
+    // a caller the gate refuses gets its 401 exactly as without the header, and an admitted one is
+    // refused 400 before anything below runs. One refusal comes later and so is answered 400 when
+    // a header is sent: a replayed attestation (step 4), which can only be presented by a caller
+    // that already held a valid one for a provisioned connection.
 
     // Observe GitHub's own signature on a receipt for a provisioned GitHub connection, before any
     // later step can refuse or fail it, so each such receipt produces one line. Logging only.

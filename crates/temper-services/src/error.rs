@@ -273,6 +273,8 @@ pub enum UnauthCause {
     HmacBadSignature,
     /// A signature door's secret is unset (the door is disabled).
     HmacDisabled,
+    /// A cron door reached on a host other than the deployment's cron host.
+    CronWrongHost,
     /// The cron secret is unset (every cron door is disabled).
     CronDisabled,
     /// A missing or wrong cron secret.
@@ -284,7 +286,7 @@ pub enum UnauthCause {
 
 impl UnauthCause {
     /// Every cause, for the test that their responses are byte-identical.
-    pub const ALL: [UnauthCause; 10] = [
+    pub const ALL: [UnauthCause; 11] = [
         UnauthCause::MissingBearer,
         UnauthCause::BadScheme,
         UnauthCause::InvalidToken,
@@ -292,6 +294,7 @@ impl UnauthCause {
         UnauthCause::HmacMissingHeaders,
         UnauthCause::HmacBadSignature,
         UnauthCause::HmacDisabled,
+        UnauthCause::CronWrongHost,
         UnauthCause::CronDisabled,
         UnauthCause::CronBadSecret,
         UnauthCause::IntakeUnattested,
@@ -307,6 +310,7 @@ impl UnauthCause {
             UnauthCause::HmacMissingHeaders => "hmac_missing_headers",
             UnauthCause::HmacBadSignature => "hmac_bad_signature",
             UnauthCause::HmacDisabled => "hmac_disabled",
+            UnauthCause::CronWrongHost => "cron_wrong_host",
             UnauthCause::CronDisabled => "cron_disabled",
             UnauthCause::CronBadSecret => "cron_bad_secret",
             UnauthCause::IntakeUnattested => "intake_unattested",

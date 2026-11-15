@@ -191,13 +191,9 @@ pub struct ReapSummary {
 ///
 /// Undocumented (no `#[utoipa::path]`) and mounted on the bare internal router, matching the embed
 /// crons. Vercel Cron invokes with GET; POST exists for manual ops. Gated by the shared
-/// `EMBED_DISPATCH_SECRET` bearer via `require_dispatch_secret` — see that function's doc comment
+/// `EMBED_DISPATCH_SECRET` bearer via the `CronSecret` tier — see `middleware::cron_secret`
 /// for why this reuses the embed crons' secret rather than minting a new one.
-pub async fn reap_intents(
-    State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> ApiResult<Json<ReapSummary>> {
-    crate::handlers::embed::require_dispatch_secret(&state, &headers, "slack intents reap")?;
+pub async fn reap_intents(State(state): State<AppState>) -> ApiResult<Json<ReapSummary>> {
     let swept =
         temper_services::services::slack_disconnect_service::reap_expired_intents(&state.pool)
             .await?;

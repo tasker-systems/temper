@@ -126,6 +126,37 @@ PYEOF
 run_test "internal_routes tier flipped to SelfGated: fails" "$FIX" 1 \
     "table row changed"
 
+# The cron doors back to SelfGated: the gate would run inside each handler again, after the method
+# router's 405-with-Allow and the extractors' 400s had already answered an anonymous caller.
+FIX="${FIXTURE_DIR}/cron_tier_flip"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'key: "embed_internal_routes", tier: Tier::CronSecret'
+assert old in s
+s = s.replace(old, 'key: "embed_internal_routes", tier: Tier::SelfGated')
+open(p, "w").write(s)
+PYEOF
+run_test "embed_internal_routes tier flipped back to SelfGated: fails" "$FIX" 1 \
+    "table row changed"
+
+# The CronSecret arm losing its gate serves every cron door ungated.
+FIX="${FIXTURE_DIR}/cron_gate_dropped"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "            cron_secret::require_cron_secret,\n"
+assert old in s
+s = s.replace(old, "            relay_trust::require_relay_trust,\n")
+open(p, "w").write(s)
+PYEOF
+run_test "CronSecret arm without require_cron_secret: fails" "$FIX" 1 \
+    "'cron_secret::require_cron_secret' not applied by apply_tier"
+
 # --- (d) a builder that stops consuming the table must fail ---
 # The internal function assembling its own router is a parallel wiring path the row pins
 # cannot see; the mount-from-table assertion is what catches it.
@@ -184,8 +215,8 @@ import sys
 p = sys.argv[1]
 s = open(p).read()
 s = s.replace(
-    'key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly',
-    'key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::BothBuilders')
+    'key: "webhook_intake_routes", tier: Tier::BrokerAttested, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly',
+    'key: "webhook_intake_routes", tier: Tier::BrokerAttested, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::BothBuilders')
 open(p, "w").write(s)
 PYEOF
 run_test "webhook row's serves flipped to BothBuilders: fails" "$FIX" 1 \
@@ -668,8 +699,8 @@ python3 - "$FIX/mod.rs" <<'PYEOF'
 import sys, re
 p = sys.argv[1]
 s = open(p).read()
-s, n = re.subn(r"        Preconditions::Refused => \{\n(.*?)\n        \}\n        Preconditions::InHandler \| Preconditions::Exempt\(_\) => router,",
-               r"        Preconditions::Refused => router,\n        Preconditions::InHandler | Preconditions::Exempt(_) => {\n\1\n        }",
+s, n = re.subn(r"        Preconditions::Refused => \{\n(.*?)\n        \}\n        Preconditions::Exempt\(_\) => router,",
+               r"        Preconditions::Refused => router,\n        Preconditions::Exempt(_) => {\n\1\n        }",
                s, count=1, flags=re.S)
 assert n == 1, n
 open(p, "w").write(s)
@@ -729,8 +760,8 @@ python3 - "$FIX/mod.rs" <<'PYEOF'
 import sys, re
 p = sys.argv[1]
 s = open(p).read()
-s, n = re.subn(r"        Preconditions::Refused => \{\n(.*?)\n        \}\n        Preconditions::InHandler \| Preconditions::Exempt\(_\) => router,",
-               r"        Preconditions::Refused => router,\n        Preconditions::Exempt(_) => {\n\1\n        }\n        Preconditions::InHandler => router,",
+s, n = re.subn(r"        Preconditions::Refused => \{\n(.*?)\n        \}\n        Preconditions::Exempt\(_\) => router,",
+               r"        Preconditions::Exempt(_) => {\n\1\n        }\n        Preconditions::Refused => router,",
                s, count=1, flags=re.S)
 assert n == 1, n
 open(p, "w").write(s)

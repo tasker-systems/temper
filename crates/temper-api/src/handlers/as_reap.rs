@@ -10,7 +10,6 @@
 //! for both domains.
 
 use axum::extract::State;
-use axum::http::HeaderMap;
 use axum::Json;
 use serde::Serialize;
 
@@ -34,7 +33,8 @@ pub struct RetentionSweepSummary {
 /// crons and the Slack intents reaper. Vercel Cron invokes with GET; POST exists for manual ops —
 /// both sweeps are idempotent, so a GET trigger is safe.
 ///
-/// Gated by the shared `EMBED_DISPATCH_SECRET` bearer via `embed::require_dispatch_secret`.
+/// Gated by the shared `EMBED_DISPATCH_SECRET` bearer via the `CronSecret` tier
+/// (`middleware::cron_secret`).
 /// **No new secret**, and deliberately: a new
 /// fail-closed variable becomes a deploy-time prerequisite, which is the hazard that took the T3
 /// deploy dark — see that function's doc comment. Reusing it also means this endpoint inherits the
@@ -48,9 +48,7 @@ pub struct RetentionSweepSummary {
 /// sweeping anyway), and the AS sweep's own log line still recorded it.
 pub async fn reap_as_tables(
     State(state): State<AppState>,
-    headers: HeaderMap,
 ) -> ApiResult<Json<RetentionSweepSummary>> {
-    crate::handlers::embed::require_dispatch_secret(&state, &headers, "AS retention sweep")?;
     let as_tables = as_reap_service::reap_expired_as_rows(&state.pool).await?;
     let blob_uploads = blob_reap_service::reap_abandoned_blob_uploads(&state.pool).await?;
     Ok(Json(RetentionSweepSummary {

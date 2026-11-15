@@ -5,7 +5,6 @@
 //! in that service, next to the code they decide.
 
 use axum::extract::State;
-use axum::http::HeaderMap;
 use axum::Json;
 
 use temper_services::error::ApiResult;
@@ -21,7 +20,7 @@ use temper_services::state::AppState;
 /// Does nothing unless the deployment opted in with `SENSITIVITY_SWEEP_ENABLED` (Q52, Q53): it
 /// then answers `enabled: false` after running only erasure's digest expiry.
 ///
-/// Gated by the shared `EMBED_DISPATCH_SECRET` bearer via `embed::require_dispatch_secret`: no new
+/// Gated by the shared `EMBED_DISPATCH_SECRET` bearer via the `CronSecret` tier: no new
 /// gate secret (D8). The salt is a key, not a gate, and has its own variable (Q44).
 ///
 /// **Answers 200 whatever the ticks found**, including a failed tick: the verdict travels on the
@@ -30,11 +29,7 @@ use temper_services::state::AppState;
 ///
 /// The answer is counts of ticks and booleans. The per-tick counts stay on the span: a caller who
 /// can plant a unit and read `cache_hits` back would learn whether that unit exists anywhere.
-pub async fn sweep(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Json<SweepAnswer>> {
-    crate::handlers::embed::require_dispatch_secret(&state, &headers, "sensitivity sweep")?;
+pub async fn sweep(State(state): State<AppState>) -> ApiResult<Json<SweepAnswer>> {
     let salt = state
         .config
         .sensitivity_sweep_salt

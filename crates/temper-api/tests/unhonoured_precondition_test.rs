@@ -61,9 +61,9 @@ const CONNECTOR_UID: &str = "github/acme-temper";
 
 /// One route per tier and door, `{id}` filled per request. The `Refused` tiers: human self-service
 /// (`PATCH /api/profile`, a path the machine-admitting status group shares), gated, the admin
-/// surface, the three gated doors with their own body limits, and the three HMAC tiers. Then the
-/// doors that are not `Refused`: the intake (`InHandler`), the crons, the Slack callback and health
-/// (`Exempt`), and a path nothing mounts.
+/// surface, the three gated doors with their own body limits, the three HMAC tiers and the
+/// intake's `BrokerAttested` tier. Then the doors that are not `Refused`: the crons, the Slack
+/// callback and health (`Exempt`), and a path nothing mounts.
 const PROBED: &[&str] = &[
     "/api/profile",
     "/api/resources/{id}",
@@ -361,8 +361,9 @@ async fn an_anonymous_caller_gets_exactly_its_answer_without_the_header(pool: Pg
     }
 }
 
-// FAILS IF: on the public host, the cron host pin's masked 404 stops being the answer to a
-// header-bearing request (the pre-#1360 answer), on any method.
+// FAILS IF: on the public host, the cron host pin's refusal stops being the answer to a
+// header-bearing request, on any method: the pin is the CronSecret tier's first check, and the
+// refusal is the uniform pre-identity 401, header or not.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_cron_host_pin_answers_first_with_or_without_the_header(pool: PgPool) {
     let app = configured_app(&pool, Some("cron.internal.test")).await;
@@ -382,7 +383,7 @@ async fn the_cron_host_pin_answers_first_with_or_without_the_header(pool: PgPool
         &json!({}),
     )
     .await;
-    assert_eq!(masked.status, 404, "the host pin answers: {masked:?}");
+    assert_eq!(masked.status, 401, "the host pin answers: {masked:?}");
 }
 
 /// The `{id}` route each `Refused` tier is probed on, with the write method it mounts there.

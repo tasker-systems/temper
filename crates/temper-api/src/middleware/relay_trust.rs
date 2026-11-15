@@ -48,7 +48,7 @@ use temper_workflow::operations::{
 
 /// Constant-time equality over the presented and expected secret — avoids a byte-by-byte
 /// early-exit timing oracle on the shared secret. Same shape as
-/// `handlers::embed::secret_matches`, kept local rather than cross-imported so the two gates
+/// `middleware::cron_secret::secret_matches`, kept local rather than cross-imported so the two gates
 /// cannot drift into a shared mutable dependency (they gate different secrets with different
 /// failure faces, and only the comparison is common).
 fn secret_matches(presented: &str, expected: &str) -> bool {
