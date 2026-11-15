@@ -83,6 +83,7 @@ current_counts() {
 # you added or removed and why. A baseline updated on reflex is the failure this file exists to stop.
 read -r -d '' BASELINE <<'EOF' || true
 1 crates/temper-services/tests/shape_loader_test.rs
+1 crates/temper-services/tests/team_reach_bench.rs
 1 crates/temper-substrate/src/cluster.rs
 1 crates/temper-substrate/tests/context_formation_cost.rs
 14 crates/temper-substrate/tests/shape_schema_cost_bench.rs
