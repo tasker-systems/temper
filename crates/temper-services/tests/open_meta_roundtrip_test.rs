@@ -105,6 +105,7 @@ async fn open_meta_round_trips_on_create_and_update(pool: PgPool) {
     // --- update: a meta-only PATCH (body None, managed None) sets a new open key ---
     backend
         .update_resource(UpdateResource {
+            if_match: None,
             expect: None,
             open_meta_add: None,
             resource: created.id,
@@ -203,6 +204,7 @@ async fn open_meta_null_deletes_on_update_and_is_refused_on_create(pool: PgPool)
 
     backend
         .update_resource(UpdateResource {
+            if_match: None,
             expect: None,
             open_meta_add: None,
             resource: created.id,
@@ -238,6 +240,7 @@ async fn open_meta_null_deletes_on_update_and_is_refused_on_create(pool: PgPool)
     // start from EMPTY, never from what is stored.
     backend
         .update_resource(UpdateResource {
+            if_match: None,
             expect: None,
             open_meta_add: Some(serde_json::json!({ "tags": ["gamma"] })),
             resource: created.id,
@@ -297,6 +300,7 @@ async fn open_meta_null_refuses_cross_tier_unsets(pool: PgPool) {
     for key in ["temper-stage", "facet", "doc_type", "temper-title"] {
         let refused = backend
             .update_resource(UpdateResource {
+                if_match: None,
                 expect: None,
                 open_meta_add: None,
                 resource: created.id,
@@ -381,6 +385,7 @@ async fn open_meta_add_unions_instead_of_replacing(pool: PgPool) {
     };
 
     let add = |patch: serde_json::Value| UpdateResource {
+        if_match: None,
         expect: None,
         resource: created.id,
         title: None,
@@ -424,6 +429,7 @@ async fn open_meta_add_unions_instead_of_replacing(pool: PgPool) {
     // losing it is the cost the separate-channel design exists to avoid.
     backend
         .update_resource(UpdateResource {
+            if_match: None,
             expect: None,
             resource: created.id,
             title: None,
@@ -571,6 +577,7 @@ async fn a_write_answers_with_the_open_tier_it_changed(pool: PgPool) {
 
     let updated = backend
         .update_resource(UpdateResource {
+            if_match: None,
             expect: None,
             resource: created.id,
             title: None,

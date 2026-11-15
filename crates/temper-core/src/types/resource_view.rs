@@ -260,6 +260,17 @@ pub struct ResourceView {
     /// the wire and after a round-trip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// The body token of exactly [`Self::content`] ([`crate::body_token`]), computed over the
+    /// bytes this same read returned: send it as `expect.body` on `PATCH /api/resources/{id}` to
+    /// save over those bytes only.
+    ///
+    /// Present beside `content` on a single-resource read that asked for the `body` section, and
+    /// on the answer of a `PATCH` that wrote the body, where it is computed inside the write's
+    /// own transaction and describes the whole readable body that write left (a per-block write
+    /// included). Absent everywhere else: list and search rows carry `content` without a token,
+    /// so a body read from a list cannot guard a save. Absent from a server that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_token: Option<String>,
     /// Derived embedding-readiness — the `embedding-status` section.
     ///
     /// Absent means **not requested**, never "not embedded": whenever the section was
@@ -608,6 +619,7 @@ mod tests {
 
     fn sample_view() -> ResourceView {
         ResourceView {
+            body_token: None,
             id: ResourceId::from(Uuid::nil()),
             r#ref: String::new(),
             title: "A Node".to_string(),

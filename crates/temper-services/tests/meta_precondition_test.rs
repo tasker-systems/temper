@@ -126,7 +126,8 @@ fn put_meta(
         goal: None,
         move_to: None,
         context_ref: None,
-        expect: guard,
+        expect: guard.map(Into::into),
+        if_match: None,
         act: ActContext::default(),
         origin: Surface::ApiHttp,
     }

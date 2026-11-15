@@ -707,7 +707,7 @@ pub async fn trailing_breadcrumb(pool: &PgPool, resource: ResourceId) -> Result<
 }
 
 /// Read a resource's markdown body — **verbatim when coverage is complete, derived otherwise** (the
-/// §9 body read floor, and the sole body assembler behind `GET /api/resources/{id}/content`).
+/// §9 body read floor): `ensure_visible`, then the one assembler, [`body_on`].
 ///
 /// Two paths, tried in order:
 ///
@@ -762,14 +762,35 @@ pub struct BodyRead {
 /// bytes. That is why `show` takes the merkle beside `content` from here, not from the identity
 /// read (`hit_identities_with`).
 ///
-/// Gated exactly as the bytes are: `ensure_visible` first, then the one statement.
+/// Gated exactly as the bytes are: `ensure_visible` first, then [`body_on`] on one connection.
 pub async fn body_with_byte_identity(
     pool: &PgPool,
     principal: ProfileId,
     new_id: ResourceId,
 ) -> std::result::Result<BodyRead, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
+    let mut conn = pool.acquire().await?;
+    body_on(&mut conn, new_id).await
+}
 
+/// **The body assembler**: the readable body of `new_id`, verbatim when every live block carries
+/// its bytes and derived otherwise, read on `conn`. Not access-gated: the caller has asked the
+/// read predicate already, on the pool ([`body_with_byte_identity`]) or under a write's lock.
+///
+/// The one function every reader of the body and every body token goes through: `/content`,
+/// `?sections=body`, a body precondition judged under a write's lock, and a write's answer. On a
+/// write's transaction it sees that write's own rows, which a pool read would not. Nothing else
+/// assembles a body to hash: the live-block read the write path makes for its own short-circuit
+/// differs from this whenever a block has no stored bytes.
+///
+/// Two statements, verbatim then derived. Outside a transaction a write committing between them
+/// can make the derived statement read a body the verbatim one would have served; that body is
+/// still a body this resource held, and a token of it can only fail to match, never match bytes
+/// the reader did not get.
+pub async fn body_on(
+    conn: &mut sqlx::PgConnection,
+    new_id: ResourceId,
+) -> std::result::Result<BodyRead, ReadbackError> {
     // Path 1: verbatim, coverage-verified. `fetch_optional` is `None` on partial coverage (HAVING
     // excludes the row); a row with a NULL agg is zero live blocks. Both fall to the derived path.
     // `resource_bytes_merkle` is STABLE, so it reads this statement's snapshot: the same rows the
@@ -787,7 +808,7 @@ pub async fn body_with_byte_identity(
            HAVING count(*) = count(bc.block_revision_id)"#,
         new_id.uuid(),
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     if let Some(row) = verbatim {
         if let Some(body) = row.body {
@@ -814,7 +835,7 @@ pub async fn body_with_byte_identity(
             ORDER BY b.seq, c.chunk_index"#,
         new_id.uuid(),
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
     let chunks: Vec<crate::content::ReadChunk> = rows
         .into_iter()
@@ -2462,6 +2483,7 @@ async fn hit_identities_with(
                 })
                 .transpose()?;
             Ok(ResourceView {
+                body_token: None,
                 id: ResourceId::from(row.id),
                 // Filled by `with_derived_refs` below — neither is a column.
                 r#ref: String::new(),

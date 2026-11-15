@@ -229,6 +229,17 @@ pub(crate) fn cmd_to_resource_update_request(
         None => (None, None, None),
     };
 
+    // A header precondition has no field on this wire; carrying it silently away would turn a
+    // conditional write into an unconditional one. The CLI never sets it (its body guard is
+    // `expect.body`), so this is a refusal of a command built elsewhere, never a path in use.
+    if cmd.if_match.is_some() {
+        return Err(TemperError::BadRequest(
+            "an If-Match precondition cannot travel on this path; send the body token as \
+             expect.body"
+                .into(),
+        ));
+    }
+
     // Context move: prefer the raw ref from context_ref (CLI path), fall back
     // to converting a pre-resolved ContextId (if somehow present) to UUID string.
     let context_to = cmd.context_ref.clone().or_else(|| {
@@ -547,6 +558,7 @@ mod tests {
     fn sample_update() -> UpdateResource {
         UpdateResource {
             expect: None,
+            if_match: None,
             resource: temper_core::types::ids::ResourceId(uuid::Uuid::nil()),
             title: None,
             slug: None,

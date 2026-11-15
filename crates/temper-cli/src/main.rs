@@ -342,6 +342,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     sources,
                     content_block,
                     expect,
+                    expect_body,
                     act,
                 } => {
                     let params = temper_cli::commands::resource::UpdateParams {
@@ -372,7 +373,10 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         sources: &sources,
                         content_block,
                         format: output_format,
-                        expect: expect.into_meta_expect()?,
+                        expect: temper_cli::commands::resource::update_expect(
+                            expect.into_meta_expect()?,
+                            expect_body,
+                        ),
                         act: act.into_act_input()?,
                     };
                     temper_cli::commands::resource::update(&config, &params)

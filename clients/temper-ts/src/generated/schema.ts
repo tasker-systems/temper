@@ -6108,8 +6108,21 @@ export interface components {
             /** @description The subscriber's kind: `kb_contexts`, `kb_cogmaps` or `kb_teams`. */
             subscriber_table: string;
         };
-        /** @description Response body for resource content. */
+        /**
+         * @description Response body for `GET /api/resources/{id}/content`: the readable body, and its token.
+         *
+         *     **Every field is determined by `markdown` and the URL**, so the `ETag` this read answers (the
+         *     quoted `body_token`) validates the whole representation. Nothing else may be added here: a
+         *     field that varies independently of the bytes (meta, an ingest state, a timestamp) would make
+         *     that strong tag wrong. The meta tiers are `GET /api/resources/{id}/meta`.
+         */
         ContentResponse: {
+            /**
+             * @description The body token of exactly `markdown` ([`crate::body_token`]): send it as `expect.body` (or
+             *     `If-Match`) on `PATCH /api/resources/{id}` to save over these bytes only. Absent from a
+             *     server that predates it.
+             */
+            body_token?: string | null;
             managed_meta?: components["schemas"]["ManagedMeta"] | null;
             /**
              * @description The body. For a `verbatim` resource ([`BodyStorage::Verbatim`]) these are the stored bytes
@@ -6117,11 +6130,8 @@ export interface components {
              */
             markdown: string;
             /**
-             * @description Server-side open_meta from kb_resource_manifests. Intentionally
-             *     untyped — open_meta is the free-form tier. Typed extraction of
-             *     relationship fields lives in `ResourceRelationships` (see
-             *     `types::graph`), which parses this value on demand and ignores
-             *     anything it doesn't recognize.
+             * @description **Never set by the server**, for the same reason as `managed_meta`. Intentionally untyped
+             *     where a client sets it: open_meta is the free-form tier.
              */
             open_meta?: unknown;
             resource_id: components["schemas"]["ResourceId"];
@@ -7322,11 +7332,17 @@ export interface components {
          *     else is ever added: no actor, time, event, position, revision or count.
          */
         FailedExpectation: {
-            /** @description What is there now (`null`: absent). */
+            /** @description What is there now (`null`: absent). On a `body` entry, the current body's token. */
             current: unknown;
-            /** @description What the caller expected, as it sent it (`null`: absent). */
+            /**
+             * @description What the caller expected, as it sent it (`null`: absent). On a `body` entry, the token
+             *     sent, or every token of an `If-Match` list in the order sent.
+             */
             expected: unknown;
-            /** @description The key the expectation named. Present on every `open` and `managed` entry. */
+            /**
+             * @description The key the expectation named. Present on every `open` and `managed` entry; never on a
+             *     `body` entry.
+             */
             key?: string | null;
             tier: components["schemas"]["PreconditionTier"];
         };
@@ -8886,7 +8902,7 @@ export interface components {
          * @description Which tier a failed expectation named.
          * @enum {string}
          */
-        PreconditionTier: "open" | "managed";
+        PreconditionTier: "open" | "managed" | "body";
         /**
          * @description Profile — the temper-domain identity.
          *
@@ -10357,6 +10373,32 @@ export interface components {
             resource: string;
         };
         /**
+         * @description What a `PATCH /api/resources/{id}` expects to find: the meta tiers of [`MetaExpect`], plus
+         *     the body.
+         *
+         *     - **`open` and `managed`** follow every rule of [`MetaExpect`].
+         *     - **`body`** is a body token, exactly as a read answered it (`body_token` on
+         *       `GET /api/resources/{id}/content`, on `?sections=body`, or on an earlier `PATCH` that wrote
+         *       the body). The write lands only if the resource's readable body is still exactly those bytes.
+         *       It guards the body only; a title change on the same request is not guarded by it.
+         *     - **A retried body save that already landed is answered `200`.** When the body expectation
+         *       fails but the request is a whole-body save carrying nothing but `content` and its bytes
+         *       already equal the current body, nothing is written and the answer is the current resource
+         *       and its current token. Any other request whose body expectation fails is a `412`.
+         *
+         *     `body` exists only here: `PUT /meta`'s [`MetaExpect`] has no such member, so a meta write
+         *     carrying one is refused (`422`). `If-Match` on `PATCH` is the same guard as `body`; sending
+         *     both is refused (`400`) unless the header is the one strong tag `body` names.
+         */
+        ResourceExpect: {
+            /** @description The body token of the readable body this write expects to replace. */
+            body?: string | null;
+            /** @description Managed-tier keys and the value each is expected to hold now (`null`: absent). */
+            managed?: Record<string, never>;
+            /** @description Open-tier keys and the value each is expected to hold now (`null`: absent). */
+            open?: Record<string, never>;
+        };
+        /**
          * @description One facet row owned by a **resource**, as read back by `GET /api/resources/{id}/facets`.
          *
          *     **Deliberately not [`EdgeFacetRow`], and not an alias of it.** The two look alike and are not
@@ -10750,7 +10792,7 @@ export interface components {
              *     resource. Forwarded verbatim from the CLI `--context-to` flag.
              */
             context_to?: string | null;
-            expect?: components["schemas"]["MetaExpect"] | null;
+            expect?: components["schemas"]["ResourceExpect"] | null;
             /**
              * Format: uuid
              * @description Goal-set: the resolved goal `ResourceId` (as UUID) to link this resource to.
@@ -10874,6 +10916,18 @@ export interface components {
              */
             body_hash?: string | null;
             body_storage?: components["schemas"]["BodyStorage"] | null;
+            /**
+             * @description The body token of exactly [`Self::content`] ([`crate::body_token`]), computed over the
+             *     bytes this same read returned: send it as `expect.body` on `PATCH /api/resources/{id}` to
+             *     save over those bytes only.
+             *
+             *     Present beside `content` on a single-resource read that asked for the `body` section, and
+             *     on the answer of a `PATCH` that wrote the body, where it is computed inside the write's
+             *     own transaction and describes the whole readable body that write left (a per-block write
+             *     included). Absent everywhere else: list and search rows carry `content` without a token,
+             *     so a body read from a list cannot guard a save. Absent from a server that predates it.
+             */
+            body_token?: string | null;
             /**
              * @description The body's block boundaries and per-block byte hashes, in `seq` order: what a client needs
              *     to check a whole cached body against [`Self::bytes_merkle`]. The `byte-blocks` section.
@@ -20544,6 +20598,8 @@ export interface operations {
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
+                /** @description A synonym for `expect.body`: the quoted `body_token` the save expects to replace (a list matches on any member). Guards the body only. */
+                "If-Match"?: string | null;
             };
             path: {
                 /** @description Resource ID */
@@ -20566,7 +20622,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResourceView"];
                 };
             };
-            /** @description Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, or a malformed `expect`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED) */
+            /** @description Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, a malformed `expect`, an `If-Match` that is `*`, unparseable, weak and naming the current body, or disagreeing with `expect.body`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED: `If-None-Match`, `If-Unmodified-Since`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -20593,7 +20649,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Not found */
+            /** @description Not found; also every answer to a caller who cannot read the resource, whatever its `expect` or `If-Match` */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -20611,7 +20667,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description An `expect` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed key with its current value */
+            /** @description An `expect` or `If-Match` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed expectation with what is there now (a `body` entry's `current` is the current body's token) */
             412: {
                 headers: {
                     [name: string]: unknown;
@@ -21149,9 +21205,11 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The body as markdown. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`. */
+            /** @description The body as markdown, and its `body_token`. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`. An `If-None-Match` is ignored; this read never answers `304`. */
             200: {
                 headers: {
+                    /** @description The `body_token` of `markdown`, quoted: a strong entity-tag */
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {

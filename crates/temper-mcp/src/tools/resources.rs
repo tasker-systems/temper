@@ -136,7 +136,9 @@ pub struct CreateResourceInput {
 pub struct GetResourceInput {
     /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
     pub id: String,
-    /// If true, includes the full reconstituted markdown content.
+    /// If true, includes the full reconstituted markdown content, and the answer's `body_token`
+    /// names exactly that markdown: pass it to `update_resource` as `expect_body` to save over
+    /// those bytes only.
     pub include_content: Option<bool>,
     /// Subselect top-level response keys. Anchor key `id` is always
     /// preserved. Nested paths (containing `.`) rejected with a hint
@@ -315,6 +317,16 @@ pub struct UpdateResourceInput {
     /// can already show a later writer's value.
     #[serde(default)]
     pub expect: Option<temper_core::types::precondition::MetaExpect>,
+    /// Optional **expected body**: the `body_token` you read (from `get_resource` with
+    /// `include_content`, or from an earlier `update_resource` that wrote `content`). The write
+    /// lands only if the resource's readable body is still exactly those bytes, judged under the
+    /// resource's writer lock. If it is not, nothing is written and the tool answers an error
+    /// result whose `precondition.failed` has a `body` entry whose `current` is the body's token
+    /// now: read the resource again with `include_content` and rebase onto that body. A save that
+    /// sends only `content` and finds its own bytes already in place (a retry of a save that
+    /// landed) is answered as a success, writing nothing. Guards the body only, never the title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_body: Option<String>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
     /// keys; all optional. `confidence` required when any other authorship field is supplied.
     #[serde(flatten)]
@@ -475,8 +487,9 @@ async fn enriched_view(
     include_content: bool,
 ) -> Result<(ResourceView, Option<String>), rmcp::ErrorData> {
     // The body rides the SAME view read as a section, never a second `/content` request: the
-    // view's `bytes_merkle` is then computed in the statement that read the body, so the two
-    // parts of the answer always describe the same bytes.
+    // view's `bytes_merkle` and `body_token` are then computed from the read that returned the
+    // body, so the two parts of the answer always describe the same bytes. A token from any other
+    // request could name bytes this answer did not emit.
     let sections = if include_content {
         [
             ResourceSection::OpenMeta,
@@ -1101,8 +1114,16 @@ pub async fn update_resource(
         _ => (None, None),
     };
 
+    // The meta guard and the body guard travel as one expectation, as on HTTP.
+    let expect = match (input.expect, input.expect_body) {
+        (None, None) => None,
+        (meta, body) => Some(temper_core::types::precondition::ResourceExpect {
+            body,
+            ..meta.map(Into::into).unwrap_or_default()
+        }),
+    };
     let request = temper_workflow::types::resource::ResourceUpdateRequest {
-        expect: input.expect,
+        expect,
         title: input.title.clone(),
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
@@ -1130,7 +1151,7 @@ pub async fn update_resource(
         }
         other => other,
     };
-    answer.across_auth(|e| match e {
+    let written = answer.across_auth(|e| match e {
         // Arm-for-arm from the direct binding: the gate's sentence names the withheld
         // capability; missing and not-modifiable share the Forbidden face on this path.
         ClientError::ForbiddenDetail { message } => rmcp::ErrorData::invalid_params(message, None),
@@ -1155,7 +1176,11 @@ pub async fn update_resource(
     })?;
 
     // Return the enriched current state, read back through the same door `get_resource` uses.
-    let (enriched, _) = enriched_view(&client, input.id, false).await?;
+    // The body token is the write's own, from the PATCH answer, never this re-read's: it was
+    // computed inside the write's transaction and describes exactly the body the write left. A
+    // write that sent no `content` answers none.
+    let (mut enriched, _) = enriched_view(&client, input.id, false).await?;
+    enriched.body_token = written.body_token;
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&enriched)),
     ]))
@@ -1604,6 +1629,7 @@ mod enriched_resource_tests {
         use temper_core::types::ids::ContextId;
         let nil = uuid::Uuid::nil();
         ResourceView {
+            body_token: None,
             id: ResourceId::from(uuid::Uuid::now_v7()),
             r#ref: String::new(),
             title: "Wire the widget".to_string(),

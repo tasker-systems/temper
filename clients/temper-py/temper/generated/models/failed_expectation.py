@@ -30,7 +30,7 @@ class FailedExpectation(BaseModel):
     """ # noqa: E501
     current: Optional[Any]
     expected: Optional[Any]
-    key: Optional[StrictStr] = Field(default=None, description="The key the expectation named. Present on every `open` and `managed` entry.")
+    key: Optional[StrictStr] = Field(default=None, description="The key the expectation named. Present on every `open` and `managed` entry; never on a `body` entry.")
     tier: PreconditionTier
     __properties: ClassVar[List[str]] = ["current", "expected", "key", "tier"]
 

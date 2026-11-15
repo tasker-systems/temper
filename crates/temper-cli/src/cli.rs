@@ -1052,6 +1052,13 @@ pub enum ResourceAction {
         /// Meta expectations that make this update conditional.
         #[command(flatten)]
         expect: ExpectArgs,
+        /// Write only if the resource's body is still exactly the bytes this token names: the
+        /// `body_token` from `resource show --json`, or from an earlier `resource update --body`.
+        /// If the body has changed, nothing is written, the exit code is 1, and `--format json`
+        /// prints code PRECONDITION_FAILED with a `body` entry whose `current` is the body's
+        /// token now: show the resource again and rebase. Guards the body only, never the title.
+        #[arg(long, value_name = "TOKEN")]
+        expect_body: Option<String>,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,

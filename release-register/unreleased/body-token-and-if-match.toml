@@ -1,0 +1,62 @@
+title    = "Reads of the body answer a body_token (and /content an ETag); PATCH /api/resources/{id} accepts expect.body and If-Match, judged under the resource's writer lock, refused 412 PRECONDITION_FAILED when the body has moved"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
+status   = "signal-only"
+body = '''
+What changed: a body token is "bt1." + unpadded base64url(sha256(readable body bytes)), 47
+characters, computed by temper_core::body_token over exactly the bytes a read returns.
+
+- GET /api/resources/{id}/content answers ContentResponse.body_token and the header
+  ETag: "<body_token>" (strong). It is the only read with an ETag. If-None-Match is ignored there:
+  no 304 is ever answered.
+- GET /api/resources/{id}?sections=body answers ResourceView.body_token beside content. List and
+  search rows carry no token (list refuses the body section; search rows never had one).
+- PATCH /api/resources/{id} accepts expect.body (a token) and the If-Match header, its synonym; this
+  is the one route that honours If-Match (If-None-Match and If-Unmodified-Since stay refused 400
+  PRECONDITION_NOT_HONOURED, as does If-Match on every other write). A list matches on any member,
+  one pair of quotes is stripped; If-Match: *, an unparseable list, a weak tag naming the current
+  body, or an If-Match disagreeing with expect.body is a 400 BAD_REQUEST. The guard is judged under
+  the resource's writer lock after the read gate, so a caller who cannot read the resource gets
+  GET's 404 whatever the tag. A failed guard writes nothing and answers 412 with a body entry
+  {tier: "body", expected, current} (no key; current is the current token) in
+  error.precondition.failed, beside any failed meta entries.
+- A body-only whole-body PATCH (content and nothing else: no title, meta, move, goal, sources or
+  content_block) whose guard fails but whose bytes already are the current body answers 200,
+  writes nothing, and carries the current token: a retried save that landed recognizes itself.
+- The answer of a PATCH that writes the body carries ResourceView.body_token, computed inside the
+  write's transaction: the token of the whole body that write left, a per-block write included. A
+  meta-only PATCH answers none. PUT /meta's expect has no body member: expect.body there is a 422.
+- ErrorDetail.precondition's tier enum gains "body". ContentResponse's doc is corrected: its meta
+  fields are never set by the server.
+
+Clients: the three generated SDKs gain ContentResponse.body_token, ResourceView.body_token, the
+PATCH expectation's body member and the "body" tier. temper-client's update carries expect.body.
+MCP update_resource gains the input expect_body and returns the PATCH answer's body_token;
+get_resource with include_content answers the token of the markdown it emits, from the same read;
+the temper://resources/{id} resource's metadata part carries the token of the /content response
+whose markdown is its second part. The CLI's resource update gains --expect-body <TOKEN>; resource
+show --json prints body_token beside content. A refusal exits 1 with code PRECONDITION_FAILED and
+the body entry in details.failed.
+
+Renderer note: the token covers the rendered bytes, and "bt1." versions the hash only. A deploy that
+changes how /content renders a body (the verbatim concatenation or the derived reconstruction)
+moves the token of every body it renders differently, all at once; every token callers then hold
+for those bodies fails its guard, correctly, and they re-read. A golden-bytes test
+(body_token_http_test.rs) fails on such a change so it is made deliberately; name it in that
+release's notes.
+
+Costs: a refused body save has already chunked its body and paid for any inline embed, which runs
+before the transaction so no lock is held across it. A /content read and a body-section read pay one
+sha256 of the body; a body-writing PATCH pays one more body read inside its transaction.
+
+Why additive: optional response fields, one optional request member, one new header honoured on one
+route, one new enum value. openapi.json grows against the 0.6 pin.
+
+Why behavioral: a guarded save may now be refused where the same save without the guard lands, and
+If-Match on PATCH, refused 400 before, is now judged.
+
+Witnesses: crates/temper-services/tests/body_precondition_test.rs,
+crates/temper-api/tests/body_token_http_test.rs, crates/temper-api/tests/unhonoured_precondition_test.rs,
+tests/e2e/tests/body_precondition_doors_test.rs. Release relevance: signal-only.
+'''

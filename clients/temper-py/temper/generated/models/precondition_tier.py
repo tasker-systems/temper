@@ -28,6 +28,7 @@ class PreconditionTier(str, Enum):
     """
     OPEN = 'open'
     MANAGED = 'managed'
+    BODY = 'body'
 
     @classmethod
     def from_json(cls, json_str: str) -> Self:

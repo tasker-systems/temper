@@ -158,13 +158,20 @@ pub struct UpdateResource {
     /// parses and resolves it server-side. `None` when not a CLI-originated
     /// context move (API handler builds `move_to` directly after resolution).
     pub context_ref: Option<String>,
-    /// Per-key meta expectations (`PUT /meta`'s and `PATCH`'s `expect`). `None` is an
-    /// unconditional write, exactly as before. When present, `DbBackend` judges them under the
-    /// resource's writer lock in the update's own transaction, and refuses the whole update with
+    /// What the update expects to find (`PUT /meta`'s and `PATCH`'s `expect`): meta values per
+    /// key, and, from `PATCH` only, the body's token. `None` is an unconditional write, exactly as
+    /// before. When present, `DbBackend` judges it under the resource's writer lock in the
+    /// update's own transaction, and refuses the whole update with
     /// [`TemperError::PreconditionFailed`](temper_core::error::TemperError::PreconditionFailed)
-    /// if any does not hold.
+    /// if any expectation does not hold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expect: Option<temper_core::types::precondition::MetaExpect>,
+    pub expect: Option<temper_core::types::precondition::ResourceExpect>,
+    /// The raw `If-Match` field value of a `PATCH /api/resources/{id}`, unparsed: a synonym for
+    /// `expect.body`. Parsed and judged by `DbBackend` in the order its other preconditions are,
+    /// so a caller the modify floor refuses gets that refusal whatever the header says, and a
+    /// caller who cannot read the resource gets GET's `404`, never a `412`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub if_match: Option<String>,
     /// Per-act correlation + authorship — stamps every sub-event of the update fan-out
     /// (`block_mutated` / `property_set` / `resource_updated` / `resource_rehomed`). Empty by default;
     /// correlation never authorizes the write.
@@ -569,6 +576,7 @@ mod tests {
     #[test]
     fn update_resource_all_optional_fields_default_none() {
         let cmd = UpdateResource {
+            if_match: None,
             expect: None,
             open_meta_add: None,
             resource: ResourceId(uuid::Uuid::now_v7()),

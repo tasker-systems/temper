@@ -14,9 +14,12 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Response body for resource content.
+  # Response body for `GET /api/resources/{id}/content`: the readable body, and its token.  **Every field is determined by `markdown` and the URL**, so the `ETag` this read answers (the quoted `body_token`) validates the whole representation. Nothing else may be added here: a field that varies independently of the bytes (meta, an ingest state, a timestamp) would make that strong tag wrong. The meta tiers are `GET /api/resources/{id}/meta`.
   class ContentResponse < ApiModelBase
-    # Typed server-side managed_meta from kb_resource_manifests — the closed Property vocabulary. Only the named `temper-*` keys are represented; there is no catch-all. Used by CLI sync pull to reconstruct complete frontmatter (identity/type/home come from the resource row, not here).
+    # The body token of exactly `markdown` ([`crate::body_token`]): send it as `expect.body` (or `If-Match`) on `PATCH /api/resources/{id}` to save over these bytes only. Absent from a server that predates it.
+    attr_accessor :body_token
+
+    # **Never set by the server**, which answers this read with the body alone (see above). Kept for clients that build a `ContentResponse` locally to carry frontmatter beside a body.
     attr_accessor :managed_meta
 
     # The body. For a `verbatim` resource ([`BodyStorage::Verbatim`]) these are the stored bytes unchanged; for a `derived` one, a reconstruction from chunks.
@@ -30,6 +33,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'body_token' => :'body_token',
         :'managed_meta' => :'managed_meta',
         :'markdown' => :'markdown',
         :'open_meta' => :'open_meta',
@@ -50,6 +54,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'body_token' => :'String',
         :'managed_meta' => :'ManagedMeta',
         :'markdown' => :'String',
         :'open_meta' => :'Object',
@@ -60,6 +65,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'body_token',
         :'managed_meta',
         :'open_meta',
       ])
@@ -80,6 +86,10 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'body_token')
+        self.body_token = attributes[:'body_token']
+      end
 
       if attributes.key?(:'managed_meta')
         self.managed_meta = attributes[:'managed_meta']
@@ -152,6 +162,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          body_token == o.body_token &&
           managed_meta == o.managed_meta &&
           markdown == o.markdown &&
           open_meta == o.open_meta &&
@@ -167,7 +178,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [managed_meta, markdown, open_meta, resource_id].hash
+      [body_token, managed_meta, markdown, open_meta, resource_id].hash
     end
 
     # Builds the object from hash

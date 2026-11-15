@@ -850,6 +850,13 @@
           ],
           "description": "Do the bytes read back exactly, or only approximately? `Option` purely for\nversion skew, as with `ingest_state`."
         },
+        "body_token": {
+          "description": "The body token of exactly [`Self::content`] ([`crate::body_token`]), computed over the\nbytes this same read returned: send it as `expect.body` on `PATCH /api/resources/{id}` to\nsave over those bytes only.\n\nPresent beside `content` on a single-resource read that asked for the `body` section, and\non the answer of a `PATCH` that wrote the body, where it is computed inside the write's\nown transaction and describes the whole readable body that write left (a per-block write\nincluded). Absent everywhere else: list and search rows carry `content` without a token,\nso a body read from a list cannot guard a save. Absent from a server that predates it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "byte_blocks": {
           "description": "The body's block boundaries and per-block byte hashes, in `seq` order: what a client needs\nto check a whole cached body against [`Self::bytes_merkle`]. The `byte-blocks` section.\n\nAbsent when the section was not requested, and absent when it was but the body is not\nwholly verbatim (exactly when `bytes_merkle` is absent): a `derived` body has no stored\nbytes to cut it by. It is served under the same visibility gate as `content`, and computed\nin the same statement as `bytes_merkle` (and as `content`, when the body was requested\ntoo), so the boundaries always describe the bytes beside them.",
           "items": {

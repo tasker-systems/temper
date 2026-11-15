@@ -559,17 +559,18 @@ pub struct ResourceUpdateRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(skip))]
     pub content_block: Option<uuid::Uuid>,
-    /// What this update expects the resource's meta to hold now, per key (`null`: absent). If any
-    /// expectation does not hold, nothing is written and the answer is `412 PRECONDITION_FAILED`
-    /// with each failed key and its current value. Judged under the resource's writer lock, in
-    /// the update's own transaction. Absent: the update is unconditional, exactly as before. See
-    /// [`MetaExpect`](crate::types::precondition::MetaExpect) for the rules.
+    /// What this update expects the resource to hold now: meta values per key (`null`: absent),
+    /// and the body's token. If any expectation does not hold, nothing is written and the answer
+    /// is `412 PRECONDITION_FAILED` with each failed expectation and what is there now. Judged
+    /// under the resource's writer lock, in the update's own transaction. Absent: the update is
+    /// unconditional, exactly as before. See
+    /// [`ResourceExpect`](crate::types::precondition::ResourceExpect) for the rules.
     ///
     /// `ts(skip)`-ped like `sources` and `content_block`: a conditional write is a CLI/agent path
     /// the SvelteKit UI does not send.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(skip))]
-    pub expect: Option<crate::types::precondition::MetaExpect>,
+    pub expect: Option<crate::types::precondition::ResourceExpect>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship for the update act.
     /// Flattened as top-level keys; all optional (empty when nothing is supplied).
     ///
@@ -590,7 +591,12 @@ pub struct ContentChunk {
     pub content: String,
 }
 
-/// Response body for resource content.
+/// Response body for `GET /api/resources/{id}/content`: the readable body, and its token.
+///
+/// **Every field is determined by `markdown` and the URL**, so the `ETag` this read answers (the
+/// quoted `body_token`) validates the whole representation. Nothing else may be added here: a
+/// field that varies independently of the bytes (meta, an ingest state, a timestamp) would make
+/// that strong tag wrong. The meta tiers are `GET /api/resources/{id}/meta`.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -601,17 +607,17 @@ pub struct ContentResponse {
     /// The body. For a `verbatim` resource ([`BodyStorage::Verbatim`]) these are the stored bytes
     /// unchanged; for a `derived` one, a reconstruction from chunks.
     pub markdown: String,
-    /// Typed server-side managed_meta from kb_resource_manifests — the closed
-    /// Property vocabulary. Only the named `temper-*` keys are represented;
-    /// there is no catch-all. Used by CLI sync pull to reconstruct complete
-    /// frontmatter (identity/type/home come from the resource row, not here).
+    /// The body token of exactly `markdown` ([`crate::body_token`]): send it as `expect.body` (or
+    /// `If-Match`) on `PATCH /api/resources/{id}` to save over these bytes only. Absent from a
+    /// server that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_token: Option<String>,
+    /// **Never set by the server**, which answers this read with the body alone (see above). Kept
+    /// for clients that build a `ContentResponse` locally to carry frontmatter beside a body.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_meta: Option<ManagedMeta>,
-    /// Server-side open_meta from kb_resource_manifests. Intentionally
-    /// untyped — open_meta is the free-form tier. Typed extraction of
-    /// relationship fields lives in `ResourceRelationships` (see
-    /// `types::graph`), which parses this value on demand and ignores
-    /// anything it doesn't recognize.
+    /// **Never set by the server**, for the same reason as `managed_meta`. Intentionally untyped
+    /// where a client sets it: open_meta is the free-form tier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_meta: Option<serde_json::Value>,
 }
@@ -684,6 +690,7 @@ mod wire_tests {
             "related": ["res_999"],
         });
         let original = ContentResponse {
+            body_token: None,
             resource_id,
             markdown: "# Hello".to_string(),
             managed_meta: Some(managed_meta.clone()),
@@ -707,6 +714,7 @@ mod wire_tests {
     fn content_response_omits_open_meta_when_none() {
         let resource_id = ResourceId::from(Uuid::nil());
         let original = ContentResponse {
+            body_token: None,
             resource_id,
             markdown: "body".to_string(),
             managed_meta: None,
@@ -828,6 +836,7 @@ mod list_paging_tests {
     /// and nothing in the derivation reads a row's fields.
     fn page_of(n: usize) -> Vec<ResourceView> {
         let view = ResourceView {
+            body_token: None,
             id: ResourceId::from(Uuid::nil()),
             r#ref: String::new(),
             title: "A Node".to_string(),

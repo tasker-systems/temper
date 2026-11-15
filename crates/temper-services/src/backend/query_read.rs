@@ -2209,6 +2209,7 @@ mod tests {
     /// keys on it and copies the rest through.
     fn view(id: Uuid) -> ResourceView {
         ResourceView {
+            body_token: None,
             id: ResourceId::from(id),
             r#ref: String::new(),
             title: "A Node".to_string(),

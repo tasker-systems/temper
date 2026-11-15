@@ -9,15 +9,17 @@ import type { JsonValue } from "./serde_json/JsonValue";
  */
 export type FailedExpectation = { tier: PreconditionTier, 
 /**
- * The key the expectation named. Present on every `open` and `managed` entry.
+ * The key the expectation named. Present on every `open` and `managed` entry; never on a
+ * `body` entry.
  */
 key?: string | null, 
 /**
- * What the caller expected, as it sent it (`null`: absent).
+ * What the caller expected, as it sent it (`null`: absent). On a `body` entry, the token
+ * sent, or every token of an `If-Match` list in the order sent.
  */
 expected: JsonValue, 
 /**
- * What is there now (`null`: absent).
+ * What is there now (`null`: absent). On a `body` entry, the current body's token.
  */
 current: JsonValue, };
 
@@ -30,4 +32,4 @@ export type PreconditionFailure = { failed: Array<FailedExpectation>, };
 /**
  * Which tier a failed expectation named.
  */
-export type PreconditionTier = "open" | "managed";
+export type PreconditionTier = "open" | "managed" | "body";

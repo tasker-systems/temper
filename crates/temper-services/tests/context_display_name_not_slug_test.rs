@@ -107,6 +107,7 @@ async fn a_spaced_context_display_name_does_not_block_a_managed_tier_update(pool
     // is where `temper-context` is injected and pattern-checked. This is the call that 400'd.
     let updated = backend
         .update_resource(UpdateResource {
+            if_match: None,
             expect: None,
             open_meta_add: None,
             resource: created.id,
@@ -168,6 +169,7 @@ async fn a_slug_shaped_context_display_name_still_works(pool: PgPool) {
 
     backend
         .update_resource(UpdateResource {
+            if_match: None,
             expect: None,
             open_meta_add: None,
             resource: created.id,

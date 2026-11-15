@@ -407,6 +407,7 @@ from temper.generated.models.resource_erasure_plan import ResourceErasurePlan
 from temper.generated.models.resource_erasure_refusal_reason import ResourceErasureRefusalReason
 from temper.generated.models.resource_erasure_survey import ResourceErasureSurvey
 from temper.generated.models.resource_erasure_survey_request import ResourceErasureSurveyRequest
+from temper.generated.models.resource_expect import ResourceExpect
 from temper.generated.models.resource_facet_row import ResourceFacetRow
 from temper.generated.models.resource_facets import ResourceFacets
 from temper.generated.models.resource_facets_response import ResourceFacetsResponse

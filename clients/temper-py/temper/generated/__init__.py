@@ -452,6 +452,7 @@ __all__ = [
     "ResourceErasureRefusalReason",
     "ResourceErasureSurvey",
     "ResourceErasureSurveyRequest",
+    "ResourceExpect",
     "ResourceFacetRow",
     "ResourceFacets",
     "ResourceFacetsResponse",
@@ -1003,6 +1004,7 @@ from temper.generated.models.resource_erasure_plan import ResourceErasurePlan as
 from temper.generated.models.resource_erasure_refusal_reason import ResourceErasureRefusalReason as ResourceErasureRefusalReason
 from temper.generated.models.resource_erasure_survey import ResourceErasureSurvey as ResourceErasureSurvey
 from temper.generated.models.resource_erasure_survey_request import ResourceErasureSurveyRequest as ResourceErasureSurveyRequest
+from temper.generated.models.resource_expect import ResourceExpect as ResourceExpect
 from temper.generated.models.resource_facet_row import ResourceFacetRow as ResourceFacetRow
 from temper.generated.models.resource_facets import ResourceFacets as ResourceFacets
 from temper.generated.models.resource_facets_response import ResourceFacetsResponse as ResourceFacetsResponse

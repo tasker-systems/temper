@@ -102,6 +102,13 @@ fn is_write(method: &str) -> bool {
     !matches!(method, "GET" | "HEAD" | "OPTIONS")
 }
 
+/// The one route and header the server honours (`HONOURED`): `If-Match` on the resource `PATCH`,
+/// the body token's header. It passes the layer and is judged in the handler's backend, so the
+/// refusal sweeps skip it and `the_honoured_header_reaches_its_handler_and_only_there` covers it.
+fn is_honoured(method: &str, template: &str, header: (&str, &str)) -> bool {
+    method == "PATCH" && template == "/api/resources/{id}" && header.0 == "if-match"
+}
+
 /// What the matrix compares: the status, the `Allow` header, and the body's exact bytes.
 #[derive(Debug, PartialEq, Eq)]
 struct Answer {
@@ -423,6 +430,9 @@ async fn every_refused_tier_refuses_only_after_its_gates(pool: PgPool) {
         let path = concrete(template);
         let route = format!("{tier}: {method} {template}");
         for header in POLICED {
+            if is_honoured(method, template, header) {
+                continue;
+            }
             let answer = send(
                 &app,
                 method,
@@ -1001,6 +1011,16 @@ async fn every_documented_write_refuses_each_header_for_an_admitted_caller(pool:
         let path = concrete(template);
         for header in POLICED {
             let answer = send(&app, method, &path, Some(&authorization), &[header], &body).await;
+            if is_honoured(method, template, header) {
+                // Honoured: it reaches the handler, which answers exactly as without the header
+                // for a resource that does not exist (the floor's refusal), and writes nothing.
+                let plain = send(&app, method, &path, Some(&authorization), &[], &body).await;
+                assert_eq!(
+                    answer, plain,
+                    "{method} {template} with the honoured If-Match"
+                );
+                continue;
+            }
             assert_refused(&format!("{method} {template}"), header, &answer);
         }
     }
@@ -1152,7 +1172,16 @@ async fn real_writes_land_without_the_header_and_not_with_it(pool: PgPool) {
         let before = database_fingerprint(&pool).await;
         let rename = json!({"title": "Renamed"});
         let answer = send(&app, "PATCH", &resource, auth, &[header], &rename).await;
-        assert_refused("PATCH /api/resources/{id}", header, &answer);
+        if is_honoured("PATCH", "/api/resources/{id}", header) {
+            // Honoured and judged: the sentinel tag names no body, so the write is refused 412.
+            assert_eq!(answer.status, 412, "{answer:?}");
+            assert_eq!(
+                answer.json()["error"]["code"],
+                json!(temper_core::error::PRECONDITION_FAILED_CODE)
+            );
+        } else {
+            assert_refused("PATCH /api/resources/{id}", header, &answer);
+        }
         let answer = send(&app, "PUT", &meta, auth, &[header], &meta_body).await;
         assert_refused("PUT /api/resources/{id}/meta", header, &answer);
         let answer = send(&app, "DELETE", &resource, auth, &[header], &json!({})).await;

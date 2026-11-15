@@ -66,7 +66,8 @@
 //! # Honouring a header
 //!
 //! A route that starts evaluating one of these headers is listed in `HONOURED`, and from then on
-//! that header reaches its handler on that route. Nothing is listed yet. An entry must name a
+//! that header reaches its handler on that route. One is listed: `If-Match` on
+//! `PATCH /api/resources/{id}`, the body token's header. An entry must name a
 //! documented route mounted by a `Refused` group (`routes::tests` holds this): an exempt route is
 //! not policed at all, and an `InHandler` door honours nothing. Each entry owes witnesses against
 //! its handler: a mismatched precondition is refused with `412` and nothing applied; a value the
@@ -98,10 +99,21 @@ pub(crate) struct Honoured {
     pub(crate) header: HeaderName,
 }
 
-/// The routes whose handlers honour a policed header. Empty: no handler evaluates one yet. An
-/// entry is the whole exemption; the handler it names must then honour the header, because from
-/// here on nothing else refuses it. See the module doc for the witnesses an entry owes.
-pub(crate) const HONOURED: &[Honoured] = &[];
+/// The routes whose handlers honour a policed header. An entry is the whole exemption; the
+/// handler it names must then honour the header, because from here on nothing else refuses it.
+/// See the module doc for the witnesses an entry owes.
+///
+/// - **`PATCH /api/resources/{id}`, `If-Match`**: a synonym for `expect.body`. The handler carries
+///   the raw value to the backend, which refuses a `*`, an unparseable list, a weak tag naming the
+///   current body or a disagreement with `expect.body` (`400`), and judges the rest under the
+///   resource's writer lock after the read gate (`412`, or GET's `404` to a non-reader). The
+///   witnesses are `temper-services`' `body_precondition_test` and this crate's
+///   `unhonoured_precondition_test`.
+pub(crate) const HONOURED: &[Honoured] = &[Honoured {
+    method: Method::PATCH,
+    route: "/api/resources/{id}",
+    header: axum::http::header::IF_MATCH,
+}];
 
 /// True for the methods that do not change state, which this layer never inspects.
 fn is_safe(method: &Method) -> bool {
@@ -307,17 +319,44 @@ mod tests {
     }
 
     // FAILS IF: an entry is added to `HONOURED` without updating this test, and the witnesses the
-    // module doc requires for it.
+    // module doc requires for it; or the one entry widens to another header, method or route.
     #[test]
-    fn nothing_is_honoured_yet() {
-        assert!(HONOURED.is_empty());
-        for header in &POLICED {
+    fn only_if_match_on_the_resource_patch_is_honoured() {
+        assert_eq!(HONOURED.len(), 1);
+        let route = Some("/api/resources/{id}");
+        assert!(is_honoured(
+            &Method::PATCH,
+            route,
+            &axum::http::header::IF_MATCH
+        ));
+        for header in &POLICED[1..] {
+            assert!(!is_honoured(&Method::PATCH, route, header), "{header}");
+        }
+        for method in [Method::PUT, Method::POST, Method::DELETE] {
+            assert!(!is_honoured(&method, route, &axum::http::header::IF_MATCH));
+        }
+        for other in [
+            "/api/resources/{id}/meta",
+            "/api/resources",
+            "/api/resources/{id}/content",
+        ] {
             assert!(!is_honoured(
                 &Method::PATCH,
-                Some("/api/resources/{id}"),
-                header
+                Some(other),
+                &axum::http::header::IF_MATCH
             ));
         }
+        assert!(!is_honoured(
+            &Method::PATCH,
+            None,
+            &axum::http::header::IF_MATCH
+        ));
+        // Honoured means passed through, never refused, and never for its siblings on that row.
+        let mut headers = HeaderMap::new();
+        headers.insert(axum::http::header::IF_MATCH, "*".parse().unwrap());
+        assert!(check(&Method::PATCH, route, &headers).is_ok());
+        headers.insert(axum::http::header::IF_NONE_MATCH, "*".parse().unwrap());
+        assert!(check(&Method::PATCH, route, &headers).is_err());
     }
 
     // FAILS IF: the handler-callable check answers differently from the layer: a safe method

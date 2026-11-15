@@ -157,7 +157,11 @@ async fn read_resource_contents(
             .await
             .across_auth(map_read_err)?;
 
-        // Return metadata as JSON + content as markdown.
+        // Return metadata as JSON + content as markdown. The metadata part carries the body token
+        // of the `/content` response whose markdown is the second part, never one read beside it:
+        // the view above was a separate request, and a token from it could name other bytes.
+        let mut row = row;
+        row.body_token = content.body_token.clone();
         let meta_json = serde_json::to_string_pretty(&row).map_err(|e| {
             rmcp::ErrorData::internal_error(
                 format!("Failed to serialize resource metadata: {e}"),
