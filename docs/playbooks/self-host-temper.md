@@ -79,7 +79,7 @@ crons are configured**. `vercel.json` declares twelve:
 | hourly | `/api/slack/intents/reap` | Expired Slack link intents are never swept. |
 | every minute | `/api/region/dispatch` | Region materialization: cognitive-map regions never form. |
 | daily at 03:17 | `/api/as/reap` | Retention: the authorization server's tables and abandoned staged blob uploads are never reaped. |
-| every 15 minutes | `/api/internal-calls/health` | Reconcile-channel health: a fail-open internal call that never reached the instance produces no operator-visible signal. |
+| every 15 minutes | `/api/internal-calls/health` | Internal-call health for the SAML reconcile and principal-resolve channels: without it, a fail-open internal call that never reached the instance produces no operator-visible signal. |
 | every minute | `/api/erasure/drain` | Erasure: deletion work is never processed off the request path. |
 | every 5 minutes | `/api/sensitivity/sweep` | Sensitivity sweep: personal data that lands in the corpus by accident is never found, and the digests of erased places are never expired. Scans nothing until you opt in with `SENSITIVITY_SWEEP_ENABLED` and enable detectors. |
 | every 5 minutes | `/api/shape/reconcile` | Shape reconciliation: an artifact committed before its family's shape was declared, or rehomed under another shape, never gains a verdict and reads `declared_not_yet_checked`. |

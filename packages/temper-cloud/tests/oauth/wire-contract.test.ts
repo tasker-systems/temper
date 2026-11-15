@@ -7,7 +7,7 @@ import {
   type ReconcileRequest,
   signRequestV2,
 } from "../../src/oauth/reconcile.js";
-import { RECONCILE_CHANNEL } from "../../src/oauth/reconcile-health.js";
+import { RECONCILE_CHANNEL, RESOLVE_CHANNEL } from "../../src/oauth/reconcile-health.js";
 import type { ResolvePrincipalRequest, ResolvePrincipalResponse } from "../../src/oauth/resolve.js";
 
 /**
@@ -239,5 +239,22 @@ describe("internal call health channel name — TS/Rust wire contract", () => {
         "was renamed or this pin is reading the wrong file, and both make the pin vacuous",
     ).not.toBeNull();
     expect(match?.[1]).toBe(RECONCILE_CHANNEL);
+  });
+
+  // FAILS IF: the resolve channel's name drifts between the writer and the watcher, so the
+  // health cron reports `no_attempt_recorded` for a channel temper-cloud is writing failures to.
+  it("matches RESOLVE_CHANNEL in internal_call_health_service.rs", () => {
+    const rustSource = readFileSync(
+      new URL(
+        "../../../../crates/temper-services/src/services/internal_call_health_service.rs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const match = rustSource.match(/pub const RESOLVE_CHANNEL: &str = "([^"]+)";/);
+    expect(match, "`pub const RESOLVE_CHANNEL` was not found").not.toBeNull();
+    expect(match?.[1]).toBe(RESOLVE_CHANNEL);
+    // Watched, not only declared: a constant the check never reads would pass the match above.
+    expect(rustSource).toMatch(/WATCHED_CHANNELS: \[&str; \d+\] = \[[^\]]*RESOLVE_CHANNEL/);
   });
 });

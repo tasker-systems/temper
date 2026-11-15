@@ -968,6 +968,84 @@ describe("e2e: full mock-IdP SAML login", () => {
   });
 
   /**
+   * Both fail-open calls record, on their own channels, from the same login.
+   *
+   * The resolve call had no channel before: a deployment whose resolve was always refused looked
+   * exactly like a healthy one. A refused resolve must now land on `principal_resolve` as the same
+   * conclusive cause a refused reconcile lands on `saml_reconcile`, and a working one must record
+   * a success there, while the login itself still succeeds either way.
+   */
+  describe("both channels", () => {
+    async function readChannel(channel: string): Promise<HealthRow | undefined> {
+      const rows = await sql<HealthRow[]>`
+        SELECT consecutive_failures, failures_total, failing_since, last_success_at,
+               last_failure_cause, last_failure_detail
+          FROM kb_internal_call_health WHERE channel = ${channel}`;
+      return rows[0];
+    }
+
+    beforeEach(async () => {
+      await sql`UPDATE kb_saml_idp SET groups_attr = 'groups' WHERE idp_key = 'test'`;
+      process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
+      process.env.INTERNAL_RESOLVE_URL = "https://api.internal/internal/principal/resolve";
+      process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RECONCILE_URL;
+      delete process.env.INTERNAL_RESOLVE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    });
+
+    // FAILS IF: either call site stops recording its failure, or records it on the other's channel.
+    it("records a refusal on each channel, and the login still succeeds", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("no", { status: 401 })),
+      );
+      const acsRes = await loginOnce("bothfail", true);
+      expect(acsRes.status).toBe(302);
+
+      for (const channel of ["saml_reconcile", "principal_resolve"]) {
+        const row = await readChannel(channel);
+        expect(row, channel).toBeDefined();
+        expect(row?.consecutive_failures, channel).toBe(1);
+        expect(row?.last_failure_cause, channel).toBe("unauthorized");
+        expect(row?.last_failure_detail, channel).toBe("HTTP 401");
+      }
+    });
+
+    // FAILS IF: the resolve call site stops recording its success, so a recovered channel reads as
+    // failing until the staleness bound.
+    it("records a success on the resolve channel", async () => {
+      const handle = `e2e-both-${Date.now()}`;
+      const rows = await sql`
+        INSERT INTO kb_profiles (handle, display_name, email, preferences)
+        VALUES (${handle}, ${handle}, ${`${handle}@example.test`}, '{}') RETURNING id`;
+      const profileId = (rows[0] as { id: string }).id;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+          url.endsWith("/internal/principal/resolve")
+            ? new Response(JSON.stringify({ profile_id: profileId }), { status: 200 })
+            : new Response(null, { status: 204 }),
+        ),
+      );
+      try {
+        expect((await loginOnce("bothok", true)).status).toBe(302);
+        for (const channel of ["saml_reconcile", "principal_resolve"]) {
+          const row = await readChannel(channel);
+          expect(row?.last_success_at, channel).not.toBeNull();
+          expect(row?.consecutive_failures, channel).toBe(0);
+        }
+      } finally {
+        await sql`DELETE FROM kb_profiles WHERE handle = ${handle}`;
+      }
+    });
+  });
+
+  /**
    * An authentication-only IdP has no reconcile channel to be healthy or unhealthy about.
    *
    * `groups_attr` left NULL is the supported posture: no team membership is ever derived, the ACS

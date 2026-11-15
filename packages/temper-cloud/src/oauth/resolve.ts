@@ -1,6 +1,12 @@
 import { logger } from "../logger.js";
-import { requireEnv } from "./env.js";
-import { RESOLVE_DOOR, signedHeaders } from "./reconcile.js";
+import {
+  RESOLVE_DOOR,
+  requireDoorUrl,
+  requireReconcileEnv,
+  signedHeaders,
+  transportDetail,
+} from "./reconcile.js";
+import { InternalCallError } from "./reconcile-health.js";
 
 /** Ceiling on an internal server-to-server call, so a slow dependency fails open rather than hanging. */
 const INTERNAL_CALL_TIMEOUT_MS = 5000;
@@ -42,32 +48,51 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * Shares the reconcile gate's key and signing scheme (`INTERNAL_RECONCILE_SECRET`, `signedHeaders`
  * for this door) because it is the same caller making the same kind of call at the same
  * trust level. Throws on transport error or non-2xx; every caller treats that as "no owner yet"
- * rather than as a reason to refuse a login.
+ * rather than as a reason to refuse a login, and records it on the `principal_resolve` health
+ * channel. Every throw is an `InternalCallError`, classified the way `reconcileMemberships`
+ * classifies its own, because the cause decides whether one occurrence pages.
  */
 export async function resolvePrincipal(
   payload: ResolvePrincipalRequest,
 ): Promise<ResolvePrincipalResponse> {
-  const url = requireEnv("INTERNAL_RESOLVE_URL");
-  const secret = requireEnv("INTERNAL_RECONCILE_SECRET");
+  const url = requireDoorUrl("INTERNAL_RESOLVE_URL", RESOLVE_DOOR);
+  const secret = requireReconcileEnv("INTERNAL_RECONCILE_SECRET");
   // Sign the exact body string we send — raw-body discipline, no re-serialization.
   const body = JSON.stringify(payload);
   const timestamp = Math.floor(Date.now() / 1000);
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...signedHeaders(secret, RESOLVE_DOOR, timestamp, body),
-    },
-    body,
-    // Fail-open is only a mercy if it fails FAST. Both callers catch and carry on, but an
-    // unbounded fetch does not reach the catch — it holds the request until the platform's own
-    // function timeout, turning a degraded dependency into a stalled login or rotation. Since the
-    // migration, the first rotation of every pre-existing chain takes the resolve branch, so this
-    // sits on a hot path rather than a rare one.
-    signal: AbortSignal.timeout(INTERNAL_CALL_TIMEOUT_MS),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...signedHeaders(secret, RESOLVE_DOOR, timestamp, body),
+      },
+      body,
+      // Fail-open is only a mercy if it fails FAST. Both callers catch and carry on, but an
+      // unbounded fetch does not reach the catch — it holds the request until the platform's own
+      // function timeout, turning a degraded dependency into a stalled login or rotation. Since
+      // the migration, the first rotation of every pre-existing chain takes the resolve branch, so
+      // this sits on a hot path rather than a rare one.
+      signal: AbortSignal.timeout(INTERNAL_CALL_TIMEOUT_MS),
+    });
+  } catch (fetchErr) {
+    // No answer at all: DNS, connection refused, TLS, or the abort above. The detail is the
+    // error's NAME, never its message.
+    throw new InternalCallError(
+      "transport",
+      transportDetail(fetchErr),
+      "principal resolve call did not reach the endpoint",
+    );
+  }
   if (!res.ok) {
-    throw new Error(`principal resolve endpoint returned ${res.status}`);
+    // 401/403: the signature was refused or the door is not served. Conclusive, as on the
+    // reconcile channel; see `reconcileMemberships` for what it covers.
+    throw new InternalCallError(
+      res.status === 401 || res.status === 403 ? "unauthorized" : "endpoint_error",
+      `HTTP ${res.status}`,
+      `principal resolve endpoint returned ${res.status}`,
+    );
   }
 
   // Validate, do not assert. `as ResolvePrincipalResponse` is a compile-time claim about a value
@@ -79,10 +104,26 @@ export async function resolvePrincipal(
   // token `rotateRefreshToken` has already revoked. That is an irrecoverable logout produced by a
   // misconfiguration that logs success. Throwing here collapses both failures onto the fail-open
   // path the design actually intends.
-  const parsed: unknown = await res.json();
+  //
+  // A 2xx that is not a usable answer is `endpoint_error`: the endpoint answered and the answer was
+  // wrong, which can be a bad deploy or a proxy's page, and must recur before it pages.
+  let parsed: unknown;
+  try {
+    parsed = await res.json();
+  } catch {
+    throw new InternalCallError(
+      "endpoint_error",
+      `HTTP ${res.status} unreadable body`,
+      "principal resolve endpoint returned an unreadable body",
+    );
+  }
   const profileId = (parsed as { profile_id?: unknown } | null)?.profile_id;
   if (typeof profileId !== "string" || !UUID_RE.test(profileId)) {
-    throw new Error("principal resolve endpoint returned no usable profile_id");
+    throw new InternalCallError(
+      "endpoint_error",
+      `HTTP ${res.status} no profile_id`,
+      "principal resolve endpoint returned no usable profile_id",
+    );
   }
   logger.info({ profile_id: profileId }, "principal resolve ok");
   return { profile_id: profileId };

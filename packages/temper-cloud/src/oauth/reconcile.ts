@@ -22,9 +22,10 @@ export const RESOLVE_DOOR = "/internal/principal/resolve";
  * Mirrors `temper_core::internal_sig::sign_v2`; pinned by the v2 known-answer vector in
  * tests/oauth/wire-contract.test.ts. We sign the RAW body string exactly as it is sent (never a
  * re-serialized form) so there is no cross-language canonicalization to drift on. `door` is the
- * route temper-api registers, never the URL we post to, so a prefix or rewrite in front of the API
- * does not break it. Binding the door and a nonce is what lets the verifier accept a signature at
- * one door, once.
+ * route temper-api registers, never read back from the URL we post to. The URL's path must equal
+ * the door all the same (`requireDoorUrl`), because a path the API does not serve is refused
+ * exactly as a bad signature is, and only this side can tell the two apart. Binding the door and a
+ * nonce is what lets the verifier accept a signature at one door, once.
  */
 export function signRequestV2(
   secret: string,
@@ -82,12 +83,13 @@ export interface ReconcileRequest {
 /**
  * [`requireEnv`] with the failure classified.
  *
- * An unset `INTERNAL_RECONCILE_URL` or `INTERNAL_RECONCILE_SECRET` is a deployment fact, not a
- * transient one: it fails for every login, forever, until someone sets it. Naming the variable as
- * the detail is what makes the operator action obvious from the signal alone, which is the whole
- * difference between "the reconcile channel is down" and "set this variable".
+ * An unset `INTERNAL_RECONCILE_URL`, `INTERNAL_RESOLVE_URL` or `INTERNAL_RECONCILE_SECRET` is a
+ * deployment fact, not a transient one: it fails for every login, forever, until someone sets it.
+ * Naming the variable as the detail is what makes the operator action obvious from the signal
+ * alone, which is the whole difference between "the reconcile channel is down" and "set this
+ * variable".
  */
-function requireReconcileEnv(name: string): string {
+export function requireReconcileEnv(name: string): string {
   try {
     return requireEnv(name);
   } catch {
@@ -100,13 +102,41 @@ function requireReconcileEnv(name: string): string {
 }
 
 /**
+ * The URL in `name`, checked to post to `door` before anything is signed.
+ *
+ * temper-api refuses an unauthenticated caller the same way whatever went wrong, so a URL with a
+ * stray path segment, a trailing slash or the wrong door answers 401 exactly as a wrong secret
+ * does, and the reader would page about the secret. The path is the half of the URL this side can
+ * check against the door it signs for, so it is checked here, where the cause is known exactly. A
+ * value that does not parse as a URL is the same kind of fact and gets the same cause. The detail
+ * is a fixed string, never the URL itself.
+ */
+export function requireDoorUrl(name: string, door: string): string {
+  const url = requireReconcileEnv(name);
+  let pathname: string | null = null;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    pathname = null;
+  }
+  if (pathname !== door) {
+    throw new InternalCallError(
+      "config_missing",
+      `${name} path`,
+      `${name} does not post to ${door}`,
+    );
+  }
+  return url;
+}
+
+/**
  * A bounded detail for a transport failure — the error's constructor name and nothing else.
  *
  * Guarded rather than trusted: the recorded value reaches an operator's panel, and a name is only
  * useful if it is a name. Anything that is not a plain identifier is reported as `unknown` instead
  * of being stored, which keeps the column's contents an enumerable set.
  */
-function transportDetail(err: unknown): string {
+export function transportDetail(err: unknown): string {
   const name = err instanceof Error ? err.name : "";
   return /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(name) ? name : "unknown";
 }
@@ -119,7 +149,7 @@ function transportDetail(err: unknown): string {
  * `require_internal_signature` middleware.
  */
 export async function reconcileMemberships(payload: ReconcileRequest): Promise<void> {
-  const url = requireReconcileEnv("INTERNAL_RECONCILE_URL");
+  const url = requireDoorUrl("INTERNAL_RECONCILE_URL", RECONCILE_DOOR);
   const secret = requireReconcileEnv("INTERNAL_RECONCILE_SECRET");
   // Sign the exact body string we send — raw-body discipline, no re-serialization.
   const body = JSON.stringify(payload);
@@ -151,9 +181,12 @@ export async function reconcileMemberships(payload: ReconcileRequest): Promise<v
     );
   }
   if (!res.ok) {
-    // 401/403 is the API refusing the signature — a wrong INTERNAL_RECONCILE_SECRET, or clock skew
-    // past the verifier's window. That is a deployment fact, not weather, and it is separated from
-    // every other status precisely so one occurrence can be treated as conclusive.
+    // 401/403 means the signature was refused or the door is not served. temper-api answers an
+    // unauthenticated caller the same way whatever the reason, so this covers a wrong
+    // INTERNAL_RECONCILE_SECRET, clock skew past the verifier's window, and a deployment of the API
+    // that does not serve this door. Each is a deployment fact, not weather, and it is separated
+    // from every other status precisely so one occurrence can be treated as conclusive. A wrong
+    // path in our own URL never gets this far: `requireDoorUrl` refuses it before signing.
     throw new InternalCallError(
       res.status === 401 || res.status === 403 ? "unauthorized" : "endpoint_error",
       `HTTP ${res.status}`,
