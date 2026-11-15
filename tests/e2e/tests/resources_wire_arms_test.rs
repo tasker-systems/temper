@@ -133,8 +133,9 @@ fn code_of(err: &rmcp::ErrorData) -> i32 {
 
 /// Expired-in-flight: the bearer verifies at the MCP edge (no expiry check on
 /// synthetic parts — parts are this test's construction), crosses the wire, and dies
-/// at the API's decode. The preserved 401 body "Invalid or expired token" maps to the
-/// NEW re-authenticate sentence — a face the direct binding could not produce.
+/// at the API's decode. The preserved 401 body, the API's uniform pre-identity refusal
+/// ("authentication required"), maps to the re-authenticate sentence — a face the direct
+/// binding could not produce.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn expired_in_flight_speaks_the_re_authenticate_sentence(pool: PgPool) {
     let app = common::setup_relay(pool).await;
@@ -154,8 +155,8 @@ async fn expired_in_flight_speaks_the_re_authenticate_sentence(pool: PgPool) {
     assert_eq!(code_of(&err), -32600, "terminal, not a caller error: {err}");
     assert_eq!(
         err.message,
-        "This session's token has expired. Re-authenticate (the MCP client's OAuth \
-         flow will refresh it) and retry the call."
+        "This call's credentials were not accepted. Re-authenticate (the MCP client's OAuth \
+         flow will refresh the token) and retry; if it recurs, contact the operator."
     );
 }
 

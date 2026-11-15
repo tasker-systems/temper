@@ -80,9 +80,9 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Connection> {
 /// load-bearing on its own. A NULL credential is the `needs_credential` birth state and can
 /// receive nothing; a revoked connection must not receive at all.
 ///
-/// **No match returns [`ApiError::Unauthorized`], not `NotFound`, and its message names nothing.**
-/// The caller renders it byte-identically to a failed attestation, so a probe cannot learn whether
-/// a connector is provisioned here by comparing responses.
+/// **No match returns the uniform pre-identity refusal ([`ApiError::Unauthenticated`]), not
+/// `NotFound`.** It renders byte-identically to a failed attestation, so a probe cannot learn
+/// whether a connector is provisioned here by comparing responses.
 ///
 /// **Two matches are a FAILURE, not a choice.** `credential->>'connector'` is not unique and two
 /// teams may legitimately register the same org-wide connector, so ambiguity is reachable — and
@@ -114,8 +114,8 @@ pub async fn resolve_inbound(
 
     match rows.len() {
         1 => Ok(rows.into_iter().next().expect("length checked")),
-        0 => Err(ApiError::Unauthorized(
-            "inbound attestation not accepted".to_string(),
+        0 => Err(ApiError::Unauthenticated(
+            crate::error::UnauthCause::IntakeUnattested,
         )),
         n => Err(ApiError::Internal(format!(
             "inbound connector resolves to {n} connections; temper cannot know which one this              payload was for. Exactly one live, credentialed connection must carry this connector."

@@ -117,7 +117,7 @@ pub async fn receive(
     )
     .await
     .map_err(|e| match e {
-        ApiError::Unauthorized(_) => {
+        ApiError::Unauthenticated(_) => {
             tracing::warn!(
                 provider = %verified.provider,
                 "verified attestation names no live credentialed connection"

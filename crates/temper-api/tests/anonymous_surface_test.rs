@@ -611,6 +611,9 @@ async fn a_failing_key_store_makes_every_refusal_unavailable(pool: PgPool) {
         state.jwks_store = std::sync::Arc::new(temper_services::state::JwksKeyStore::new(
             "http://127.0.0.1:1/.well-known/jwks.json".to_string(),
         ));
+        let mut config = (*state.config).clone();
+        config.cors_origins = vec![ORIGIN.to_string()];
+        state.config = std::sync::Arc::new(config);
     })
     .await;
     // Any bearer reaches the empty cache and fails its refresh; from then on the store is failing.
@@ -624,6 +627,21 @@ async fn a_failing_key_store_makes_every_refusal_unavailable(pool: PgPool) {
     let mut answers = vec![("the priming request".to_string(), primed)];
     for (method, path, headers) in refused_requests() {
         let answer = send_owned(&app, method.clone(), &path, &headers).await;
+        answers.push((format!("{method} {path} {headers:?}"), answer));
+    }
+    assert_refusals(&answers, &unavailable());
+
+    // The swap replaces the body, never the headers that depend on the request: an allowlisted
+    // origin still reads the unavailable answer, and the same CORS headers ride every path.
+    let mut answers = Vec::new();
+    for (method, path, mut headers) in refused_requests() {
+        headers.push(("origin", ORIGIN.to_string()));
+        let answer = send_owned(&app, method.clone(), &path, &headers).await;
+        assert_eq!(
+            answer.header("access-control-allow-origin"),
+            Some(ORIGIN),
+            "{method} {path}"
+        );
         answers.push((format!("{method} {path} {headers:?}"), answer));
     }
     assert_refusals(&answers, &unavailable());

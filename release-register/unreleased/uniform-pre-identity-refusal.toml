@@ -32,13 +32,19 @@ and error codes. The cron host pin's answer is unchanged here.
 Who observes it: an unauthenticated caller, and an operator debugging a misconfigured cron, HMAC
 sender or intake broker, who reads the cause from the log by request id instead of from the body.
 temper-mcp's relay maps the uniform body (and, for skew, the per-gate messages an older API sends)
-to its one re-authenticate sentence and keeps its retryable arm for the unavailable body.
+to one re-authenticate sentence, which replaces both its expired-in-flight sentence ("This
+session's token has expired. …") and its mangled-credential sentence: "This call's credentials
+were not accepted. Re-authenticate (the MCP client's OAuth flow will refresh the token) and retry;
+if it recurs, contact the operator." It keeps its retryable arm for the unavailable body. A relay
+older than this API maps the uniform body to its terminal catch-all, so the relay deploys first
+(they ship from one repository and one release).
 temper-client and the CLI render every 401 alike already; the SDKs key on the status.
 
 Why behavioral: no shape or code moved; the messages behind the 401s changed. Review-owned.
 
 Witnesses: crates/temper-api/tests/anonymous_surface_test.rs (pre_identity_refusals_are_u401
-across every gate kind, credential shape and secrets set or unset;
+across every gate kind and credential shape, with the reconcile, mint and cron secrets set or
+unset;
 a_failing_key_store_makes_every_refusal_unavailable), every_pre_identity_cause_renders_the_same_bytes
 in temper-services' error module, the sticky failure flag's tests in temper-services' state module,
 and the_uniform_pre_identity_401_maps_to_reauthentication in temper-mcp. Release relevance:

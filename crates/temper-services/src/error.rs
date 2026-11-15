@@ -52,7 +52,7 @@ pub enum ApiError {
     /// The response is marked [`PreIdentityRefusal`], which is how temper-api's outer service finds
     /// it to answer "authentication service unavailable" instead while the bearer key store is
     /// failing: unavailability is server-wide state, not something a path decides.
-    #[error("Unauthorized: authentication required")]
+    #[error("{}", UNAUTHENTICATED_MESSAGE)]
     Unauthenticated(UnauthCause),
     #[error("Forbidden")]
     Forbidden,
@@ -273,10 +273,6 @@ pub enum UnauthCause {
     HmacBadSignature,
     /// A signature door's secret is unset (the door is disabled).
     HmacDisabled,
-    /// A body too large to buffer before the signature check.
-    HmacBody,
-    /// A cron door reached on a host other than the deployment's cron host.
-    CronWrongHost,
     /// The cron secret is unset (every cron door is disabled).
     CronDisabled,
     /// A missing or wrong cron secret.
@@ -284,15 +280,11 @@ pub enum UnauthCause {
     /// The webhook intake's broker attestation did not verify, named no live connection, or was
     /// replayed.
     IntakeUnattested,
-    /// An unmatched path, to a caller without a verified bearer.
-    UnmatchedPath,
-    /// An unmatched path under a prefix refused to every caller.
-    RefusedPrefix,
 }
 
 impl UnauthCause {
     /// Every cause, for the test that their responses are byte-identical.
-    pub const ALL: [UnauthCause; 14] = [
+    pub const ALL: [UnauthCause; 10] = [
         UnauthCause::MissingBearer,
         UnauthCause::BadScheme,
         UnauthCause::InvalidToken,
@@ -300,13 +292,9 @@ impl UnauthCause {
         UnauthCause::HmacMissingHeaders,
         UnauthCause::HmacBadSignature,
         UnauthCause::HmacDisabled,
-        UnauthCause::HmacBody,
-        UnauthCause::CronWrongHost,
         UnauthCause::CronDisabled,
         UnauthCause::CronBadSecret,
         UnauthCause::IntakeUnattested,
-        UnauthCause::UnmatchedPath,
-        UnauthCause::RefusedPrefix,
     ];
 
     /// The fixed string logged as `cause`.
@@ -319,13 +307,9 @@ impl UnauthCause {
             UnauthCause::HmacMissingHeaders => "hmac_missing_headers",
             UnauthCause::HmacBadSignature => "hmac_bad_signature",
             UnauthCause::HmacDisabled => "hmac_disabled",
-            UnauthCause::HmacBody => "hmac_body",
-            UnauthCause::CronWrongHost => "cron_wrong_host",
             UnauthCause::CronDisabled => "cron_disabled",
             UnauthCause::CronBadSecret => "cron_bad_secret",
             UnauthCause::IntakeUnattested => "intake_unattested",
-            UnauthCause::UnmatchedPath => "unmatched_path",
-            UnauthCause::RefusedPrefix => "refused_prefix",
         }
     }
 }
@@ -622,6 +606,10 @@ impl From<ApiError> for temper_core::error::TemperError {
             ApiError::Forbidden => TemperError::Forbidden,
             ApiError::ForbiddenDetail(s) => TemperError::ForbiddenDetail(s),
             ApiError::Unauthorized(s) => TemperError::Unauthorized(s),
+            // Lossy, deliberately visible: the cause and the response mark do not survive, so a
+            // refusal that went out through `TemperError` would miss the outer service's
+            // unavailable swap. No HTTP path converts a refusal this way (this serves
+            // `db_backend`); a gate must return `ApiError::Unauthenticated` itself.
             ApiError::Unauthenticated(_) => {
                 TemperError::Unauthorized("authentication required".to_string())
             }

@@ -1076,6 +1076,18 @@ fn map_system_access_refusal(refusal: &ClientError) -> Option<rmcp::ErrorData> {
     ))
 }
 
+/// The API 401 causes whose remedy is re-authentication. The first is the API's uniform
+/// pre-identity refusal (`temper_services::error::UNAUTHENTICATED_MESSAGE` without its prefix);
+/// the rest are the per-gate messages an API from before that refusal still sends, kept so a
+/// relay deployed ahead of its API maps them the same way.
+const REAUTHENTICATE_CAUSES: [&str; 5] = [
+    "authentication required",
+    "Invalid or expired token",
+    "Missing Authorization header",
+    "Authorization header must use Bearer scheme",
+    "Invalid Authorization header encoding",
+];
+
 /// Map a post-edge authentication refusal onto the rmcp sentence that refusal's arm
 /// speaks (design §3 — the arm-for-arm mapping ruling 7 completed).
 ///
@@ -1102,18 +1114,6 @@ fn map_system_access_refusal(refusal: &ClientError) -> Option<rmcp::ErrorData> {
 ///
 /// `None` for every other error — only authentication refusals speak here; the tool's
 /// own mapping owns the rest.
-/// The API 401 causes whose remedy is re-authentication. The first is the API's uniform
-/// pre-identity refusal (`temper_services::error::UNAUTHENTICATED_MESSAGE` without its prefix);
-/// the rest are the per-gate messages an API from before that refusal still sends, kept so a
-/// relay deployed ahead of its API maps them the same way.
-const REAUTHENTICATE_CAUSES: [&str; 5] = [
-    "authentication required",
-    "Invalid or expired token",
-    "Missing Authorization header",
-    "Authorization header must use Bearer scheme",
-    "Invalid Authorization header encoding",
-];
-
 pub fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorData> {
     let ClientError::UnauthorizedDetails { message } = refusal else {
         return None;
@@ -1153,11 +1153,11 @@ pub fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorData> {
                 .to_string(),
         ))
     } else if cause == "Authentication service unavailable" {
-        // The API's JWKS-retrieval-failure 401 (auth middleware's `error!` arm): a
+        // The API's key-store-outage 401: while its bearer key store is failing, the API
+        // answers every pre-identity refusal with this body, whatever the path. A
         // transient infrastructure fault whose honest remedy is exactly a retry — the
-        // one 401 cause that must NOT take the terminal framing. It cannot be produced
-        // on demand at the listener (it needs the key store to fail, not the caller),
-        // so this arm is witnessed at the mapping's unit grain rather than on the wire.
+        // one 401 cause that must NOT take the terminal framing. Witnessed here at the
+        // mapping's unit grain; the API's own test drives the outage through the router.
         Some(rmcp::ErrorData::internal_error(
             "The authentication service is temporarily unavailable. Retry the call; if \
              it recurs, contact the operator."
@@ -1652,9 +1652,9 @@ mod tests {
 
     /// The JWKS-outage 401 ("Authentication service unavailable") is TRANSIENT — the
     /// one post-edge cause whose remedy is a retry [added — 2026-09-24, found in review]. The catch-all would
-    /// frame it terminal; this arm must map it to an internal, retryable voice. The
-    /// face needs the key store to FAIL, not the caller, so it cannot be produced on
-    /// demand at the listener — the mapping's other arms carry the wire witnesses.
+    /// frame it terminal; this arm must map it to an internal, retryable voice. The API
+    /// answers it, on every path, while its key store is failing; its own integration test
+    /// drives that outage through the router.
     #[test]
     fn the_jwks_outage_401_maps_retryable_never_terminal() {
         let err = map_post_edge_auth(&ClientError::UnauthorizedDetails {

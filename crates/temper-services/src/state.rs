@@ -176,6 +176,11 @@ pub struct JwksKeyStore {
     /// "unavailable", while the same request on a signature door gets the uniform refusal. Held
     /// until a refresh succeeds, the answer during an outage does not depend on the path.
     failing: std::sync::atomic::AtomicBool,
+    /// Bumped by every successful [`Self::refresh`]. A failed stale refresh marks the store failing
+    /// only if no refresh succeeded after it began: an unknown-`kid` refresh can succeed while a
+    /// slower stale one is still in flight, and that one's later failure must not mark a cache that
+    /// is fresh.
+    refresh_generation: std::sync::atomic::AtomicU64,
 }
 
 impl std::fmt::Debug for JwksKeyStore {
@@ -257,6 +262,7 @@ impl JwksKeyStore {
             unknown_kid_gate: tokio::sync::Mutex::new(None),
             unknown_kid_refresh_interval: Duration::from_secs(60),
             failing: std::sync::atomic::AtomicBool::new(false),
+            refresh_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -292,6 +298,7 @@ impl JwksKeyStore {
             unknown_kid_gate: tokio::sync::Mutex::new(None),
             unknown_kid_refresh_interval: Duration::from_secs(60),
             failing: std::sync::atomic::AtomicBool::new(false),
+            refresh_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -400,10 +407,12 @@ impl JwksKeyStore {
             }
         }
 
+        let started = self
+            .refresh_generation
+            .load(std::sync::atomic::Ordering::Acquire);
         let result = self.refresh().await;
         if result.is_err() {
-            self.failing
-                .store(true, std::sync::atomic::Ordering::Release);
+            self.mark_failing_unless_refreshed_since(started);
         }
         *gate = Some((Instant::now(), result.clone()));
         result
@@ -538,22 +547,36 @@ impl JwksKeyStore {
         };
 
         *self.cache.write().await = Some(cached);
+        self.refresh_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.failing
             .store(false, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
+    /// Mark the store failing after a stale refresh that began at generation `started` failed,
+    /// unless a refresh has succeeded since. Set first and re-checked after, so a success racing
+    /// this call either sees the mark and clears it, or is seen here and the mark is withdrawn.
+    fn mark_failing_unless_refreshed_since(&self, started: u64) {
+        use std::sync::atomic::Ordering;
+        self.failing.store(true, Ordering::Release);
+        if self.refresh_generation.load(Ordering::Acquire) != started {
+            self.failing.store(false, Ordering::Release);
+        }
+    }
+
     /// Whether the key store is failing: the cache could not be used and the most recent refresh
-    /// for that reason failed, however long ago. Only a successful refresh clears it. Lock-free, so a
+    /// for that reason failed (with no success since it began), however long ago. Only a successful refresh clears it. Lock-free, so a
     /// refusal path can ask it without waiting on a fetch in flight.
     ///
     /// An unknown `kid` against a fresh cache never sets it: the cache still verifies, and the
     /// caller chose the `kid`.
     ///
-    /// **Residual.** At the moment the TTL lapses, before any refresh has been tried, the flag is
-    /// still clear: the first bearer request after that point learns of an outage (from its own
-    /// failed refresh) before a request on a signature door does. The caller cannot choose that
-    /// moment.
+    /// **Residuals.** The flag changes only when a request that verifies a bearer drives a refresh,
+    /// so its transitions are request-driven: at the moment the TTL lapses (or on a cold process)
+    /// before any refresh has been tried, and after the endpoint recovers until a bearer request
+    /// refreshes, a bearer request can see the state change before a signature-door request does.
+    /// Each needs a real outage, which the caller cannot cause.
     pub fn is_failing(&self) -> bool {
         self.failing.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -1147,16 +1170,44 @@ mod tests {
         assert!(!store.is_failing(), "a successful refresh clears the mark");
     }
 
-    // FAILS IF: an unknown `kid` against a fresh cache marks the store failing. The caller chose the
-    // `kid`, and the cache still verifies.
+    // FAILS IF: an unknown `kid` against a fresh cache marks the store failing, even when the
+    // refresh it triggers fails. The caller chose the `kid`, and the cache still verifies.
     #[tokio::test]
     async fn an_unknown_kid_never_marks_the_store_failing() {
         let server = jwks_server(vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)]).await;
-        let store = JwksKeyStore::new(format!("{}/.well-known/jwks.json", server.uri()));
+        let mut store = JwksKeyStore::new(format!("{}/.well-known/jwks.json", server.uri()));
+        store
+            .get_decoding_key_for_token(&sign_with(Some("key-1"), TEST_PRIVATE_PEM))
+            .await
+            .expect("the cache is primed");
+        // The endpoint goes away; the cache is still fresh.
+        store.url = "http://127.0.0.1:1/.well-known/jwks.json".to_string();
         let _ = store
             .get_decoding_key_for_token(&sign_with(Some("nope"), TEST_PRIVATE_PEM))
             .await;
         assert!(!store.is_failing());
+    }
+
+    // FAILS IF: a stale refresh that fails after another refresh has succeeded marks a fresh cache
+    // failing (it would answer "unavailable" for up to a whole TTL while verification works).
+    #[test]
+    fn a_failure_overtaken_by_a_success_does_not_mark_the_store() {
+        let store = JwksKeyStore::new("http://127.0.0.1:1/.well-known/jwks.json".to_string());
+        let started = store
+            .refresh_generation
+            .load(std::sync::atomic::Ordering::Acquire);
+        // A refresh succeeds while the stale one is in flight.
+        store
+            .refresh_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        store.mark_failing_unless_refreshed_since(started);
+        assert!(!store.is_failing());
+        // With nothing in between, the failure marks the store.
+        let started = store
+            .refresh_generation
+            .load(std::sync::atomic::Ordering::Acquire);
+        store.mark_failing_unless_refreshed_since(started);
+        assert!(store.is_failing());
     }
 
     #[test]
