@@ -37,6 +37,11 @@ struct CachedKeys {
     /// sends every token to the first key.
     document_named_keys: bool,
     fetched_at: Instant,
+    /// When the fetch that produced this document was sent. A document requested after a lookup
+    /// began is at least as new as that lookup, which `fetched_at` (stamped when the response has
+    /// been parsed) does not say: a fetch sent before a key was published can land after a token
+    /// naming that key arrived.
+    requested_at: Instant,
 }
 
 /// Pick the key a token names.
@@ -398,6 +403,7 @@ impl JwksKeyStore {
         if idle & 1 == 1 {
             return;
         }
+        // Ids would wrap after 2^63 refreshes, which no process lives to see.
         let id = (idle >> 1) + 1;
         if self
             .shared
@@ -490,6 +496,7 @@ impl Shared {
             document_named_keys: false,
             // Use a far-future instant so the cached key never expires.
             fetched_at: Instant::now() + Duration::from_secs(u32::MAX as u64),
+            requested_at: Instant::now(),
         };
         Self {
             url: String::new(),
@@ -530,7 +537,7 @@ impl Shared {
             Serve(VerificationKey),
             /// Fresh cache, but nothing in it answers for this `kid`. The key may have been
             /// published since the last fetch — this is the rotation case. Carries whether the
-            /// cache was fetched for this request, which no refetch could improve on.
+            /// cache was requested after this lookup began, which no refetch could improve on.
             UnknownKid {
                 fetched_since_asked: bool,
             },
@@ -550,7 +557,7 @@ impl Shared {
                             algorithm: c.algorithm,
                         }),
                         None => Next::UnknownKid {
-                            fetched_since_asked: cached.fetched_at >= asked,
+                            fetched_since_asked: cached.requested_at >= asked,
                         },
                     }
                 }
@@ -570,7 +577,7 @@ impl Shared {
                     "JWKS refresh still in flight".to_string()
                 }))
             }
-            // The document was fetched after this request began: it is the newest there is, and a
+            // The document was requested after this lookup began: it is the newest there is, and a
             // second fetch would only stack another wait onto a request that already waited for
             // one. The `kid` is unpublished.
             Next::UnknownKid {
@@ -722,6 +729,7 @@ impl Shared {
     /// Fetch the JWKS endpoint, parse **every** usable RSA/OKP-Ed25519 key with the `kid` that
     /// names it, and store them in the cache.
     async fn refresh(&self) -> Result<(), String> {
+        let requested_at = Instant::now();
         let response = self
             .client
             .get(&self.url)
@@ -769,6 +777,7 @@ impl Shared {
             keys,
             document_named_keys: jwks.keys.iter().any(|j| j.common.key_id.is_some()),
             fetched_at: Instant::now(),
+            requested_at,
         };
 
         *self.cache.write().await = Some(cached);
@@ -1479,8 +1488,11 @@ mod tests {
     #[tokio::test]
     async fn the_end_of_an_earlier_refresh_does_not_release_a_later_waiter() {
         let store = JwksKeyStore::new("http://127.0.0.1:1/.well-known/jwks.json".to_string());
-        // Flight 2 is running, held by hand so it never ends during the wait; flight 1 has not
-        // announced its end yet.
+        // Flight 2 is running, held by hand so it never ends during the wait, and a done-signal for
+        // flight 1 arrives during it. (The real drop announces before it clears the running bit,
+        // so the signal's lateness is staged; what this pins is that a waiter waits for its own
+        // flight's id, not any change. The running bit and the id share one atomic, so a joiner
+        // cannot read one without the other; that half is argued in `poke_flight`'s doc.)
         store
             .shared
             .poke_flight

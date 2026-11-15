@@ -148,15 +148,17 @@ own five-second timeout; a bearer lookup joins the same refresh, with its wait c
 lookup. So an instance whose routes never verify a bearer still learns of an outage, a failing
 store recovers without bearer traffic, and a refresh normally ends inside a request that is
 waiting on it, on a platform that suspends idle instances (one started late in a slow request
-can outlive it, and the next request that needs it finishes it). A request that arrived while the store was failing, or whose wait
-ended with no usable keys, is answered "unavailable" whatever its door.
+can outlive it, and the next request that needs it finishes it).
+A request that arrived while the store was failing, or whose wait ended with no usable keys, is
+answered "unavailable" whatever its door.
 
 The residues, stated so nobody has to rediscover them:
 
 - **The moment of the change.** The state moves when a refresh completes, and a refresh is started
   by a request. After the endpoint recovers, an instance answers "unavailable" until its next
   refusal or bearer lookup past the five-second failed-refresh backoff refetches, and that request
-  too. Public routes and requests that succeed do not refresh the store.
+  too. Public routes, and requests that succeed without a bearer lookup, do not refresh the
+  store.
 - **A slow endpoint is slow for everyone.** While a refresh is in flight, every refusal on that
   instance waits for it, up to the fetch's timeout. That is the same on every door, but it is
   visible: a refusal that takes seconds says a refresh is running, never which path you hit. A

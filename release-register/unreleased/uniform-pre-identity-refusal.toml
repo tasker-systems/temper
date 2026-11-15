@@ -25,10 +25,10 @@ succeeds), every pre-identity refusal on every path renders
 Status and code are unchanged, so the retry contract stands. When the key store's keys are stale,
 every pre-identity refusal joins one shared refresh of the store, whatever its door, and waits for
 it from the request's arrival until a little past the JWKS fetch's five-second timeout; a bearer
-lookup joins the same refresh the same way. So an instance whose routes verify no bearer, such as
+lookup joins the same refresh, with its wait counted from the lookup. So an instance whose routes verify no bearer, such as
 a separately deployed internal function, learns of an outage too, a failing store recovers without
 bearer traffic, and a refresh normally ends inside a request waiting on it. While a key endpoint
-hangs, every refusal is held for about five seconds, a cost per unauthenticated request stated with
+hangs, refusals are held for about five seconds at a time, a cost per unauthenticated request stated with
 the other residues. A request that
 arrived while the store was failing, or whose wait ended with no usable keys, is answered with the
 unavailable body (temper-mcp answers 503) whatever its door, so a valid bearer refused during an
