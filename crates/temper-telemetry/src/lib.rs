@@ -174,6 +174,13 @@ macro_rules! root_span {
             // Filled by the MCP edge's JWT check when it refuses: why, from a closed vocabulary
             // (`expired`, `invalid_audience`, …). Stays empty on success and on the API surface.
             auth_failure = $crate::tracing::field::Empty,
+            // Filled by temper-api from the id its outer service minted for the request (and
+            // returned as `x-request-id`): the key an operator joins a caller's report on. Random,
+            // never adopted from the request. `inbound_request_id` is the caller's own
+            // `x-request-id`, bounded, kept only for matching against the caller's logs. Both stay
+            // empty on the MCP surface.
+            request_id = $crate::tracing::field::Empty,
+            inbound_request_id = $crate::tracing::field::Empty,
             // `ROOT_TRACE_FIELDS`, filled just below from whatever headers actually arrived.
             trace_id = $crate::tracing::field::Empty,
             parent_span_id = $crate::tracing::field::Empty,

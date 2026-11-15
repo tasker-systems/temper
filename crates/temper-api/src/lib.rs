@@ -4,6 +4,7 @@
 //! Use [`routes::create_app`] to get the composable Router, or
 //! [`routes::create_internal_app`] for the internal/system-only surface.
 
+mod anonymous_surface;
 pub mod handlers;
 pub mod middleware;
 pub mod openapi;

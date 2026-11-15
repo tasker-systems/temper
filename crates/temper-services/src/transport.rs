@@ -41,31 +41,72 @@ fn security_header_layers<S>(app: Router<S>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    const NOSNIFF: HeaderValue = HeaderValue::from_static("nosniff");
-    const DENY: HeaderValue = HeaderValue::from_static("DENY");
-    const NO_REFERRER: HeaderValue = HeaderValue::from_static("no-referrer");
-    const HSTS: HeaderValue = HeaderValue::from_static("max-age=63072000; includeSubDomains");
+    SECURITY_HEADERS.iter().fold(app, |app, (name, value)| {
+        app.layer(SetResponseHeaderLayer::if_not_present(
+            name.clone(),
+            value.clone(),
+        ))
+    })
+}
 
-    app.layer(SetResponseHeaderLayer::if_not_present(
+/// The five baseline headers, as `(name, value)`: the table above, spelled once so the
+/// per-endpoint layers and [`insert_security_headers`] cannot disagree.
+const SECURITY_HEADERS: [(header::HeaderName, HeaderValue); 5] = [
+    (
         header::X_CONTENT_TYPE_OPTIONS,
-        NOSNIFF,
-    ))
-    .layer(SetResponseHeaderLayer::if_not_present(
-        header::X_FRAME_OPTIONS,
-        DENY,
-    ))
-    .layer(SetResponseHeaderLayer::if_not_present(
+        HeaderValue::from_static("nosniff"),
+    ),
+    (header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
+    (
         header::REFERRER_POLICY,
-        NO_REFERRER,
-    ))
-    .layer(SetResponseHeaderLayer::if_not_present(
+        HeaderValue::from_static("no-referrer"),
+    ),
+    (
         header::STRICT_TRANSPORT_SECURITY,
-        HSTS,
-    ))
-    .layer(SetResponseHeaderLayer::if_not_present(
+        HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+    ),
+    (
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(JSON_CONTENT_SECURITY_POLICY),
-    ))
+    ),
+];
+
+/// Add the baseline headers to a response that never passes through the per-endpoint layers,
+/// each only if absent, exactly as those layers do. temper-api's outer service answers a CORS
+/// preflight before routing, so without this the preflight would be the one answer without them.
+pub fn insert_security_headers(headers: &mut header::HeaderMap) {
+    for (name, value) in SECURITY_HEADERS {
+        headers.entry(name).or_insert(value);
+    }
+}
+
+/// The response header that carries the server-minted request id. Never read from a request.
+pub const REQUEST_ID_HEADER: header::HeaderName = header::HeaderName::from_static("x-request-id");
+
+/// A server-minted, per-request identifier: 128 random bits, rendered as 32 lowercase hex digits.
+///
+/// Random, never sequential, because a counter would leak request volume to anyone who makes two
+/// requests. Minted for every request and never adopted from one: a caller-supplied id would let
+/// the caller choose the key an operator searches the logs by. It rides the response as
+/// [`REQUEST_ID_HEADER`] and the root span as `request_id`, which is how an operator joins a
+/// caller's report to the log line that says why it was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequestId(String);
+
+impl RequestId {
+    /// A fresh id from the operating system's random source.
+    pub fn mint() -> Self {
+        use rand::rand_core::UnwrapErr;
+        use rand::rngs::SysRng;
+        use rand::Rng as _;
+        let mut bytes = [0u8; 16];
+        UnwrapErr(SysRng).fill_bytes(&mut bytes);
+        Self(hex::encode(bytes))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// The policy for a surface that renders nothing — which is every route on both surfaces except
