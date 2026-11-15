@@ -89,6 +89,34 @@ made, and that the movement brings the contract to what the server always did.
   its corrected shape and this entry's **id** as `register_entry`. The pin gate resolves that id
   across every window and checks the entry declares `spec-correction`.
 
+## What the gate measures against
+
+The declared-class gate (`wire-class-crosscheck.sh`) asks whether `openapi.json` moved. It asks
+that against **the last release**, not the PR's base, because a client can only observe shape a
+release shipped (conventions COMPAT-1 and COMPAT-2, in `.conventions/baseline/doctrine/compat.md`).
+
+- **Shape born in the window moves freely.** A schema, property or operation that the last release
+  did not have may change, be renamed or be removed, and the PR still declares `additive`.
+- **Released shape is judged against its released form,** wherever the change is made: in the
+  operation, in a component it reaches, or in a window-born component now held at a released
+  location. A property the window removed and this PR restores differently is a break.
+- **The unit is the operation.** Each operation (method and path template, parameter names erased),
+  webhook, and component no operation reaches is resolved with every `$ref` inlined
+  (`wire-resolve.py`), and the comparator judges that form. An operation is charged when the release
+  against the head breaks it **and** this PR changes it. The output names every charged operation,
+  and every operation the release-relative reading reclassified from the base-only one.
+- **An earlier declared break can be charged again.** The comparator gives a verdict per operation,
+  not a list of breaks, so a PR that touches an operation an earlier entry broke is charged with
+  that break too. Declare it, or leave the operation alone.
+- **The last release** is `last_release` in `tools/scripts/release/lib/common.sh`, the function the
+  release calculator opens its window with: the nearest `v<VERSION>` tag, proved to be the newest
+  release in a full history the remote agrees with. Anything less (a shallow clone, no tags, a tag
+  the remote does not hold, a newer tag on the remote) is a fallback, never a release. The gate then
+  gives the **base-only verdict**, judging against the PR's base as before, and says so.
+  `detect-changes.sh` reports the same as `CHANGES_BASE_IS_FALLBACK=true`.
+- **Tag releases are the boundary.** The hosted API deploys `main` continuously, so window-born
+  shape is live before it is released. That is accepted: a client integrates against a release.
+
 ## Windows and the roll
 
 - **`unreleased/`** is the window since the last release. The release calculator reads only this

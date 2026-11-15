@@ -26,6 +26,7 @@ touching; each rule states its *why* beside it, and its id is what you cite in a
 | Shell scripts and CI gate scripts | `.conventions/baseline/doctrine/shell.md` |
 | Markdown | `.conventions/baseline/doctrine/docs.md` |
 | HTTP API JSON and OpenAPI | `.conventions/baseline/doctrine/api.md` |
+| A compatibility or semver gate | `.conventions/baseline/doctrine/compat.md` |
 | Dependencies, advisories, licenses, Actions, tool pins | `.conventions/baseline/doctrine/supply-chain.md` |
 | Credentials, redaction, SQL, auth | `.conventions/baseline/doctrine/security.md` |
 | Channels, spawned work, locks, database coordination | `.conventions/baseline/doctrine/concurrency.md` |
