@@ -268,7 +268,11 @@ def callback_forms(r: Resolver, doc: dict, raw_callbacks: Any) -> Any:
         return raw_callbacks
     out: dict[str, Any] = {}
     for name, cb in raw_callbacks.items():
-        if isinstance(cb, dict) and isinstance(cb.get("$ref"), str):
+        seen: set[str] = set()
+        while isinstance(cb, dict) and isinstance(cb.get("$ref"), str):
+            if cb["$ref"] in seen:
+                raise Unresolvable(f"callback {name} is a $ref cycle")
+            seen.add(cb["$ref"])
             comp = component_of(cb["$ref"])
             if comp:
                 r.touched.add(comp)
@@ -277,17 +281,19 @@ def callback_forms(r: Resolver, doc: dict, raw_callbacks: Any) -> Any:
             raise Unresolvable(f"callback {name} is not an object")
         resolved: dict[str, Any] = {}
         for expr, raw_item in cb.items():
+            if expr.startswith("x-"):
+                # A specification extension, not an expression: compared as written.
+                resolved[expr] = raw_item
+                continue
             if not isinstance(raw_item, dict):
                 raise Unresolvable(f"callback {name} {expr} is not a path item")
             item = r.path_item(raw_item)
-            ops = {
+            # A path item with no operations is legal; losing one later is a removed key.
+            resolved[expr] = {
                 m.upper(): operation_form(r, doc, None, item, item[m], sent=True)
                 for m in METHODS
                 if isinstance(item.get(m), dict)
             }
-            if not ops:
-                raise Unresolvable(f"callback {name} {expr} declares no operation")
-            resolved[expr] = ops
         out[name] = resolved
     return out
 

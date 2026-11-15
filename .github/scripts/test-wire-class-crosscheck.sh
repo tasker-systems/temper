@@ -1041,6 +1041,14 @@ derive_contract release cb-ref '.paths."/items".post.callbacks = {"cb":{"{$reque
 derive_contract cb-ref cb-ref-grown '.components.pathItems.CB.post.requestBody.content."application/json".schema.enum += ["b"]'
 out="$(compat_check cb-ref cb-ref cb-ref-grown)"; rc=$?
 expect_charged "COMPAT-1: a \$ref'd callback path item with a sibling keeps its operations" "$out" "$rc" "op POST /items"
+# Legal callback shapes resolve: an x- extension, an empty path item, a $ref chain of callbacks.
+derive_contract release cb-legal '.paths."/items".post.callbacks = {"a":{"x-ext":1,"u":{"description":"no ops"}},"b":{"$ref":"#/components/callbacks/D"}}
+  | .components.callbacks = {"D":{"$ref":"#/components/callbacks/C"},"C":{"u":{"post":{"requestBody":{"content":{"application/json":{"schema":{"type":"string","enum":["a"]}}}},"responses":{"200":{"description":"ok"}}}}}}'
+derive_contract cb-legal cb-legal-grown '.components.callbacks.C.u.post.requestBody.content."application/json".schema.enum += ["b"]'
+out="$(compat_check release release cb-legal)"; rc=$?
+expect_pass "COMPAT-1: legal callback shapes (x- key, empty path item, \$ref chain) resolve" "$out" "$rc"
+out="$(compat_check cb-legal cb-legal cb-legal-grown)"; rc=$?
+expect_charged "COMPAT-1: a change behind a \$ref chain of callbacks is judged" "$out" "$rc" "op POST /items"
 # An encoding header gaining required is judged, not a crash.
 derive_contract release enc '.paths."/items".post.requestBody.content."multipart/form-data" = {"schema":{"type":"object"},"encoding":{"f":{"headers":{"X-A":{"schema":{"type":"string"}}}}}}'
 derive_contract enc enc-req '.paths."/items".post.requestBody.content."multipart/form-data".encoding.f.headers."X-A".required = true'
