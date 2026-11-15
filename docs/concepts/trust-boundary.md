@@ -154,8 +154,8 @@ carries no email claim and no link is cached. Reaching any of it takes a validly
 
 "Unavailable" is server-wide state, not a per-path answer. Each instance keeps one bearer key
 store. When its keys are stale, every refusal it gives joins one shared refresh of that store,
-whatever its door, and waits for it from the request's arrival until a little past the fetch's
-own five-second timeout; a bearer lookup joins the same refresh, with its wait counted from the
+whatever its door, and waits for it from the request's arrival (for a signed request, from when
+its body is in) until a little past the fetch's own five-second timeout; a bearer lookup joins the same refresh, with its wait counted from the
 lookup. So an instance whose routes never verify a bearer still learns of an outage, a failing
 store recovers without bearer traffic, and a refresh normally ends inside a request that is
 waiting on it, on a platform that suspends idle instances (one started late in a slow request
@@ -173,8 +173,8 @@ The residues, stated so nobody has to rediscover them:
 - **A slow endpoint is slow for everyone.** While a refresh is in flight, every refusal on that
   instance waits for it, up to the fetch's timeout. That is the same on every door, but it is
   visible: a refusal that takes seconds says a refresh is running, never which path you hit. A
-  refusal that waited may also close its connection when its request body was large and unread;
-  above the 64 KiB a signature door reads, that framing is the same on every door.
+  refusal may also close its connection when its request body was large and unread, whether or
+  not it waited; that framing is the same on every door.
 - **The cost of a hanging endpoint.** While the identity provider's key endpoint accepts
   connections and never answers, every refusal holds its connection, and on a serverless platform
   its billed function time, for about five seconds, then answers at once through the five-second
@@ -193,6 +193,17 @@ The residues, stated so nobody has to rediscover them:
   with a healthy identity provider, so a bearer door can answer one request a minute more slowly
   than a door that verifies no bearer. The refetch is what lets a newly rotated signing key verify
   without waiting out the cache.
+- **A signed request's body is read before routing, on every path.** A request carrying all three
+  `X-Temper-*` signature headers has its body read, up to 64 KiB, before the server decides which
+  door it reached, so a declared body that never arrives waits on every path alike, and
+  `Expect: 100-continue` is answered `100 Continue` on every path alike. Over 64 KiB, unreadable,
+  or not all in within ten seconds of the headers, it is the refusal on every path, the public
+  routes and the routes that take larger bodies included, so a request carrying those headers
+  cannot send more than 64 KiB anywhere. A declared length over the cap is refused without
+  reading the body, so without `100 Continue`. The 64 KiB counts the bytes on the wire; a
+  signature door then checks the decompressed body against the same limit. A platform or proxy in
+  front that buffers bodies or answers `Expect` itself changes what the caller sees, the same way
+  on every path.
 - **Timing between doors.** Outside the refresh, the work before a refusal differs by door (a
   signature is checked against its body, a bearer against a key), and no attempt is made to
   equalise that.

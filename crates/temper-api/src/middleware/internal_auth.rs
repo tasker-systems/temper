@@ -26,15 +26,12 @@ use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 
-use temper_core::internal_sig::{DOORS, NONCE_HEADER, SIGNATURE_V2_HEADER, TIMESTAMP_HEADER};
+use temper_core::internal_sig::{
+    DOORS, MAX_BODY_BYTES, NONCE_HEADER, SIGNATURE_V2_HEADER, TIMESTAMP_HEADER,
+};
 use temper_services::error::{ApiError, UnauthCause};
 use temper_services::services::internal_sig_service::{self, SignedRequest};
 use temper_services::state::AppState;
-
-/// Cap on the buffered body, for BOTH gates. The payloads are small — a membership list for
-/// reconcile, a single opaque principal for a link intent — and a real one of either is well
-/// under a kilobyte, so 64 KiB is generous while bounding the read.
-const MAX_BODY_BYTES: usize = 64 * 1024;
 
 /// The current unix time in seconds, saturating to 0 before the epoch (unreachable in practice).
 fn now_secs() -> i64 {
@@ -113,6 +110,11 @@ async fn buffer_signed_request(request: Request<Body>, label: &str) -> Result<Bu
         return Err(ApiError::Unauthenticated(UnauthCause::HmacMissingHeaders));
     }
 
+    // For a request that came through the outer service signed, the bytes are already in memory: it
+    // buffered them before routing (`anonymous_surface`), so this read does not wait on the socket.
+    // They are the bytes after request decompression, which runs inside routing, so for a
+    // compressed body the signature is checked over the decompressed bytes and this cap counts
+    // those. It stays a bounded read, so a gate reached any other way still bounds what it reads.
     let body = axum::body::to_bytes(body, MAX_BODY_BYTES)
         .await
         .map_err(|_| {
@@ -134,7 +136,7 @@ async fn buffer_signed_request(request: Request<Body>, label: &str) -> Result<Bu
 }
 
 /// The shared gate for the signature surfaces that guard a *report*: a v2 signature over the exact
-/// bytes received, for this route, accepted once.
+/// body bytes (after any request decompression), for this route, accepted once.
 ///
 /// `secret` is passed in rather than read from state because these gates use one scheme with
 /// different keys — the co-deployed AS (`INTERNAL_RECONCILE_SECRET`) and the mention agent's

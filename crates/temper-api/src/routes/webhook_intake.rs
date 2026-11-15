@@ -3,7 +3,9 @@
 //! not a temper principal and holds no temper token. Vercel Connect forwards a remote system's
 //! event carrying an RS256 attestation, and the tier's layer verifies it (signature, issuer,
 //! audience, the anti-decoy `client_id`, and the signed `trigger` claim) and resolves the
-//! connection it names before the handler, or anything that reads the body, runs.
+//! connection it names before the handler, or anything that reads the body, runs. The one
+//! exception is the outer service's signed-body equaliser, which reads the body of any request
+//! carrying the `X-Temper-*` signature headers, on every path, before routing.
 //!
 //! A router of its own rather than a route on `embed_internal_routes` because the controls are
 //! not the same control. That group's tier checks a shared secret temper issues; this one verifies
