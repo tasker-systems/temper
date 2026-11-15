@@ -264,8 +264,8 @@ pub fn parse_if_match(raw: &str) -> Result<BodyCondition, String> {
 
 /// The one body condition a `PATCH` carries, from `expect.body` and the `If-Match` header.
 ///
-/// `None` when it carries neither. `expect.body` must be one token: empty, `*`, a weak tag or a
-/// stray quote is refused, as it would be in the header. Both may be sent only when they agree: the header is exactly
+/// `None` when it carries neither. `expect.body` must be one token: empty, `*`, a weak tag, a
+/// stray quote, a comma or whitespace is refused. Both may be sent only when they agree: the header is exactly
 /// one strong tag, equal to `expect.body` (one pair of quotes stripped from each). Any other pair
 /// is refused, as is an `If-Match` that does not parse ([`parse_if_match`]). `Err` is the
 /// refusal's sentence, which quotes no value.
@@ -278,7 +278,12 @@ pub fn body_condition(
         .map(|b| {
             let opaque = unquote(b);
             // The same shape rules a header member meets: `expect.body` is one strong token.
-            if opaque.is_empty() || opaque == "*" || opaque.contains('"') || b.starts_with("W/") {
+            let malformed = opaque.is_empty()
+                || opaque == "*"
+                || opaque.starts_with("W/")
+                || b.starts_with("W/")
+                || opaque.contains(['"', ',', ' ', '\t']);
+            if malformed {
                 return Err(
                     "expect.body is not a body token; send the body_token you read, as it was \
                      answered"
@@ -473,7 +478,16 @@ mod tests {
         assert!(body_condition(Some("bt1.a"), Some("W/\"bt1.a\"")).is_err());
         assert!(body_condition(Some("bt1.a"), Some("\"bt1.a\", \"bt1.b\"")).is_err());
         assert!(body_condition(None, Some("*")).is_err());
-        for refused in ["", "*", "\"\"", "W/\"bt1.a\"", "bt1.\"a"] {
+        for refused in [
+            "",
+            "*",
+            "\"\"",
+            "W/\"bt1.a\"",
+            "\"W/x\"",
+            "bt1.\"a",
+            "bt1.a, bt1.b",
+            " bt1.a",
+        ] {
             assert!(body_condition(Some(refused), None).is_err(), "{refused:?}");
         }
         assert!(body_condition(Some("\"bt1.q\""), None).unwrap().is_some());

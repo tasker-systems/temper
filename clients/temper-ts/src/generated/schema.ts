@@ -20626,7 +20626,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResourceView"];
                 };
             };
-            /** @description Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, a malformed `expect`, an `If-Match` that is `*`, unparseable, weak and naming the current body, or disagreeing with `expect.body`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED: `If-None-Match`, `If-Unmodified-Since`) */
+            /** @description Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, a malformed `expect`, an `If-Match` that is `*`, unparseable or disagreeing with `expect.body`, a malformed `expect.body`, or, for a caller who reads the resource, a weak `If-Match` tag naming its current body, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED: `If-None-Match`, `If-Unmodified-Since`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -20653,7 +20653,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Not found; also the answer to a caller who cannot read the resource for any well-formed `expect` or `If-Match`, matching or not (a malformed one is the 400 above, decided from the request alone) */
+            /** @description Not found; also the answer to a caller who cannot read the resource for any well-formed `expect` or `If-Match`, matching or not. A malformed one (`If-Match: *`, unparseable, disagreeing with `expect.body`, or a malformed `expect.body`) is the 400 above, decided from the request alone */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -21209,7 +21209,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The body as markdown, and its `body_token`. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`. An `If-None-Match` is ignored; this read never answers `304`. */
+            /** @description The body as markdown, and its `body_token`. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`. Answers `Cache-Control: private`. An `If-None-Match` is ignored; this read never answers `304`. */
             200: {
                 headers: {
                     /** @description The `body_token` of `markdown`, quoted: a strong entity-tag */

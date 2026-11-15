@@ -15,16 +15,16 @@ characters, computed by temper_core::body_token over exactly the bytes a read re
 - PATCH /api/resources/{id} accepts expect.body (a token) and the If-Match header, its synonym; this
   is the one route that honours If-Match (If-None-Match and If-Unmodified-Since stay refused 400
   PRECONDITION_NOT_HONOURED, as does If-Match on every other write). A list matches on any member,
-  one pair of quotes is stripped; If-Match: *, an unparseable list, a weak tag naming the current
-  body, or an If-Match disagreeing with expect.body is a 400 BAD_REQUEST. The guard is judged under
-  the resource's writer lock after the read gate, so a caller who cannot read the resource gets
-  GET's 404 whatever the tag. A failed guard writes nothing and answers 412 with a body entry
+  one pair of quotes is stripped. If-Match: *, an unparseable list, an If-Match disagreeing with
+  expect.body, or an expect.body that is not one token (empty, *, weak, quoted, a list) is a 400
+  BAD_REQUEST decided from the request alone, after the modify floor. A well-formed guard is judged
+  under the resource's writer lock after the read gate, so a caller who cannot read the resource
+  gets GET's 404 for it, matching or not; a reader's weak tag naming the current body is a 400. A failed guard writes nothing and answers 412 with a body entry
   {tier: "body", expected, current} (no key; current is the current token) in
   error.precondition.failed, beside any failed meta entries.
 - A body-only whole-body PATCH (content and nothing else: no title, meta, move, goal, sources or
   content_block) whose guard fails but whose bytes already are the current body, read back
-  verbatim, answers 200,
-  writes nothing, and carries the current token: a retried save that landed recognizes itself.
+  verbatim, answers 200, writes nothing, and carries the current token: a retried save that landed recognizes itself.
 - The answer of a PATCH that writes the body carries ResourceView.body_token, computed inside the
   write's transaction: the token of the whole body that write left, a per-block write included. A
   meta-only PATCH answers none. PUT /meta's expect has no body member: expect.body there is a 422.

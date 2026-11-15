@@ -136,7 +136,7 @@ pub async fn get(
     params(("id" = Uuid, Path, description = "Resource ID")),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "The body as markdown, and its `body_token`. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`. An `If-None-Match` is ignored; this read never answers `304`.", body = ContentResponse,
+        (status = 200, description = "The body as markdown, and its `body_token`. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`. Answers `Cache-Control: private`. An `If-None-Match` is ignored; this read never answers `304`.", body = ContentResponse,
             headers(("ETag" = String, description = "The `body_token` of `markdown`, quoted: a strong entity-tag"))),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
@@ -384,10 +384,10 @@ pub async fn create(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Updated resource", body = ResourceView),
-        (status = 400, description = "Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, a malformed `expect`, an `If-Match` that is `*`, unparseable, weak and naming the current body, or disagreeing with `expect.body`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED: `If-None-Match`, `If-Unmodified-Since`)", body = ErrorBody),
+        (status = 400, description = "Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, a malformed `expect`, an `If-Match` that is `*`, unparseable or disagreeing with `expect.body`, a malformed `expect.body`, or, for a caller who reads the resource, a weak `If-Match` tag naming its current body, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED: `If-None-Match`, `If-Unmodified-Since`)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
-        (status = 404, description = "Not found; also the answer to a caller who cannot read the resource for any well-formed `expect` or `If-Match`, matching or not (a malformed one is the 400 above, decided from the request alone)", body = ErrorBody),
+        (status = 404, description = "Not found; also the answer to a caller who cannot read the resource for any well-formed `expect` or `If-Match`, matching or not. A malformed one (`If-Match: *`, unparseable, disagreeing with `expect.body`, or a malformed `expect.body`) is the 400 above, decided from the request alone", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
         (status = 412, description = "An `expect` or `If-Match` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed expectation with what is there now (a `body` entry's `current` is the current body's token)", body = ErrorBody),
     )
