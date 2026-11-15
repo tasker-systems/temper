@@ -51,7 +51,7 @@
 #      is missing.
 #   3. SHAPE HONESTY — when openapi.json changed, this PR's own row(s) must declare a shape
 #      class, and the declaration must survive the actual diff:
-#        shape moved (anything beyond `.info.version`, jq-compared) and no `shape-breaking`
+#        shape moved (against the last release; see below) and no `shape-breaking`
 #            declared: FAIL — the #858 class;
 #        shape moved and `shape-breaking` declared WITHOUT the `retirement-train` routing:
 #            FAIL — below the era level a shape-breaking declaration is a refusal, not a
@@ -78,6 +78,30 @@
 #      beside PRESENCE: the policy is not wire shape, so policy/ is deliberately NOT in
 #      WIRE_PREFIXES, no class is demanded, and check 3 never sees it. A PR that touches both
 #      is judged by each check on its own terms.
+#
+# WHAT "MOVED" IS MEASURED AGAINST — THE LAST RELEASE (conventions COMPAT-1, COMPAT-2)
+# ----------------------------------------------------------------------------------------
+# Check 3's verdict is release-relative. A client can observe only shape a release shipped, so a
+# gate measuring against the PR's base alone charges breaks no client can see (temper#1388:
+# a schema born in the window, then moved, read as shape-breaking). The doctrine is
+# .conventions/baseline/doctrine/compat.md; this is temper's reading of it:
+#   * the last release is last_release in tools/scripts/release/lib/common.sh, the derivation
+#     detect-changes.sh opens the calculator's window with — one function, never a copy here;
+#   * every operation, webhook and unreached component of the release, base and head is
+#     resolved ($refs inlined, path-template names erased: wire-resolve.py), and broke_node,
+#     unchanged, judges each one (wire-shape-release.jq);
+#   * broke_node gives a verdict per node, never the breaks, so the doctrine's per-entry-point
+#     fallback decides: an entry point is CHARGED when release → head breaks it AND base ≠ head.
+#     Base → head is not the test: a re-birth reads there as growth. Any charge is `moved`;
+#   * the output names every charged entry point and every one the release reading reclassified.
+# When no ref qualifies (a shallow clone, no tag, a tag the remote does not hold, a newer tag on
+# the remote, an unlistable remote) or openapi.json cannot be read at it, the verdict is
+# BASE-ONLY — the comparator against the base, as before, and the same per-entry-point reading
+# with the base standing in for the release; either moving is moved — and the output says so.
+# Base-only is stricter everywhere except a re-birth and a property the release admitted through
+# additionalProperties. Residues (.conventions/status.toml, COMPAT-1): an earlier declared break
+# can be re-charged on an operation this PR touches; additionalProperties-admitted names read as
+# growth; there is no pre-publish check yet.
 #
 # DEPENDENCY-ONLY CHANGES ARE NOT WIRE MOVEMENT
 # ---------------------------------------------
@@ -134,6 +158,11 @@
 #                            read against (default: release-register at the repo root)
 #   --legacy-register PATH   the old single file whose existence fails check 2a (default:
 #                            RELEASE_REGISTER.md at the repo root)
+#   --release FILE|none      the last release's openapi.json, or `none` for "no release
+#                            qualifies" (else derived: last_release in
+#                            tools/scripts/release/lib/common.sh, COMPAT-2)
+#   --base-contract FILE     the base's openapi.json (else `git show <base>:openapi.json`)
+#   --head-contract FILE     the head's openapi.json (else the working tree's)
 #   --pr N                   this PR's number (else GITHUB_PR_NUMBER; else `self` only)
 #   --base REF               diff base (else the incumbents' candidate list)
 #
@@ -155,6 +184,9 @@ WIRE_TOUCHED_FILE=""
 ADDED_ENTRIES_DIR=""
 SHAPE_VERDICT_ARG=""
 DEPENDENCY_ONLY_FILE=""
+RELEASE_ARG=""
+BASE_CONTRACT_ARG=""
+HEAD_CONTRACT_ARG=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -166,6 +198,9 @@ while [ $# -gt 0 ]; do
         --added-entries)  ADDED_ENTRIES_DIR="${2:-}"; shift 2 ;;
         --shape-verdict)  SHAPE_VERDICT_ARG="${2:-}"; shift 2 ;;
         --dependency-only) DEPENDENCY_ONLY_FILE="${2:-}"; shift 2 ;;
+        --release)        RELEASE_ARG="${2:-}"; shift 2 ;;
+        --base-contract)  BASE_CONTRACT_ARG="${2:-}"; shift 2 ;;
+        --head-contract)  HEAD_CONTRACT_ARG="${2:-}"; shift 2 ;;
         *) echo "wire-class-crosscheck: unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -490,7 +525,7 @@ fi
 derive_shape() {
     command -v jq >/dev/null 2>&1 || { echo "undeterminable"; return 0; }
     # openapi.json absent from the base: the whole contract is new in this PR — maximal movement.
-    if ! git cat-file -e "${BASE}:openapi.json" 2>/dev/null; then
+    if [ ! -f "$BASE_CONTRACT" ]; then
         echo "moved"; return 0
     fi
     local tmp_base tmp_head
@@ -499,10 +534,15 @@ derive_shape() {
     # script's EXIT trap with these function-local names crashes the script at exit — the
     # locals die at return, and the trap's expansion hits them unbound (the #896
     # release-PR find; set -u turns it into `tmp_base: unbound variable`).
-    git show "${BASE}:openapi.json" 2>/dev/null | jq -S 'del(.info.version)' > "$tmp_base" 2>/dev/null || { rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; }
-    jq -S 'del(.info.version)' openapi.json > "$tmp_head" 2>/dev/null || { rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; }
+    jq -S 'del(.info.version)' "$BASE_CONTRACT" > "$tmp_base" 2>/dev/null || { rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; }
+    jq -S 'del(.info.version)' "$HEAD_CONTRACT" > "$tmp_head" 2>/dev/null || { rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; }
     if [ ! -s "$tmp_base" ] || [ ! -s "$tmp_head" ]; then rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; fi
     if cmp -s "$tmp_base" "$tmp_head"; then rm -f "$tmp_base" "$tmp_head"; echo "unchanged"; return 0; fi
+    if [ -n "$RELEASE_CONTRACT" ]; then
+        rm -f "$tmp_base" "$tmp_head"
+        derive_shape_release "$RELEASE_CONTRACT"
+        return 0
+    fi
     local verdict
     # The comparator is ONE definition (wire-shape.jq) shared with its harness — the #874
     # lesson: the derivation is where shape honesty is computed, so it is the part that
@@ -515,7 +555,104 @@ derive_shape() {
     rm -f "$tmp_base" "$tmp_head"
     verdict="${verdict//\"/}"
     [ -z "$verdict" ] && verdict="moved"
+    # Base-only is also judged per resolved entry point, with the base standing in for the
+    # release: the named-component comparison above never looks inside a parameter, response or
+    # other non-schema component, nor at a webhook payload's side. Either reading moving is moved,
+    # so the fallback is never looser than the comparator alone was.
+    if [ "$verdict" = "grew" ]; then
+        verdict="$(derive_shape_release "$BASE_CONTRACT")"
+    fi
     echo "$verdict"
+}
+
+# ── The last release (COMPAT-2) and the release-relative verdict (COMPAT-1) ────────────────────
+# The release comes from the release tooling's own derivation, last_release in
+# tools/scripts/release/lib/common.sh: never a copy of it here. It is sourced in a subshell,
+# because that library sets `-e` and this script must report every face, not die on the first.
+# A fallback is never a release: when no ref qualifies, or the release's openapi.json cannot be
+# read, the verdict is base-only (the comparator against the base, as before COMPAT-1, and the
+# per-entry-point reading with the base as the release) and the output says so. Base-only is
+# stricter everywhere except a re-birth and a property the release admitted through
+# additionalProperties — so falling back can redden a PR, never wave a break through that the
+# release-relative reading would refuse, except those two.
+CONTRACT_DIR="$(mktemp -d)"
+RELEASE_REPORT="${CONTRACT_DIR}/release-report.txt"
+: > "$RELEASE_REPORT"
+trap 'rm -f "$CHANGED_FILE" "$WIRE_FILES" "$ADDED_ROWS" "$DEP_FILES"; rm -rf "$CONTRACT_DIR"' EXIT
+BASE_CONTRACT=""
+HEAD_CONTRACT=""
+RELEASE_CONTRACT=""
+RELEASE_LINE=""
+
+prepare_contracts() {
+    if [ -n "$BASE_CONTRACT_ARG" ]; then BASE_CONTRACT="$BASE_CONTRACT_ARG"
+    else
+        BASE_CONTRACT="${CONTRACT_DIR}/base.json"
+        if git cat-file -e "${BASE}:openapi.json" 2>/dev/null; then
+            git show "${BASE}:openapi.json" > "$BASE_CONTRACT" 2>/dev/null || return 1
+        else rm -f "$BASE_CONTRACT"; fi
+    fi
+    HEAD_CONTRACT="${HEAD_CONTRACT_ARG:-openapi.json}"
+
+    local ref="" fallback="true" reason=""
+    if [ "$RELEASE_ARG" = "none" ]; then
+        reason="no release was given (--release none)"
+    elif [ -n "$RELEASE_ARG" ]; then
+        RELEASE_CONTRACT="$RELEASE_ARG"
+        RELEASE_LINE="  release: ${RELEASE_ARG} (given) — release-relative verdict (COMPAT-1)"
+        return 0
+    else
+        local out
+        if out="$( (source "${SCRIPT_DIR}/../../tools/scripts/release/lib/common.sh" && last_release "$BASE") 2>/dev/null)" \
+            && eval "$out" && [ -n "${LAST_RELEASE_IS_FALLBACK:-}" ]; then
+            ref="$LAST_RELEASE_REF"; fallback="$LAST_RELEASE_IS_FALLBACK"; reason="$LAST_RELEASE_REASON"
+        else
+            reason="the release derivation did not run"
+        fi
+        if [ "$fallback" = "false" ]; then
+            if git show "${ref}:openapi.json" > "${CONTRACT_DIR}/release.json" 2>/dev/null \
+                && [ -s "${CONTRACT_DIR}/release.json" ]; then
+                RELEASE_CONTRACT="${CONTRACT_DIR}/release.json"
+                RELEASE_LINE="  release: ${ref} — release-relative verdict (COMPAT-1)"
+                return 0
+            fi
+            reason="openapi.json cannot be read at ${ref}"
+        fi
+    fi
+    RELEASE_LINE="  release: none qualifies — base-only verdict (COMPAT-2): ${reason}"
+    return 0
+}
+
+# One entry point per operation (method + path template with names erased), webhook, and
+# component no entry point reaches, each resolved with its $refs inlined (wire-resolve.py);
+# then broke_node, unchanged, pointed at release → head under the doctrine's per-entry-point
+# fallback (wire-shape-release.jq). Prints the verdict; the names go to $RELEASE_REPORT.
+derive_shape_release() { # $1 = the contract judged as the release (the base, for base-only)
+    local release_contract="$1"
+    local r="${CONTRACT_DIR}/release.ep.json" b="${CONTRACT_DIR}/base.ep.json" h="${CONTRACT_DIR}/head.ep.json"
+    local doc="${CONTRACT_DIR}/stripped.json" result
+    command -v python3 >/dev/null 2>&1 || { echo "undeterminable"; return 0; }
+    jq 'del(.info.version)' "$release_contract" > "$doc" 2>/dev/null \
+        && python3 -I "${SCRIPT_DIR}/wire-resolve.py" "$doc" > "$r" 2>>"$RELEASE_REPORT" \
+        || { echo "undeterminable"; return 0; }
+    jq 'del(.info.version)' "$BASE_CONTRACT" > "$doc" 2>/dev/null \
+        && python3 -I "${SCRIPT_DIR}/wire-resolve.py" "$doc" > "$b" 2>>"$RELEASE_REPORT" \
+        || { echo "undeterminable"; return 0; }
+    jq 'del(.info.version)' "$HEAD_CONTRACT" > "$doc" 2>/dev/null \
+        && python3 -I "${SCRIPT_DIR}/wire-resolve.py" "$doc" > "$h" 2>>"$RELEASE_REPORT" \
+        || { echo "undeterminable"; return 0; }
+    result="$(jq -n -c -f "${SCRIPT_DIR}/wire-shape-release.jq" -L "$SCRIPT_DIR" \
+        --slurpfile release "$r" --slurpfile base "$b" --slurpfile head "$h" 2>>"$RELEASE_REPORT")" \
+        || { echo "undeterminable"; return 0; }
+    {
+        printf '%s' "$result" | jq -r '
+            def list($t; $xs): if ($xs | length) > 0
+              then "  \($t) (\($xs | length)):", ($xs[] | "    \(.)") else empty end;
+            list("charged — release → head breaks it, and this PR changes it"; .charged),
+            list("reclassified as growth — base → head reads a break no client of the release can see"; .reclassified_growth),
+            list("reclassified as a break — only the release shows it (a re-birth, or shape the window removed)"; .reclassified_break)'
+    } >> "$RELEASE_REPORT"
+    printf '%s' "$result" | jq -r '.verdict // "moved"'
 }
 
 SHAPE_NOTE=""
@@ -523,11 +660,18 @@ if grep -qx "openapi.json" "$WIRE_FILES"; then
     if [ -n "$SHAPE_VERDICT_ARG" ]; then
         SHAPE_VERDICT="$SHAPE_VERDICT_ARG"
     else
-        derive_base || SHAPE_VERDICT="undeterminable"
+        # Git is read for whatever no seam supplies: the base contract, and the release.
+        if [ -n "$BASE_CONTRACT_ARG" ] && [ -n "$HEAD_CONTRACT_ARG" ] && [ -n "$RELEASE_ARG" ]; then :
+        else derive_base || SHAPE_VERDICT="undeterminable"; fi
+        if [ -z "${SHAPE_VERDICT:-}" ]; then
+            prepare_contracts || SHAPE_VERDICT="undeterminable"
+        fi
         [ -n "${SHAPE_VERDICT:-}" ] || SHAPE_VERDICT="$(derive_shape)"
     fi
     echo "── shape (openapi.json, .info.version stripped) ──"
+    [ -n "$RELEASE_LINE" ] && printf '%s\n' "$RELEASE_LINE"
     echo "  verdict: ${SHAPE_VERDICT}"
+    [ -s "$RELEASE_REPORT" ] && cat "$RELEASE_REPORT"
     case "$SHAPE_VERDICT" in
         moved)
             if classes_contain "$SELF_CLASSES" "spec-correction"; then

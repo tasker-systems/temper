@@ -1,6 +1,6 @@
 # conventions
 
-The shared engineering baseline for tasker-systems repositories. It is public, and five
+The shared engineering baseline for tasker-systems repositories. It is public, and six
 repositories consume it:
 
 | Consumer | Visibility |
@@ -10,6 +10,7 @@ repositories consume it:
 | [`temper-contrib`](https://github.com/tasker-systems/temper-contrib) | public |
 | [`tasker-contrib`](https://github.com/tasker-systems/tasker-contrib) | public (its own surfaces; templates and example apps are user-owned and out of scope) |
 | `storyteller` | private |
+| [`duet`](https://github.com/tasker-systems/duet) | public |
 
 The baseline began from the first two. They grew up separately and are each strong where the other
 is thin. tasker-core carries the code-level doctrine (written tenets, a phased lint table, bounded
@@ -37,6 +38,7 @@ doctrine/        the stance, in prose — why each rule exists
   shell.md         bash, strict mode, ShellCheck, portability
   docs.md          Markdown shape and links
   api.md           JSON on the wire and in the OpenAPI spec
+  compat.md        what a compatibility gate measures against: the last release
   supply-chain.md  dependencies, advisories, licenses, Actions, toolchain inputs
   security.md      credentials, redaction, SQL, auth posture
   concurrency.md   bounded resources, contained failure, coordination in the database
@@ -54,9 +56,12 @@ python/
 typescript/
   biome.json             the shared Biome rule set
   tsconfig.base.json     the strict compiler base
+.github/workflows/
+  conventions-bump.yml   the workflow that moves a consumer's pin (CONS-9), adopted `exact`; it
+                         is skipped here, and lives here so Dependabot keeps its pins current
 skill/           the agent skill projected into each consumer, with that consumer's statuses
 tools/
-  conventions.py         `check` (A–F) and `bump`, run by consumers from their projection
+  conventions.py         `check` (A–F), `bump`, `witness` and `propose`, run from the projection
   register.py            generates rules.md's consumer columns from consumers' status.toml
   consumers.toml         the registered consumers that register.py reads
   slots.toml             where a consumer may hold repo-local content in a `superset` file

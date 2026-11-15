@@ -14,6 +14,10 @@
 #
 # Output (eval-safe KEY=VALUE):
 #   CHANGES_BASE_REF=<tag|commit>
+#   CHANGES_BASE_IS_FALLBACK=true|false - true: the base is not a proven release (COMPAT-2:
+#                                  no tag, a shallow clone, a newer tag on the remote, or a
+#                                  hand-given --from). A fallback is never a release.
+#   CHANGES_BASE_REASON=<why>    - empty when the base is a proven release
 #   CORE_CHANGED=true|false      - any workspace crate changed (^crates/)
 #   WIRE_CHANGED=true|false      - wire-emitting crates or the emitted contract
 #                                  (^crates/temper-(api|mcp|client)/, ^openapi\.json$)
@@ -50,18 +54,25 @@ done
 # ---------------------------------------------------------------------------
 # Determine base reference (temper tags are v<VERSION>; RELEASING.md)
 # ---------------------------------------------------------------------------
+# The derivation is last_release in lib/common.sh: the one the declared-class gate calls too
+# (conventions COMPAT-2), so the two never disagree about which window a change is in.
 if [[ -n "$FROM_REF" ]]; then
     BASE_REF="$FROM_REF"
-elif BASE_REF=$(git describe --tags --match 'v*' --abbrev=0 HEAD 2>/dev/null); then
-    : # Found the latest v<VERSION> tag (temper's only tag form; RELEASING.md)
+    BASE_IS_FALLBACK=true
+    BASE_REASON="a hand-given --from is not a derived release"
 else
-    # No release tag reachable — the degraded base is the repo root. Every
-    # class reads true against it, so say so loudly instead of silently
-    # diffing all of history.
-    local_roots=$(git rev-list --max-parents=0 HEAD 2>/dev/null)
-    BASE_REF=$(head -n1 <<< "$local_roots")
-    log_warn "No release tag reachable from HEAD; degrading to the root commit ${BASE_REF}."
-    log_warn "Every path class will read true. Re-point the release tag on a main-reachable commit before releasing."
+    RELEASE_OUTPUT="$(last_release HEAD)" || die "last_release failed — refusing to guess a window."
+    eval "$RELEASE_OUTPUT"
+    BASE_REF="$LAST_RELEASE_REF"
+    BASE_IS_FALLBACK="$LAST_RELEASE_IS_FALLBACK"
+    BASE_REASON="$LAST_RELEASE_REASON"
+    if [[ "$BASE_IS_FALLBACK" == "true" ]]; then
+        # Not provably the last release. When no tag was found at all the ref is the root
+        # commit and every class reads true against it, so say so loudly instead of silently
+        # diffing all of history.
+        log_warn "The window base ${BASE_REF} is a fallback, not a proven release: ${BASE_REASON}."
+        log_warn "Fetch the full history and tags (git fetch --unshallow --tags) before releasing."
+    fi
 fi
 
 if ! git cat-file -e "${BASE_REF}^{commit}" 2>/dev/null; then
@@ -130,7 +141,9 @@ fi
 # ---------------------------------------------------------------------------
 # Output — eval-safe KEY=VALUE pairs
 # ---------------------------------------------------------------------------
-echo "CHANGES_BASE_REF=${BASE_REF}"
+printf 'CHANGES_BASE_REF=%q\n' "${BASE_REF}"
+echo "CHANGES_BASE_IS_FALLBACK=${BASE_IS_FALLBACK}"
+printf 'CHANGES_BASE_REASON=%q\n' "${BASE_REASON}"
 echo "CORE_CHANGED=${CORE_CHANGED}"
 echo "WIRE_CHANGED=${WIRE_CHANGED}"
 echo "CLIENTS_CHANGED=${CLIENTS_CHANGED}"

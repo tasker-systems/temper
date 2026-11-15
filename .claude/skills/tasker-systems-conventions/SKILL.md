@@ -26,6 +26,7 @@ touching; each rule states its *why* beside it, and its id is what you cite in a
 | Shell scripts and CI gate scripts | `.conventions/baseline/doctrine/shell.md` |
 | Markdown | `.conventions/baseline/doctrine/docs.md` |
 | HTTP API JSON and OpenAPI | `.conventions/baseline/doctrine/api.md` |
+| A compatibility or semver gate | `.conventions/baseline/doctrine/compat.md` |
 | Dependencies, advisories, licenses, Actions, tool pins | `.conventions/baseline/doctrine/supply-chain.md` |
 | Credentials, redaction, SQL, auth | `.conventions/baseline/doctrine/security.md` |
 | Channels, spawned work, locks, database coordination | `.conventions/baseline/doctrine/concurrency.md` |
@@ -66,6 +67,8 @@ Statuses for **temper**:
 | CI-4 | practiced |
 | CI-5 | practiced |
 | CI-6 | practiced |
+| COMPAT-1 | partial: release-relative per-entry-point fallback in guard-tests; no pre-publish check, and an earlier declared break can be re-charged |
+| COMPAT-2 | gated: .github/workflows/quality-gate.yml#guard-tests |
 | CONC-BOUND-1 | gated: .github/workflows/code-quality.yml#rust-quality |
 | CONC-BOUND-2 | uncovered: pool and channel capacities are literals in production code |
 | CONC-BOUND-3 | convention: the at-bound strategy is a design decision judged in review |
@@ -84,6 +87,7 @@ Statuses for **temper**:
 | CONS-6 | gated: .github/workflows/quality-gate.yml#conventions |
 | CONS-7 | gated: .github/workflows/quality-gate.yml#conventions |
 | CONS-8 | gated: .github/workflows/quality-gate.yml#conventions |
+| CONS-9 | uncovered: conventions-bump.yml is not adopted; the pin is moved by hand |
 | DOC-1 | uncovered: no markdownlint in CI |
 | DOC-2 | uncovered: no markdownlint in CI |
 | DOC-3 | uncovered: no markdownlint in CI |
