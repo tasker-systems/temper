@@ -15,7 +15,18 @@
 //!   failing, every one of them is exactly [`unavailable`] instead;
 //! - **the request id** is minted per request, 32 lowercase hex digits, and never adopted from the
 //!   request; an allowlisted origin can read it (the root span's copy is witnessed in
-//!   `telemetry_request_id_test`).
+//!   `telemetry_request_id_test`);
+//! - **the matrix** (spec §5.5), factored into three sweeps: A, every path in `P` by eight methods
+//!   in three configurations; B, the representative paths `R` with one factor varied at a time; C,
+//!   raw-socket probes over `R` (`signed_requests_wait_alike`, `signed_expect_continue_is_uniform`
+//!   and `sweep_c_unsigned_expect_continue_is_uniform`).
+//!
+//! The admitted-caller controls stay green where they live: the signed caller's 404, the
+//! deactivated and unapproved answers (`declared_fallback_test`); the authenticated 405 with
+//! `Allow` (`allow_rides_only_a_405`); the preflight then the actual request
+//! (`expose_headers_name_the_request_id`); cron on the pinned host (`cron_host_pin_test`); a
+//! signed request reaching its handler (below); an attested intake request
+//! (`webhook_intake_test`); and `map_post_edge_auth` on both refusals (temper-mcp's unit tests).
 #![cfg(feature = "test-db")]
 
 mod common;
@@ -214,24 +225,102 @@ const PREFLIGHT_REQUEST: [(&str, &str); 3] = [
     ("access-control-request-headers", "authorization"),
 ];
 
-/// Representative paths: one per kind of door, plus the unmatched and public ones.
+/// The unmatched set: paths no route matches, under every prefix a gate lives behind, with a
+/// trailing slash and a percent-encoded spelling of a mounted path.
+const UNMATCHED: [&str; 7] = [
+    "/no-such",
+    "/api/no-such",
+    "/api/admin/no-such",
+    "/internal/no-such",
+    "/api/embed/no-such",
+    "/api/profile/",
+    "/api/%70rofile",
+];
+
+/// The designated public routes this function serves. Swagger is the third when an operator
+/// enables it (`swagger_gating.rs`); it is off here.
+const PUBLIC: [&str; 2] = ["/api/health", "/api/auth/slack/callback"];
+
+/// The nine Vercel cron doors (pinned against `vercel.json` in `routes::embed_internal`).
+const CRONS: [&str; 9] = [
+    "/api/embed/dispatch",
+    "/api/embed/warm",
+    "/api/region/dispatch",
+    "/api/erasure/drain",
+    "/api/sensitivity/sweep",
+    "/api/shape/reconcile",
+    "/api/slack/intents/reap",
+    "/api/as/reap",
+    "/api/internal-calls/health",
+];
+
+/// `R`, the representative paths: one per route-table group, an absent and a malformed id on a
+/// gated item path, the unmatched set and the public set.
 fn representative_paths() -> Vec<String> {
     let id = Uuid::new_v4();
-    vec![
+    let mut paths = vec![
+        // public_routes, slack_link_public_routes
         "/api/health".to_string(),
         "/api/auth/slack/callback".to_string(),
+        // auth_only_routes, auth_only_status_routes
+        "/api/profile/auth-links".to_string(),
         "/api/profile".to_string(),
+        // gated_routes: a collection, an absent id, a malformed id
         "/api/resources".to_string(),
         format!("/api/resources/{id}"),
+        "/api/resources/not-a-uuid".to_string(),
+        // admin_routes
         "/api/admin/ledger".to_string(),
+        // blob_commit_routes, blob_segment_routes, shape_declare_routes
+        "/api/blobs".to_string(),
+        format!("/api/blobs/uploads/{id}/segments"),
+        format!("/api/contexts/{id}/shapes"),
+        // internal_routes, slack_link_internal_routes, slack_mint_internal_routes
         "/internal/saml/reconcile".to_string(),
+        "/internal/slack/link-state".to_string(),
         "/internal/slack/mint".to_string(),
+        // embed_internal_routes, webhook_intake_routes
         "/api/embed/dispatch".to_string(),
         "/api/intake/webhook".to_string(),
-        "/no-such".to_string(),
-        "/api/no-such".to_string(),
-        "/internal/no-such".to_string(),
-    ]
+    ];
+    paths.extend(UNMATCHED.iter().map(|p| p.to_string()));
+    paths
+}
+
+/// `P`, every path: each documented operation's path with one id per parameter, the doors the
+/// spec does not document (the HMAC doors, the nine crons, the intake), the unmatched set and the
+/// public set.
+fn all_paths() -> Vec<String> {
+    let id = Uuid::new_v4().to_string();
+    let spec = temper_api::openapi_spec();
+    let mut paths: std::collections::BTreeSet<String> = spec
+        .paths
+        .paths
+        .keys()
+        .map(|template| {
+            template
+                .split('/')
+                .map(|segment| {
+                    if segment.starts_with('{') {
+                        id.as_str()
+                    } else {
+                        segment
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .collect();
+    paths.extend(
+        temper_core::internal_sig::DOORS
+            .iter()
+            .map(|d| d.to_string()),
+    );
+    paths.extend(CRONS.iter().map(|c| c.to_string()));
+    paths.insert("/api/intake/webhook".to_string());
+    paths.extend(UNMATCHED.iter().map(|p| p.to_string()));
+    paths.extend(PUBLIC.iter().map(|p| p.to_string()));
+    paths.into_iter().collect()
 }
 
 async fn allowlisted_app(pool: &PgPool) -> common::TestApp {
@@ -1141,7 +1230,7 @@ async fn the_recovering_request_answers_unavailable_on_a_bearer_door(pool: PgPoo
 fn non_public_paths() -> Vec<String> {
     representative_paths()
         .into_iter()
-        .filter(|p| p != "/api/health" && p != "/api/auth/slack/callback")
+        .filter(|p| !PUBLIC.contains(&p.as_str()))
         .collect()
 }
 
@@ -1554,4 +1643,530 @@ async fn a_signed_request_reaches_its_handler_with_and_without_expect(pool: PgPo
     let rest = String::from_utf8_lossy(&rest);
     assert!(rest.contains("HTTP/1.1 200 OK"), "{rest}");
     assert!(rest.contains("profile_id"), "{rest}");
+}
+
+// ---- The integration matrix (spec §5.5): three factored sweeps --------------------------------
+
+/// One request a sweep sends: method, path, headers and an optional body.
+#[derive(Clone)]
+struct Probe {
+    method: Method,
+    path: String,
+    headers: Headers,
+    body: Option<Vec<u8>>,
+}
+
+impl Probe {
+    fn new(method: Method, path: &str) -> Self {
+        Probe {
+            method,
+            path: path.to_string(),
+            headers: Vec::new(),
+            body: None,
+        }
+    }
+
+    fn label(&self) -> String {
+        let names: Vec<&str> = self.headers.iter().map(|(n, _)| *n).collect();
+        let body = self.body.as_ref().map(Vec::len);
+        format!("{} {} {names:?} body {body:?}", self.method, self.path)
+    }
+}
+
+/// Send every probe, a bounded number at a time, and return the answers in order. Concurrency
+/// keeps the sweeps inside their runtime budget; each answer is still compared on its own.
+async fn send_all(app: &common::TestApp, probes: Vec<Probe>) -> Vec<(String, Answer)> {
+    const IN_FLIGHT: usize = 24;
+    let mut out = Vec::with_capacity(probes.len());
+    for chunk in probes.chunks(IN_FLIGHT) {
+        let mut tasks = tokio::task::JoinSet::new();
+        for (i, probe) in chunk.iter().cloned().enumerate() {
+            let client = app.client.clone();
+            let url = app.url(&probe.path);
+            tasks.spawn(async move {
+                let mut request = client.request(probe.method.clone(), url);
+                for (n, v) in &probe.headers {
+                    request = request.header(*n, v.as_str());
+                }
+                if let Some(body) = probe.body.clone() {
+                    request = request.body(body);
+                }
+                let response = request.send().await.expect("request sent");
+                (i, probe.label(), answer_of(response).await)
+            });
+        }
+        let mut answered: Vec<_> = tasks.join_all().await;
+        answered.sort_by_key(|(i, _, _)| *i);
+        out.extend(
+            answered
+                .into_iter()
+                .map(|(_, label, answer)| (label, answer)),
+        );
+    }
+    out
+}
+
+const EIGHT_METHODS: [Method; 8] = [
+    Method::GET,
+    Method::HEAD,
+    Method::POST,
+    Method::PUT,
+    Method::PATCH,
+    Method::DELETE,
+    Method::OPTIONS,
+    Method::TRACE,
+];
+
+/// `expected` as a `HEAD` answers it: the same headers, `content-length` included, and no body.
+fn as_head(expected: &Answer) -> Answer {
+    let mut head = expected.clone();
+    head.body = String::new();
+    head
+}
+
+/// Split answers into the `HEAD` ones and the rest, and hold each group to `expected` (the `HEAD`
+/// group to its bodiless form), with one CORS set across both.
+fn assert_refusals_any_method(answers: &[(String, Answer)], expected: &Answer) {
+    let (heads, rest): (Vec<_>, Vec<_>) = answers
+        .iter()
+        .cloned()
+        .partition(|(what, _)| what.starts_with("HEAD "));
+    if !rest.is_empty() {
+        assert_refusals(&rest, expected);
+    }
+    if !heads.is_empty() {
+        assert_refusals(&heads, &as_head(expected));
+    }
+    if let (Some(a), Some(b)) = (rest.first(), heads.first()) {
+        assert_eq!(
+            cors_headers(&a.1),
+            cors_headers(&b.1),
+            "HEAD and the rest differ in CORS"
+        );
+    }
+}
+
+/// Every request id in `answers` is distinct.
+fn assert_request_ids_distinct(answers: &[(String, Answer)]) {
+    let mut seen = std::collections::BTreeSet::new();
+    for (what, answer) in answers {
+        let id = answer
+            .header("x-request-id")
+            .unwrap_or_default()
+            .to_string();
+        assert!(seen.insert(id), "{what}: a request id repeated");
+    }
+}
+
+/// A public route answers for itself: never the refusal.
+fn assert_public_answers_for_itself(answers: &[(String, Answer)]) {
+    for (what, answer) in answers {
+        assert_request_id_format(what, answer);
+        assert_ne!(
+            answer.status, 401,
+            "{what}: a public route answered the refusal: {answer:?}"
+        );
+    }
+}
+
+/// Sweep A in one configuration: every path in `P`, every one of the eight methods, no
+/// credential, no `Origin`, no body; `headers` only to put the request on another host.
+async fn sweep_a(app: &common::TestApp, headers: &Headers) {
+    let mut gated = Vec::new();
+    let mut public = Vec::new();
+    for path in all_paths() {
+        for method in EIGHT_METHODS {
+            let mut probe = Probe::new(method, &path);
+            probe.headers = headers.clone();
+            if PUBLIC.contains(&path.as_str()) {
+                public.push(probe);
+            } else {
+                gated.push(probe);
+            }
+        }
+    }
+    assert!(
+        gated.len() > 1000,
+        "P is too small: {} requests",
+        gated.len()
+    );
+    let answers = send_all(app, gated).await;
+    assert_refusals_any_method(&answers, &u401());
+    assert_request_ids_distinct(&answers);
+    assert_public_answers_for_itself(&send_all(app, public).await);
+}
+
+// FAILS IF: any path in `P` (every documented operation, every undocumented door, the unmatched
+// set), by any of eight methods, answers an anonymous caller anything but `U401`: with the secrets
+// set, with them unset, and with the cron host pinned and the request on another host. This is
+// the witness for the outer preflight (`OPTIONS /api/admin/ledger`), the `Allow` strip
+// (`POST /api/profile`), the declared fallback (`GET /api/no-such`), the uniform body
+// (`POST /internal/slack/mint`), the cron tier (`PUT /api/embed/dispatch`), the host pin
+// (`GET /api/embed/dispatch` on another host) and the request id, each by its own row.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sweep_a_every_path_and_method_is_u401(pool: PgPool) {
+    let configured = allowlisted_app(&pool).await;
+    sweep_a(&configured, &vec![]).await;
+
+    let unset = common::setup_test_app_with_config(pool.clone(), |_| {}).await;
+    sweep_a(&unset, &vec![]).await;
+
+    let pinned = common::setup_test_app_with_config(pool.clone(), |config| {
+        config.cron_host = Some("cron.internal.test".to_string());
+        config.embed_dispatch_secret = Some("dispatch-secret".to_string());
+    })
+    .await;
+    sweep_a(&pinned, &vec![("host", "public.example".to_string())]).await;
+}
+
+/// The four methods sweep B sends.
+const FOUR_METHODS: [Method; 4] = [Method::GET, Method::POST, Method::PUT, Method::OPTIONS];
+
+/// One factor away from the baseline, applied to a probe.
+enum Factor {
+    Headers(Headers),
+    Query(&'static str),
+    Body(Headers, Vec<u8>),
+}
+
+impl Factor {
+    fn apply(&self, probe: &mut Probe) {
+        match self {
+            Factor::Headers(h) => probe.headers.extend(h.iter().cloned()),
+            Factor::Query(q) => probe.path.push_str(q),
+            Factor::Body(h, body) => {
+                probe.headers.extend(h.iter().cloned());
+                probe.body = Some(body.clone());
+            }
+        }
+    }
+}
+
+/// `R` × the four methods, with `factor` applied: the non-public probes and the public ones.
+fn sweep_b_probes(factor: &Factor) -> (Vec<Probe>, Vec<Probe>) {
+    let mut gated = Vec::new();
+    let mut public = Vec::new();
+    for path in representative_paths() {
+        for method in FOUR_METHODS {
+            let mut probe = Probe::new(method, &path);
+            factor.apply(&mut probe);
+            if PUBLIC.contains(&path.as_str()) {
+                public.push(probe);
+            } else {
+                gated.push(probe);
+            }
+        }
+    }
+    (gated, public)
+}
+
+/// Drop `connection` from every answer, after holding it equal across them: a refusal sent while
+/// a large body is still unread closes the connection, and that framing must not depend on the
+/// path either.
+fn without_framing(answers: &mut [(String, Answer)]) {
+    let first = answers
+        .first()
+        .map(|(_, a)| a.header("connection").map(str::to_owned));
+    for (what, answer) in answers.iter_mut() {
+        assert_eq!(
+            answer.header("connection").map(str::to_owned),
+            first.clone().flatten(),
+            "{what}: framed unlike the others"
+        );
+        answer.headers.remove("connection");
+    }
+}
+
+/// Every credential that does not verify, as sweep B's credential factor.
+fn sweep_b_credentials() -> Vec<(&'static str, Factor)> {
+    let mut factors: Vec<(&'static str, Factor)> = unverified_bearers()
+        .into_iter()
+        .skip(1)
+        .zip([
+            "Bearer garbage",
+            "Basic x",
+            "an expired JWT",
+            "a wrong-audience JWT",
+        ])
+        .map(|(h, name)| (name, Factor::Headers(h)))
+        .collect();
+    factors.push(("a bad HMAC signature", Factor::Headers(bad_signature())));
+    factors.push((
+        "the wrong cron secret",
+        Factor::Headers(vec![(
+            "authorization",
+            "Bearer not-the-dispatch-secret".to_string(),
+        )]),
+    ));
+    factors
+}
+
+/// The extras: request detail a gate must refuse before reading. `Content-Encoding: foo` is held to
+/// its own pinned 415 by [`sweep_b_one_factor_at_a_time`].
+fn sweep_b_extras() -> Vec<(&'static str, Factor)> {
+    vec![
+        (
+            "If-Match",
+            Factor::Headers(vec![("if-match", "\"abc\"".to_string())]),
+        ),
+        ("?shard=abc", Factor::Query("?shard=abc")),
+        (
+            "a corrupt gzip body",
+            Factor::Body(
+                vec![("content-encoding", "gzip".to_string())],
+                b"notgzip".to_vec(),
+            ),
+        ),
+        (
+            "a body over 2 MiB",
+            Factor::Body(vec![], vec![b'x'; 2 * 1024 * 1024 + 1]),
+        ),
+        (
+            "a signed 70 KiB body",
+            Factor::Body(bad_signature(), vec![b'x'; 70 * 1024]),
+        ),
+    ]
+}
+
+/// The 415 an undecodable `Content-Encoding` gets before any gate, whatever the path or method:
+/// tower-http's own answer, an empty body naming the one encoding it decodes.
+fn unsupported_encoding() -> Answer {
+    let mut headers: BTreeMap<String, String> = SECURITY_HEADERS
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .collect();
+    headers.insert("accept-encoding".to_string(), "gzip".to_string());
+    headers.insert("content-length".to_string(), "0".to_string());
+    Answer {
+        status: 415,
+        headers,
+        body: String::new(),
+    }
+}
+
+// FAILS IF: varying any one factor from the baseline (a credential that does not verify, an
+// `Origin`, a request extra, the CORS configuration) moves a non-public answer in `R` off its
+// pinned bytes, or a public route starts answering the refusal. Witness for the preflight's
+// security headers (allowlisted preflight), `Access-Control-Expose-Headers` (allowlisted
+// `Origin`), the cron tier's `?shard=abc` row and the intake tier's corrupt-gzip row.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sweep_b_one_factor_at_a_time(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+
+    let mut factors = vec![("the baseline", Factor::Headers(vec![]))];
+    factors.extend(sweep_b_credentials());
+    factors.extend(sweep_b_extras());
+    for (name, factor) in &factors {
+        let (gated, public) = sweep_b_probes(factor);
+        let mut answers = send_all(&app, gated).await;
+        if matches!(factor, Factor::Body(..)) {
+            without_framing(&mut answers);
+        }
+        assert_refusals(&answers, &u401());
+        assert!(
+            answers.iter().all(|(_, a)| a.header("allow").is_none()),
+            "{name}: Allow rode a refusal"
+        );
+        let mut public = send_all(&app, public).await;
+        if *name == "a signed 70 KiB body" {
+            // The one factor a public route refuses too: the signed body is read before routing,
+            // on every path (`a_70_kib_signed_body_is_u401_everywhere`).
+            without_framing(&mut public);
+            assert_refusals(&public, &u401());
+        } else {
+            assert_public_answers_for_itself(&public);
+        }
+    }
+
+    // `Content-Encoding: foo`: one pinned 415 on every path, mounted or not, never with `Allow`.
+    let (gated, _) = sweep_b_probes(&Factor::Headers(vec![(
+        "content-encoding",
+        "foo".to_string(),
+    )]));
+    let answers = send_all(&app, gated).await;
+    assert_refusals(&answers, &unsupported_encoding());
+
+    // An allowlisted `Origin` without a preflight's method: the refusal, readable by that origin,
+    // with the request id exposed.
+    let origin = Factor::Headers(vec![("origin", ORIGIN.to_string())]);
+    let (gated, public) = sweep_b_probes(&origin);
+    let answers = send_all(&app, gated).await;
+    assert_refusals(&answers, &u401());
+    for (what, answer) in &answers {
+        assert_eq!(
+            answer.header("access-control-allow-origin"),
+            Some(ORIGIN),
+            "{what}"
+        );
+        assert_eq!(
+            answer.header("access-control-expose-headers"),
+            Some("link,x-request-id"),
+            "{what}"
+        );
+    }
+    assert_public_answers_for_itself(&send_all(&app, public).await);
+
+    // With a preflight's headers: `OPTIONS` is the pinned preflight on every path, public ones
+    // included, and every other method the refusal, readable by the origin.
+    let preflight = Factor::Headers(
+        PREFLIGHT_REQUEST
+            .iter()
+            .map(|(n, v)| (*n, v.to_string()))
+            .collect(),
+    );
+    let (gated, public) = sweep_b_probes(&preflight);
+    let (options, rest): (Vec<_>, Vec<_>) = send_all(&app, gated)
+        .await
+        .into_iter()
+        .partition(|(what, _)| what.starts_with("OPTIONS "));
+    for (what, answer) in &options {
+        assert_request_id_format(what, answer);
+        assert_eq!(answer.without_request_id(), preflight_constant(), "{what}");
+    }
+    assert_refusals(&rest, &u401());
+    let public = send_all(&app, public).await;
+    for (what, answer) in public.iter().filter(|(w, _)| w.starts_with("OPTIONS ")) {
+        assert_eq!(answer.without_request_id(), preflight_constant(), "{what}");
+    }
+
+    // A foreign `Origin`: the refusal, and nothing a browser on that origin may read.
+    let (gated, _) = sweep_b_probes(&Factor::Headers(vec![("origin", FOREIGN.to_string())]));
+    let answers = send_all(&app, gated).await;
+    assert_refusals(&answers, &u401());
+    assert!(answers
+        .iter()
+        .all(|(_, a)| a.header("access-control-allow-origin").is_none()));
+
+    // The CORS configuration: none, and permissive. The refusal's bytes do not move; its CORS
+    // headers are one set per configuration, never per path.
+    for origins in [vec![], vec!["*".to_string()]] {
+        let other = common::setup_test_app_with_config(pool.clone(), |config| {
+            config.cors_origins = origins.clone();
+            config.internal_reconcile_secret = Some("reconcile-secret".to_string());
+            config.slack_mint_secret = Some("mint-secret".to_string());
+            config.embed_dispatch_secret = Some("dispatch-secret".to_string());
+        })
+        .await;
+        for factor in [
+            Factor::Headers(vec![]),
+            Factor::Headers(vec![("origin", ORIGIN.to_string())]),
+        ] {
+            let (gated, public) = sweep_b_probes(&factor);
+            let answers = send_all(&other, gated).await;
+            assert_refusals(&answers, &u401());
+            assert_public_answers_for_itself(&send_all(&other, public).await);
+        }
+    }
+}
+
+// FAILS IF: while the bearer key store is failing, a non-public path in `R` answers anything but
+// `UNAVAILABLE`, by any of the four methods and with or without a credential: the outage would
+// tell a prober which paths verify a bearer. Witness for AR-4 (`POST /internal/slack/mint`,
+// `GET /api/no-such`).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sweep_b_a_failing_key_store_is_unavailable_everywhere(pool: PgPool) {
+    let app = common::setup_test_app_with_state(pool.clone(), |state| {
+        state.jwks_store = std::sync::Arc::new(temper_services::state::JwksKeyStore::new(
+            "http://127.0.0.1:1/.well-known/jwks.json".to_string(),
+        ));
+    })
+    .await;
+    let primed = send(
+        &app,
+        Method::GET,
+        "/api/profile",
+        &[("authorization", "Bearer garbage")],
+    )
+    .await;
+    assert_eq!(without_cors(&primed), unavailable(), "the priming request");
+    let mut factors = vec![Factor::Headers(vec![])];
+    factors.extend(sweep_b_credentials().into_iter().map(|(_, f)| f));
+    for factor in &factors {
+        let (gated, public) = sweep_b_probes(factor);
+        assert_refusals(&send_all(&app, gated).await, &unavailable());
+        assert_public_answers_for_itself(&send_all(&app, public).await);
+    }
+}
+
+// FAILS IF: a validly signed caller is refused on an unmatched path, reaches past the refused
+// `/internal/` prefix or a door, or the fallback creates a profile for a signed identity that has
+// none. Witness for the lookup-only fallback (no profile row) and the refused prefix
+// (`/internal/no-such`).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sweep_b_a_valid_bearer_learns_only_what_routing_says(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    let email = format!("matrix-{}@example.com", Uuid::new_v4());
+    let (profile_id, _) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let approved = common::generate_test_jwt(&format!("test|{profile_id}"), &email);
+    let stranger = common::generate_test_jwt(
+        &format!("test|matrix-stranger-{}", Uuid::new_v4().simple()),
+        &format!("matrix-stranger-{}@example.com", Uuid::new_v4().simple()),
+    );
+    let count = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM kb_profiles")
+            .fetch_one(&pool)
+            .await
+            .expect("count")
+    };
+    let before = count().await;
+
+    let refused: Vec<String> = ["/internal/", "/internal/no-such"]
+        .into_iter()
+        .map(str::to_string)
+        .chain(
+            temper_core::internal_sig::DOORS
+                .iter()
+                .map(|d| d.to_string()),
+        )
+        .collect();
+    let unmatched: Vec<&str> = UNMATCHED
+        .iter()
+        .copied()
+        .filter(|p| !p.starts_with("/internal/"))
+        .collect();
+    for token in [&approved, &stranger] {
+        let bearer = vec![("authorization", format!("Bearer {token}"))];
+        let mut probes = Vec::new();
+        for method in FOUR_METHODS {
+            for path in &refused {
+                let mut probe = Probe::new(method.clone(), path);
+                probe.headers = bearer.clone();
+                probes.push(probe);
+            }
+        }
+        assert_refusals(&send_all(&app, probes).await, &u401());
+        for method in FOUR_METHODS {
+            for path in &unmatched {
+                let mut probe = Probe::new(method.clone(), path);
+                probe.headers = bearer.clone();
+                let (what, answer) = send_all(&app, vec![probe]).await.remove(0);
+                assert_eq!(answer.status, 404, "{what}: {answer:?}");
+                assert!(
+                    answer.body.contains("No route matches"),
+                    "{what}: {answer:?}"
+                );
+                assert_eq!(answer.header("allow"), None, "{what}");
+            }
+        }
+    }
+    assert_eq!(count().await, before, "the fallback created a profile");
+}
+
+// FAILS IF: an unsigned `Expect: 100-continue` draws `100 Continue` on some non-public path in `R`
+// and the refusal on others: the first line would name the paths whose handler reads the body.
+// (The signed arm is `signed_expect_continue_is_uniform`; the declared-length arm is
+// `signed_requests_wait_alike`.) Witness for the intake tier: reverted, the intake continues.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sweep_c_unsigned_expect_continue_is_uniform(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    for path in non_public_paths() {
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 10\r\nexpect: 100-continue\r\n\r\n"
+        );
+        assert_eq!(
+            first_status_line(&app, &head, AT_ONCE).await.as_deref(),
+            Some("HTTP/1.1 401 Unauthorized"),
+            "{path}"
+        );
+    }
 }
