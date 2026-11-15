@@ -61,6 +61,10 @@ async fn send(
         request = request.header(*name, *value);
     }
     let response = request.send().await.expect("request sent");
+    answer_of(response).await
+}
+
+async fn answer_of(response: reqwest::Response) -> Answer {
     let status = response.status().as_u16();
     let mut map = BTreeMap::new();
     for (name, value) in response.headers() {
@@ -577,10 +581,43 @@ fn refused_requests() -> Vec<(Method, String, Headers)> {
             out.push((Method::POST, path.to_string(), headers.clone()));
         }
     }
-    // A stale signature is the same refusal as a bad one.
+    // A stale signature, and a malformed nonce, are the same refusal as a bad one.
     let mut stale = bad_signature();
     stale[0].1 = "1".to_string();
     out.push((Method::POST, "/internal/slack/mint".to_string(), stale));
+    let mut nonce = bad_signature();
+    nonce[1].1 = "not-a-nonce".to_string();
+    out.push((Method::POST, "/internal/saml/reconcile".to_string(), nonce));
+    out
+}
+
+/// The refusals a header map cannot carry as `&str`: a non-UTF-8 `Authorization`, and a signed
+/// request whose body is over the signature gates' 64 KiB read.
+async fn raw_refusals(app: &common::TestApp) -> Vec<(String, Answer)> {
+    let mut out = Vec::new();
+    let bytes = reqwest::header::HeaderValue::from_bytes(b"Bearer \xff\xfe").expect("obs-text");
+    let response = app
+        .client
+        .get(app.url("/api/profile"))
+        .header("authorization", bytes)
+        .send()
+        .await
+        .expect("sent");
+    out.push((
+        "non-UTF-8 Authorization".to_string(),
+        answer_of(response).await,
+    ));
+    for path in ["/internal/slack/mint", "/internal/saml/reconcile"] {
+        let mut request = app.client.post(app.url(path)).body(vec![b'x'; 70 * 1024]);
+        for (n, v) in bad_signature() {
+            request = request.header(n, v);
+        }
+        let response = request.send().await.expect("sent");
+        out.push((
+            format!("70 KiB signed body to {path}"),
+            answer_of(response).await,
+        ));
+    }
     out
 }
 
@@ -597,6 +634,7 @@ async fn pre_identity_refusals_are_u401(pool: PgPool) {
             let answer = send_owned(app, method.clone(), &path, &headers).await;
             answers.push((format!("{method} {path} {headers:?}"), answer));
         }
+        answers.extend(raw_refusals(app).await);
         assert_refusals(&answers, &u401());
     }
 }
@@ -647,4 +685,40 @@ async fn a_failing_key_store_makes_every_refusal_unavailable(pool: PgPool) {
     assert_refusals(&answers, &unavailable());
     let health = send(&app, Method::GET, "/api/health", &[]).await;
     assert_eq!(health.status, 200, "{health:?}");
+
+    // The raw shapes, and HEAD: the same unavailable answer, with no body.
+    let mut answers = raw_refusals(&app).await;
+    let head = send(&app, Method::HEAD, "/api/profile", &[]).await;
+    assert_eq!(head.body, "", "HEAD carries no body");
+    assert_eq!(
+        head.header("content-length"),
+        Some(UNAVAILABLE_BODY.len().to_string().as_str()),
+        "HEAD advertises the unavailable body's length: {head:?}"
+    );
+    answers.push(("the priming request".to_string(), primed_again(&app).await));
+    assert_refusals(&answers, &unavailable());
+
+    // Only a pre-identity refusal is swapped: a 415 (answered before any gate) and a public
+    // route's 405 keep their own answers.
+    let encoding = send(
+        &app,
+        Method::POST,
+        "/api/resources",
+        &[("content-encoding", "foo")],
+    )
+    .await;
+    assert_eq!(encoding.status, 415, "{encoding:?}");
+    let not_allowed = send(&app, Method::POST, "/api/health", &[]).await;
+    assert_eq!(not_allowed.status, 405, "{not_allowed:?}");
+    assert!(!not_allowed.body.contains("unavailable"), "{not_allowed:?}");
+}
+
+async fn primed_again(app: &common::TestApp) -> Answer {
+    send(
+        app,
+        Method::GET,
+        "/api/profile",
+        &[("authorization", "Bearer garbage")],
+    )
+    .await
 }

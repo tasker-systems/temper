@@ -154,8 +154,20 @@ impl AnonymousSurface {
             self.actual.oneshot(request).await
         };
 
-        if self.jwks.is_failing() {
-            response = unavailable_if_refused(response);
+        if let Some(PreIdentityRefusal(cause)) = response.extensions().get().copied() {
+            let unavailable = self.jwks.is_failing();
+            // The one line an operator joins a caller's quoted `x-request-id` to. Emitted here, not
+            // under the root span, so it carries the id whatever the log filter does to spans.
+            tracing::warn!(
+                request_id = id.as_str(),
+                cause = cause.as_str(),
+                unavailable,
+                status_code = 401,
+                "auth error"
+            );
+            if unavailable {
+                response = unavailable_if_refused(response);
+            }
         }
         finish(&mut response, &id);
         response
@@ -227,5 +239,32 @@ impl Service<Request> for CorsHeadersOnly {
 
     fn call(&mut self, _request: Request) -> Self::Future {
         std::future::ready(Ok(Response::new(axum::body::Body::empty())))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temper_services::error::{ApiError, UnauthCause};
+
+    // FAILS IF: the unavailable swap touches a response that is not a marked pre-identity
+    // refusal (a verified-identity 401 such as `account is deactivated` would turn retryable), or
+    // misses a marked one.
+    #[tokio::test]
+    async fn only_a_marked_refusal_is_swapped() {
+        let verified = ApiError::Unauthorized("account is deactivated".to_string()).into_response();
+        let kept = unavailable_if_refused(verified);
+        let body = axum::body::to_bytes(kept.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("account is deactivated"));
+
+        let marked = ApiError::Unauthenticated(UnauthCause::MissingBearer).into_response();
+        let swapped = unavailable_if_refused(marked);
+        assert_eq!(swapped.headers().get(header::CONTENT_LENGTH), None);
+        let body = axum::body::to_bytes(swapped.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("Authentication service unavailable"));
     }
 }

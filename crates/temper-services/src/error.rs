@@ -431,14 +431,17 @@ impl IntoResponse for ApiError {
                     "resource busy (lock wait bound)"
                 );
             }
-            // The cause and nothing else: the message is the constant, and the request id is on
-            // the root span this line is emitted under.
+            // Debug here: the `auth error` WARN for a pre-identity refusal is emitted by temper-api's
+            // outer service, which holds the request id this response carries and reads the cause
+            // from the `PreIdentityRefusal` mark. Logged here at WARN it would depend on the root
+            // span being enabled for the log layer to carry the id, and at a `warn` filter it is
+            // not.
             ApiError::Unauthenticated(cause) => {
-                tracing::warn!(
+                tracing::debug!(
                     status_code,
                     error_code = code,
                     cause = cause.as_str(),
-                    "auth error"
+                    "pre-identity refusal"
                 );
             }
             ApiError::Unauthorized(_) | ApiError::Forbidden | ApiError::ForbiddenDetail(_) => {
