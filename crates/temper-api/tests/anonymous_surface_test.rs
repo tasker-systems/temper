@@ -10,6 +10,9 @@
 //!   `OPTIONS` is routed like any other method;
 //! - **`Allow` rides only a 405**: never on a 401, never on the 415 an undecodable
 //!   `Content-Encoding` gets before any gate;
+//! - **the uniform refusal**: every pre-identity refusal, whatever the gate, the door, the
+//!   credential shape or the configuration, is exactly [`u401`]; while the bearer key store is
+//!   failing, every one of them is exactly [`unavailable`] instead;
 //! - **the request id** is minted per request, 32 lowercase hex digits, and never adopted from the
 //!   request; an allowlisted origin can read it (the root span's copy is witnessed in
 //!   `telemetry_request_id_test`).
@@ -117,6 +120,64 @@ const SECURITY_HEADERS: [(&str, &str); 5] = [
     ("x-content-type-options", "nosniff"),
     ("x-frame-options", "DENY"),
 ];
+
+const U401_BODY: &str =
+    r#"{"error":{"code":"UNAUTHORIZED","message":"Unauthorized: authentication required"}}"#;
+const UNAVAILABLE_BODY: &str = r#"{"error":{"code":"UNAUTHORIZED","message":"Unauthorized: Authentication service unavailable"}}"#;
+
+/// A 401 with `body`, without the CORS headers (`access-control-*` and `vary`), which depend only
+/// on `Origin` and the CORS configuration and are compared across paths instead
+/// ([`assert_refusals`]). `x-request-id` is asserted by format.
+fn refusal_constant(body: &str) -> Answer {
+    let mut headers: BTreeMap<String, String> = SECURITY_HEADERS
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .collect();
+    for (n, v) in [
+        ("content-type", "application/json"),
+        ("content-length", &body.len().to_string()),
+    ] {
+        headers.insert(n.to_string(), v.to_string());
+    }
+    Answer {
+        status: 401,
+        headers,
+        body: body.to_string(),
+    }
+}
+
+/// `U401`: every pre-identity refusal.
+fn u401() -> Answer {
+    refusal_constant(U401_BODY)
+}
+
+/// `UNAVAILABLE`: every pre-identity refusal while the bearer key store is failing.
+fn unavailable() -> Answer {
+    refusal_constant(UNAVAILABLE_BODY)
+}
+
+/// The answer without its CORS headers or request id: the bytes a refusal pins absolutely.
+fn without_cors(answer: &Answer) -> Answer {
+    let mut a = answer.without_request_id();
+    a.headers
+        .retain(|n, _| !n.starts_with("access-control-") && n.as_str() != "vary");
+    a
+}
+
+/// Every answer is exactly `expected` apart from its CORS headers, and those are one set across
+/// all of them: they may depend on the configuration, never on the path.
+fn assert_refusals(answers: &[(String, Answer)], expected: &Answer) {
+    let cors = cors_headers(&answers[0].1);
+    for (what, answer) in answers {
+        assert_request_id_format(what, answer);
+        assert_eq!(&without_cors(answer), expected, "{what}");
+        assert_eq!(
+            cors_headers(answer),
+            cors,
+            "{what}: CORS headers differ by path"
+        );
+    }
+}
 
 /// `PREFLIGHT`: the answer to a preflight from [`ORIGIN`] asking for `POST` with `authorization`,
 /// on any path (`x-request-id` asserted by format).
@@ -432,4 +493,137 @@ async fn expose_headers_name_the_request_id(pool: PgPool) {
     // A foreign origin gets no ACAO on the actual response, whatever the path.
     let foreign = send(&app, Method::GET, "/api/profile", &[("origin", FOREIGN)]).await;
     assert_eq!(foreign.header("access-control-allow-origin"), None);
+}
+
+/// Every credential shape that does not verify, for the bearer routes.
+fn unverified_bearers() -> Vec<Vec<(&'static str, String)>> {
+    vec![
+        vec![],
+        vec![("authorization", "Bearer garbage".to_string())],
+        vec![("authorization", "Basic eDp5".to_string())],
+        vec![(
+            "authorization",
+            format!(
+                "Bearer {}",
+                common::generate_expired_jwt("test|expired", "e@example.com")
+            ),
+        )],
+        vec![(
+            "authorization",
+            format!(
+                "Bearer {}",
+                common::generate_test_jwt_with_audience("test|aud", "a@example.com", "not-ours")
+            ),
+        )],
+    ]
+}
+
+/// A signature header set that parses and does not verify.
+fn bad_signature() -> Vec<(&'static str, String)> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    vec![
+        (temper_core::internal_sig::TIMESTAMP_HEADER, now.to_string()),
+        (
+            temper_core::internal_sig::NONCE_HEADER,
+            Uuid::new_v4().simple().to_string(),
+        ),
+        (
+            temper_core::internal_sig::SIGNATURE_V2_HEADER,
+            "00".repeat(32),
+        ),
+    ]
+}
+
+async fn send_owned(
+    app: &common::TestApp,
+    method: Method,
+    path: &str,
+    headers: &[(&'static str, String)],
+) -> Answer {
+    let borrowed: Vec<(&str, &str)> = headers.iter().map(|(n, v)| (*n, v.as_str())).collect();
+    send(app, method, path, &borrowed).await
+}
+
+/// The anonymous requests every gate kind refuses, with the credential each might present.
+fn refused_requests() -> Vec<(Method, String, Vec<(&'static str, String)>)> {
+    let id = Uuid::new_v4();
+    let mut out = Vec::new();
+    for bearer in unverified_bearers() {
+        for (method, path) in [
+            (Method::GET, "/api/profile".to_string()),
+            (Method::POST, "/api/profile".to_string()),
+            (Method::GET, format!("/api/resources/{id}")),
+            (Method::GET, "/api/admin/ledger".to_string()),
+            (Method::OPTIONS, "/api/admin/ledger".to_string()),
+            (Method::GET, "/api/embed/dispatch".to_string()),
+            (Method::GET, "/api/embed/warm".to_string()),
+            (Method::POST, "/api/intake/webhook".to_string()),
+        ] {
+            out.push((method, path, bearer.clone()));
+        }
+    }
+    for headers in [vec![], bad_signature()] {
+        for path in [
+            "/internal/saml/reconcile",
+            "/internal/slack/mint",
+            "/internal/slack/link-state",
+        ] {
+            out.push((Method::POST, path.to_string(), headers.clone()));
+        }
+    }
+    // A stale signature is the same refusal as a bad one.
+    let mut stale = bad_signature();
+    stale[0].1 = "1".to_string();
+    out.push((Method::POST, "/internal/slack/mint".to_string(), stale));
+    out
+}
+
+// FAILS IF: any pre-identity refusal (bearer, signature, cron, intake; any credential shape; secrets
+// set or unset) is not exactly `U401`: a gate's own message, a door's label or a configuration
+// state reaches the body.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pre_identity_refusals_are_u401(pool: PgPool) {
+    let configured = allowlisted_app(&pool).await;
+    let bare = common::setup_test_app_with_config(pool.clone(), |_| {}).await;
+    for app in [&configured, &bare] {
+        let mut answers = Vec::new();
+        for (method, path, headers) in refused_requests() {
+            let answer = send_owned(app, method.clone(), &path, &headers).await;
+            answers.push((format!("{method} {path} {headers:?}"), answer));
+        }
+        assert_refusals(&answers, &u401());
+    }
+}
+
+// FAILS IF: while the bearer key store is failing, a pre-identity refusal on some path still answers
+// `U401` (the outage would tell a prober which paths verify a bearer), or a public route stops
+// answering for itself.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_failing_key_store_makes_every_refusal_unavailable(pool: PgPool) {
+    let app = common::setup_test_app_with_state(pool.clone(), |state| {
+        // Nothing listens on port 1, so every refresh fails.
+        state.jwks_store = std::sync::Arc::new(temper_services::state::JwksKeyStore::new(
+            "http://127.0.0.1:1/.well-known/jwks.json".to_string(),
+        ));
+    })
+    .await;
+    // Any bearer reaches the empty cache and fails its refresh; from then on the store is failing.
+    let primed = send(
+        &app,
+        Method::GET,
+        "/api/profile",
+        &[("authorization", "Bearer garbage")],
+    )
+    .await;
+    let mut answers = vec![("the priming request".to_string(), primed)];
+    for (method, path, headers) in refused_requests() {
+        let answer = send_owned(&app, method.clone(), &path, &headers).await;
+        answers.push((format!("{method} {path} {headers:?}"), answer));
+    }
+    assert_refusals(&answers, &unavailable());
+    let health = send(&app, Method::GET, "/api/health", &[]).await;
+    assert_eq!(health.status, 200, "{health:?}");
 }

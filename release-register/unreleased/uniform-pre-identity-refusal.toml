@@ -1,0 +1,46 @@
+title    = "Every pre-identity 401 is one body, and while the key store fails every one says the authentication service is unavailable"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "internal"]
+status   = "signal-only"
+body = '''
+What changed: every refusal of a caller whose credential does not verify at the gate the path
+applies now has one body,
+{"error":{"code":"UNAUTHORIZED","message":"Unauthorized: authentication required"}}, through a new
+fieldless ApiError::Unauthenticated(cause). That covers the bearer gate (missing, malformed or
+non-Bearer header; invalid, expired or foreign token; an unpublished kid), the three HMAC
+signature gates (missing headers, an unknown door, a disabled door, a stale, mismatched, malformed
+or replayed signature, an unreadable body), the cron doors' secret (unset or wrong), and the
+webhook intake's attestation (unverified, naming no connection, or replayed). The messages that
+told those apart ("invalid internal signature", "stale internal signature", "{label} body too
+large", "internal reconcile disabled", "slack mint disabled", "invalid embed dispatch secret",
+"inbound attestation not accepted", "Missing Authorization header" and the rest) are gone from the
+wire. Each cause is logged as `cause` on the "auth error" line, under the request's root span and
+its request_id, and never rendered.
+
+"Authentication service unavailable" is now server-wide state, not a per-path answer: while the
+bearer key store is failing (the cache is unusable and the most recent refresh failed, until one
+succeeds), every pre-identity refusal on every path renders
+{"error":{"code":"UNAUTHORIZED","message":"Unauthorized: Authentication service unavailable"}}.
+Status and code are unchanged, so the retry contract stands.
+
+Unchanged: every refusal that needs a validly signed credential (account is deactivated,
+machine credential refused, the machine-registration gate, the email-ladder failure), every 403,
+the mint door's 400 for a malformed principal (it runs after the signature verifies), status codes
+and error codes. The cron host pin's answer is unchanged here.
+
+Who observes it: an unauthenticated caller, and an operator debugging a misconfigured cron, HMAC
+sender or intake broker, who reads the cause from the log by request id instead of from the body.
+temper-mcp's relay maps the uniform body (and, for skew, the per-gate messages an older API sends)
+to its one re-authenticate sentence and keeps its retryable arm for the unavailable body.
+temper-client and the CLI render every 401 alike already; the SDKs key on the status.
+
+Why behavioral: no shape or code moved; the messages behind the 401s changed. Review-owned.
+
+Witnesses: crates/temper-api/tests/anonymous_surface_test.rs (pre_identity_refusals_are_u401
+across every gate kind, credential shape and secrets set or unset;
+a_failing_key_store_makes_every_refusal_unavailable), every_pre_identity_cause_renders_the_same_bytes
+in temper-services' error module, the sticky failure flag's tests in temper-services' state module,
+and the_uniform_pre_identity_401_maps_to_reauthentication in temper-mcp. Release relevance:
+signal-only.
+'''

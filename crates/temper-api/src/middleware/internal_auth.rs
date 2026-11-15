@@ -27,7 +27,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 
 use temper_core::internal_sig::{DOORS, NONCE_HEADER, SIGNATURE_V2_HEADER, TIMESTAMP_HEADER};
-use temper_services::error::ApiError;
+use temper_services::error::{ApiError, UnauthCause};
 use temper_services::services::internal_sig_service::{self, SignedRequest};
 use temper_services::state::AppState;
 
@@ -105,21 +105,22 @@ async fn buffer_signed_request(request: Request<Body>, label: &str) -> Result<Bu
         (timestamp, nonce, signature, door)
     else {
         tracing::warn!(reason = "missing_headers", "{label}: rejected");
-        return Err(ApiError::Unauthorized(
-            "invalid internal signature".to_string(),
-        ));
+        return Err(ApiError::Unauthenticated(UnauthCause::HmacMissingHeaders));
     };
 
     if !DOORS.contains(&door.as_str()) {
         tracing::error!(door, reason = "unknown_door", "{label}: rejected");
-        return Err(ApiError::Unauthorized(
-            "invalid internal signature".to_string(),
-        ));
+        return Err(ApiError::Unauthenticated(UnauthCause::HmacMissingHeaders));
     }
 
     let body = axum::body::to_bytes(body, MAX_BODY_BYTES)
         .await
-        .map_err(|_| ApiError::Unauthorized(format!("{label} body too large")))?;
+        .map_err(|_| {
+            // Before the signature is checked, so the refusal is the bad-signature one: a body
+            // that cannot be read cannot be verified, and naming it would name the door.
+            tracing::warn!(reason = "body_unreadable", "{label}: rejected");
+            ApiError::Unauthenticated(UnauthCause::HmacBadSignature)
+        })?;
 
     Ok(Buffered {
         method: parts.method.as_str().to_owned(),
@@ -179,9 +180,7 @@ pub async fn require_internal_signature(
         Some(s) if !s.is_empty() => s.to_string(),
         _ => {
             tracing::warn!("internal reconcile: rejected (endpoint disabled — secret unset)");
-            return Err(ApiError::Unauthorized(
-                "internal reconcile disabled".to_string(),
-            ));
+            return Err(ApiError::Unauthenticated(UnauthCause::HmacDisabled));
         }
     };
     require_signature_with(&state, &secret, "internal reconcile", request, next).await
@@ -212,7 +211,7 @@ pub async fn require_slack_link_signature(
         Some(s) if !s.is_empty() => s,
         _ => {
             tracing::warn!("slack link: rejected (endpoint disabled — SLACK_LINK_SECRET unset)");
-            return Err(ApiError::Unauthorized("slack link disabled".to_string()));
+            return Err(ApiError::Unauthenticated(UnauthCause::HmacDisabled));
         }
     };
     require_signature_with(&state, &secret, "slack link", request, next).await
@@ -251,7 +250,7 @@ pub async fn require_slack_mint_signature(
         Some(s) if !s.is_empty() => s.to_string(),
         _ => {
             tracing::warn!("slack mint: rejected (endpoint disabled — SLACK_MINT_SECRET unset)");
-            return Err(ApiError::Unauthorized("slack mint disabled".to_string()));
+            return Err(ApiError::Unauthenticated(UnauthCause::HmacDisabled));
         }
     };
 

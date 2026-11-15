@@ -51,18 +51,20 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use temper_services::broker::InboundRequest;
-use temper_services::error::{ApiError, ApiResult};
+use temper_services::error::{ApiError, ApiResult, UnauthCause};
 use temper_services::services::intake_service::{self, AttestationSeen, ProviderEvent, Receipt};
 use temper_services::services::{connection_service, intake_service as intake};
 use temper_services::state::AppState;
 
 use crate::middleware::preconditions;
 
-/// The one refusal message for both "the attestation did not verify" and "no connection carries
-/// this connector". One constant rather than two equal strings: two strings are two things that
-/// can drift, and the moment they differ the pair becomes an existence oracle over which
-/// connectors this instance has provisioned.
-const REFUSAL: &str = "inbound attestation not accepted";
+/// The one refusal for every way an inbound webhook is turned away before it is accepted: the
+/// attestation did not verify, it names no live connection, or it was replayed. The uniform
+/// pre-identity refusal, so a probe learns neither whether a connector is provisioned, nor how far
+/// its attestation got, nor that this door exists.
+fn refusal() -> ApiError {
+    ApiError::Unauthenticated(UnauthCause::IntakeUnattested)
+}
 
 /// What the sender gets back on a successful receipt. The event id is returned because the
 /// caller is the authenticated connector — the party the receipt is *about* — and a delivery id
@@ -102,7 +104,7 @@ pub async fn receive(
             // and "not a Connect-forwarded attestation" each tell a prober something different
             // about how far it got.
             tracing::warn!(error = %e, "inbound webhook attestation refused");
-            ApiError::Unauthorized(REFUSAL.to_string())
+            refusal()
         })?;
 
     // 2. Resolve the SIGNED connector identity to the connection that receives it. The broker
@@ -120,7 +122,7 @@ pub async fn receive(
                 provider = %verified.provider,
                 "verified attestation names no live credentialed connection"
             );
-            ApiError::Unauthorized(REFUSAL.to_string())
+            refusal()
         }
         other => other,
     })?;
@@ -190,7 +192,7 @@ pub async fn receive(
     .await?;
     let event_id = match receipt {
         Receipt::Recorded(event_id) => event_id,
-        Receipt::RefusedAsReplay => return Err(ApiError::Unauthorized(REFUSAL.to_string())),
+        Receipt::RefusedAsReplay => return Err(refusal()),
     };
 
     // 202, not 200: temper has accepted and durably recorded the receipt, and what any subscriber

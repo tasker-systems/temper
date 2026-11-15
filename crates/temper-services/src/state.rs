@@ -165,6 +165,17 @@ pub struct JwksKeyStore {
     /// The delay is bounded by the interval and cannot be extended — the stamp only advances when
     /// a fetch actually runs, and that fetch is the one that picks the new key up.
     unknown_kid_refresh_interval: Duration,
+    /// Whether the store is failing: the cache was absent or past its TTL, and the most recent
+    /// refresh for that reason failed. Set by [`Self::refresh_stale`], cleared only by a successful
+    /// [`Self::refresh`]. Read lock-free by [`Self::is_failing`].
+    ///
+    /// **Sticky, never windowed.** Any bearer at all — `Bearer garbage` included — reaches the
+    /// store on a stale cache, so an unauthenticated caller can trigger a refresh. If this flag
+    /// lapsed after `failed_refresh_backoff`, a probe could wait it out and then tell the path
+    /// classes apart: a garbage bearer on a bearer route triggers a failing refresh and gets
+    /// "unavailable", while the same request on a signature door gets the uniform refusal. Held
+    /// until a refresh succeeds, the answer during an outage does not depend on the path.
+    failing: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for JwksKeyStore {
@@ -245,6 +256,7 @@ impl JwksKeyStore {
             failed_refresh_backoff: Duration::from_secs(5),
             unknown_kid_gate: tokio::sync::Mutex::new(None),
             unknown_kid_refresh_interval: Duration::from_secs(60),
+            failing: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -279,6 +291,7 @@ impl JwksKeyStore {
             failed_refresh_backoff: Duration::from_secs(5),
             unknown_kid_gate: tokio::sync::Mutex::new(None),
             unknown_kid_refresh_interval: Duration::from_secs(60),
+            failing: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -388,6 +401,10 @@ impl JwksKeyStore {
         }
 
         let result = self.refresh().await;
+        if result.is_err() {
+            self.failing
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
         *gate = Some((Instant::now(), result.clone()));
         result
     }
@@ -521,7 +538,24 @@ impl JwksKeyStore {
         };
 
         *self.cache.write().await = Some(cached);
+        self.failing
+            .store(false, std::sync::atomic::Ordering::Release);
         Ok(())
+    }
+
+    /// Whether the key store is failing: the cache could not be used and the most recent refresh
+    /// for that reason failed, however long ago. Only a successful refresh clears it. Lock-free, so a
+    /// refusal path can ask it without waiting on a fetch in flight.
+    ///
+    /// An unknown `kid` against a fresh cache never sets it: the cache still verifies, and the
+    /// caller chose the `kid`.
+    ///
+    /// **Residual.** At the moment the TTL lapses, before any refresh has been tried, the flag is
+    /// still clear: the first bearer request after that point learns of an outage (from its own
+    /// failed refresh) before a request on a signature door does. The caller cannot choose that
+    /// moment.
+    pub fn is_failing(&self) -> bool {
+        self.failing.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -1086,6 +1120,43 @@ mod tests {
             matches!(by_endpoint, KeyLookupError::Unavailable(_)),
             "an unreachable JWKS is an outage, not a bad token: {by_endpoint:?}"
         );
+    }
+
+    // FAILS IF: a failed stale refresh does not mark the store failing, the mark lapses on its own
+    // (it would reopen the outage-time path oracle), or a later success does not clear it.
+    #[tokio::test]
+    async fn a_failed_refresh_marks_the_store_failing_until_one_succeeds() {
+        let dead = JwksKeyStore::new("http://127.0.0.1:1/.well-known/jwks.json".to_string());
+        assert!(!dead.is_failing(), "a fresh store has tried nothing");
+        let token = sign_with(Some("key-1"), TEST_PRIVATE_PEM);
+        let _ = dead.get_decoding_key_for_token(&token).await;
+        assert!(dead.is_failing(), "a failed stale refresh marks the store");
+
+        let server = jwks_server(vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)]).await;
+        let mut store = JwksKeyStore::new("http://127.0.0.1:1/.well-known/jwks.json".to_string());
+        store.failed_refresh_backoff = Duration::ZERO;
+        let _ = store.get_decoding_key_for_token(&token).await;
+        assert!(store.is_failing());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(store.is_failing(), "the mark outlives the backoff window");
+        store.url = format!("{}/.well-known/jwks.json", server.uri());
+        store
+            .get_decoding_key_for_token(&token)
+            .await
+            .expect("the endpoint is back");
+        assert!(!store.is_failing(), "a successful refresh clears the mark");
+    }
+
+    // FAILS IF: an unknown `kid` against a fresh cache marks the store failing. The caller chose the
+    // `kid`, and the cache still verifies.
+    #[tokio::test]
+    async fn an_unknown_kid_never_marks_the_store_failing() {
+        let server = jwks_server(vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)]).await;
+        let store = JwksKeyStore::new(format!("{}/.well-known/jwks.json", server.uri()));
+        let _ = store
+            .get_decoding_key_for_token(&sign_with(Some("nope"), TEST_PRIVATE_PEM))
+            .await;
+        assert!(!store.is_failing());
     }
 
     #[test]

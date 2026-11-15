@@ -62,12 +62,10 @@ impl Refusal {
         }
     }
 
-    /// The wire answer: the same two messages the gates have always given.
+    /// The wire answer: one refusal for every reason. The reason is logged at the gate, never
+    /// rendered: "stale" against "invalid" told a prober which check it reached.
     fn into_api_error(self) -> ApiError {
-        match self {
-            Refusal::Stale => ApiError::Unauthorized("stale internal signature".to_string()),
-            _ => ApiError::Unauthorized("invalid internal signature".to_string()),
-        }
+        ApiError::Unauthenticated(crate::error::UnauthCause::HmacBadSignature)
     }
 }
 
@@ -156,8 +154,8 @@ fn refuse(req: &SignedRequest<'_>, label: &str, refusal: Refusal) -> ApiError {
     refusal.into_api_error()
 }
 
-/// [`check`], logged at `label`'s gate. A refusal is [`ApiError::Unauthorized`] with the message
-/// the gates have always used.
+/// [`check`], logged at `label`'s gate. A refusal is the uniform pre-identity refusal
+/// ([`ApiError::Unauthenticated`]); the reason is in the log line.
 pub fn verify(secret: &[u8], req: &SignedRequest<'_>, now: i64, label: &str) -> ApiResult<()> {
     check(secret, req, now).map_err(|refusal| refuse(req, label, refusal))
 }
