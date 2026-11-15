@@ -1156,12 +1156,17 @@ fn signature_lines() -> String {
         .collect()
 }
 
-/// Two of the three signature headers: not a signed request, so never read early.
-fn two_of_three_lines() -> String {
-    bad_signature()
-        .into_iter()
-        .skip(1)
-        .map(|(n, v)| format!("{n}: {v}\r\n"))
+/// Each way to send two of the three signature headers: not a signed request, so never read early.
+fn two_of_three_lines() -> Vec<String> {
+    (0..3)
+        .map(|missing| {
+            bad_signature()
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| *i != missing)
+                .map(|(_, (n, v))| format!("{n}: {v}\r\n"))
+                .collect()
+        })
         .collect()
 }
 
@@ -1214,10 +1219,13 @@ async fn signed_requests_wait_alike(pool: PgPool) {
             None,
             "{path}: a signed request with a declared body must wait for it"
         );
-        for (what, lines) in [
-            ("unsigned", String::new()),
-            ("two of three", two_of_three_lines()),
-        ] {
+        let shapes = std::iter::once(("unsigned".to_string(), String::new())).chain(
+            two_of_three_lines()
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| (format!("two of three, missing #{i}"), l)),
+        );
+        for (what, lines) in shapes {
             let head =
                 format!("POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{lines}\r\n");
             let line = first_status_line(&app, &head, AT_ONCE).await;
@@ -1239,14 +1247,88 @@ async fn signed_requests_wait_alike(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_signed_body_that_never_arrives_is_refused_at_the_deadline(pool: PgPool) {
     let app = allowlisted_app(&pool).await;
-    for path in ["/api/profile", "/internal/saml/reconcile", "/api/health"] {
-        let head = format!(
-            "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{}\r\n",
-            signature_lines()
-        );
-        let line = first_status_line(&app, &head, std::time::Duration::from_secs(15)).await;
+    let probe = |path: &'static str| {
+        let app = &app;
+        async move {
+            let head = format!(
+                "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{}\r\n",
+                signature_lines()
+            );
+            let line = first_status_line(app, &head, std::time::Duration::from_secs(15)).await;
+            (path, line)
+        }
+    };
+    let answers = tokio::join!(
+        probe("/api/profile"),
+        probe("/internal/saml/reconcile"),
+        probe("/api/health")
+    );
+    for (path, line) in [answers.0, answers.1, answers.2] {
         assert_eq!(line.as_deref(), Some("HTTP/1.1 401 Unauthorized"), "{path}");
     }
+}
+
+// FAILS IF: a slow signed body, sent while the key endpoint hangs, is answered later on a door
+// that looks a bearer up than on one that does not. Each refusal waits on the store's refresh; if
+// the outer service counted that wait from arrival while the bearer lookup counted it from the
+// lookup, which comes after the body, the bearer doors would answer a body's delay later.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_slow_signed_body_holds_every_door_alike_while_keys_hang(pool: PgPool) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mode = std::sync::Arc::new(std::sync::Mutex::new(KeyEndpoint::Hang));
+    let app = app_with_key_endpoint(&pool, key_endpoint(mode).await).await;
+    let delay = std::time::Duration::from_secs(3);
+    let timed = |path: &'static str, bearer: bool| {
+        let app = &app;
+        async move {
+            let auth = if bearer {
+                "authorization: Bearer garbage\r\n"
+            } else {
+                ""
+            };
+            let head = format!(
+                "POST {path} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\
+                 content-length: 2\r\n{auth}{}\r\n",
+                signature_lines()
+            );
+            let started = std::time::Instant::now();
+            let mut stream = tokio::net::TcpStream::connect(app.addr)
+                .await
+                .expect("connect");
+            stream.write_all(head.as_bytes()).await.expect("head");
+            tokio::time::sleep(delay).await;
+            stream.write_all(b"{}").await.expect("body");
+            let mut buf = [0u8; 64];
+            let n = tokio::time::timeout(std::time::Duration::from_secs(20), stream.read(&mut buf))
+                .await
+                .expect("answered")
+                .expect("read");
+            let line = String::from_utf8_lossy(&buf[..n])
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            (path, started.elapsed(), line)
+        }
+    };
+    let (bearer, bare) = tokio::join!(
+        timed("/api/profile", true),
+        timed("/internal/saml/reconcile", false)
+    );
+    for (path, _, line) in [&bearer, &bare] {
+        assert_eq!(line, "HTTP/1.1 401 Unauthorized", "{path}");
+    }
+    let apart = if bearer.1 > bare.1 {
+        bearer.1 - bare.1
+    } else {
+        bare.1 - bearer.1
+    };
+    assert!(
+        apart < std::time::Duration::from_millis(1500),
+        "bearer door {:?} against a door with no bearer {:?}",
+        bearer.1,
+        bare.1
+    );
 }
 
 // FAILS IF: `Expect: 100-continue` on a signed request draws `100 Continue` on some paths and the

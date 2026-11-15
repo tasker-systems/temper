@@ -143,8 +143,8 @@ the id can be helped without the answer saying anything.
 
 "Unavailable" is server-wide state, not a per-path answer. Each instance keeps one bearer key
 store. When its keys are stale, every refusal it gives joins one shared refresh of that store,
-whatever its door, and waits for it from the request's arrival until a little past the fetch's
-own five-second timeout; a bearer lookup joins the same refresh, with its wait counted from the
+whatever its door, and waits for it from the request's arrival (for a signed request, from when
+its body is in) until a little past the fetch's own five-second timeout; a bearer lookup joins the same refresh, with its wait counted from the
 lookup. So an instance whose routes never verify a bearer still learns of an outage, a failing
 store recovers without bearer traffic, and a refresh normally ends inside a request that is
 waiting on it, on a platform that suspends idle instances (one started late in a slow request
@@ -162,8 +162,8 @@ The residues, stated so nobody has to rediscover them:
 - **A slow endpoint is slow for everyone.** While a refresh is in flight, every refusal on that
   instance waits for it, up to the fetch's timeout. That is the same on every door, but it is
   visible: a refusal that takes seconds says a refresh is running, never which path you hit. A
-  refusal that waited may also close its connection when its request body was large and unread;
-  that framing is the same on every door.
+  refusal may also close its connection when its request body was large and unread, whether or
+  not it waited; that framing is the same on every door.
 - **The cost of a hanging endpoint.** While the identity provider's key endpoint accepts
   connections and never answers, every refusal holds its connection, and on a serverless platform
   its billed function time, for about five seconds, then answers at once through the five-second

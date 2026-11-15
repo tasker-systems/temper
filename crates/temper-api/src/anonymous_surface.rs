@@ -123,7 +123,6 @@ impl Service<Request> for AnonymousSurface {
 
 impl AnonymousSurface {
     async fn handle(self, mut request: Request) -> Response {
-        let entered = tokio::time::Instant::now();
         // Read before routing: a bearer lookup inside may run the refresh that clears it, and a
         // refusal's answer must not depend on whether its door looked one up.
         let was_failing = self.jwks.is_failing();
@@ -144,7 +143,13 @@ impl AnonymousSurface {
         }
 
         // Before routing decides which gate runs, so the read cannot depend on the path.
-        let request = match equalise_signed_body(request).await {
+        let request = equalise_signed_body(request).await;
+        // The refusal's refresh wait is counted from here, once any signed body is in: a bearer
+        // lookup counts its own wait from when it starts, which for a signed request is after the
+        // body, so a clock started before the read would let a slow signed body hold the doors
+        // that look a bearer up longer than the doors that do not.
+        let entered = tokio::time::Instant::now();
+        let request = match request {
             Ok(request) => request,
             Err(headers) => {
                 // Refused before routing, so no endpoint layer adds what a routed refusal carries:
@@ -205,8 +210,8 @@ impl AnonymousSurface {
             .await
     }
 
-    /// Every answer's tail, routed or refused before routing: a pre-identity refusal joins the key store's refresh, is logged, and is
-    /// swapped while the store is failing; then [`finish`].
+    /// Every answer's tail, routed or refused before routing: a pre-identity refusal joins the key
+    /// store's refresh, is logged, and is swapped while the store is failing; then [`finish`].
     async fn finish_answer(
         &self,
         mut response: Response,
