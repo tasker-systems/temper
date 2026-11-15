@@ -28,7 +28,8 @@ it from the request's arrival until a little past the JWKS fetch's five-second t
 lookup joins the same refresh, with its wait counted from the lookup. So an instance whose routes verify no bearer, such as
 a separately deployed internal function, learns of an outage too, a failing store recovers without
 bearer traffic, and a refresh normally ends inside a request waiting on it. While a key endpoint
-hangs, refusals are held for about five seconds at a time, a cost per unauthenticated request stated with
+hangs, refusals are held for about five seconds at a time (at most 32 at once per instance; the
+rest answer at once), a cost per unauthenticated request stated with
 the other residues. A request that
 arrived while the store was failing, or whose wait ended with no usable keys, is answered with the
 unavailable body (temper-mcp answers 503) whatever its door, so a valid bearer refused during an
