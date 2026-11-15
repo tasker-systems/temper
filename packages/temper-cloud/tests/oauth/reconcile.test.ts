@@ -126,6 +126,9 @@ describe("reconcileMemberships", () => {
     ["the wrong door", "https://api.internal/internal/principal/resolve"],
     ["no path at all", "https://api.internal"],
     ["a value that is not a URL", "api.internal/internal/saml/reconcile"],
+    ["a scheme fetch cannot send", "htps://api.internal/internal/saml/reconcile"],
+    ["a file URL", "file:///internal/saml/reconcile"],
+    ["userinfo in the URL", "https://u:p@api.internal/internal/saml/reconcile"],
   ])("%s is config_missing and nothing is sent", async (_what, url) => {
     vi.stubEnv("INTERNAL_RECONCILE_URL", url);
     vi.stubEnv("INTERNAL_RECONCILE_SECRET", "s3cr3t");

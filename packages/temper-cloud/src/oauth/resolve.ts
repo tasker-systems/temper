@@ -1,6 +1,7 @@
 import { logger } from "../logger.js";
 import {
   RESOLVE_DOOR,
+  refuseMachineShapedSubject,
   requireDoorUrl,
   requireReconcileEnv,
   signedHeaders,
@@ -55,19 +56,22 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export async function resolvePrincipal(
   payload: ResolvePrincipalRequest,
 ): Promise<ResolvePrincipalResponse> {
+  refuseMachineShapedSubject(payload.external_user_id);
   const url = requireDoorUrl("INTERNAL_RESOLVE_URL", RESOLVE_DOOR);
   const secret = requireReconcileEnv("INTERNAL_RECONCILE_SECRET");
   // Sign the exact body string we send — raw-body discipline, no re-serialization.
   const body = JSON.stringify(payload);
   const timestamp = Math.floor(Date.now() / 1000);
+  // Built before the `try`, so a failure to construct the request is never recorded as transport.
+  const headers = {
+    "content-type": "application/json",
+    ...signedHeaders(secret, RESOLVE_DOOR, timestamp, body),
+  };
   let res: Response;
   try {
     res = await fetch(url, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...signedHeaders(secret, RESOLVE_DOOR, timestamp, body),
-      },
+      headers,
       body,
       // Fail-open is only a mercy if it fails FAST. Both callers catch and carry on, but an
       // unbounded fetch does not reach the catch — it holds the request until the platform's own

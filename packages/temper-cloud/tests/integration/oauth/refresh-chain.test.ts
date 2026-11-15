@@ -218,6 +218,62 @@ describe("refresh chain bound + admission gate", () => {
     }
   });
 
+  async function resolveHealth() {
+    const rows = await sql`
+      SELECT consecutive_failures, last_success_at, last_failure_cause, last_failure_detail
+        FROM kb_internal_call_health WHERE channel = 'principal_resolve'`;
+    return rows[0] as
+      | {
+          consecutive_failures: number;
+          last_success_at: Date | null;
+          last_failure_cause: string | null;
+          last_failure_detail: string | null;
+        }
+      | undefined;
+  }
+
+  // FAILS IF: the token endpoint's re-resolve of an ownerless chain stops recording on
+  // `principal_resolve`, in either direction. It is the branch every backfilled chain takes, so it
+  // is where a broken resolve is most often seen, and the ACS alone would not report it.
+  it("records the re-resolve on the principal_resolve channel, failure and success", async () => {
+    process.env.INTERNAL_RESOLVE_URL = "https://api.internal/internal/principal/resolve";
+    process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+    const owner = await principal("approved");
+    const issued = await login(db, { relay: "rs-health", code: "c-health", profileId: null });
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("no", { status: 401 })),
+      );
+      const refused = await refresh(db, issued.refresh_token);
+      expect(refused.status, "a refused resolve must not cost the rotation").toBe(200);
+      const next = ((await refused.json()) as TokenSuccessBody).refresh_token;
+      const afterFailure = await resolveHealth();
+      expect(afterFailure?.consecutive_failures).toBe(1);
+      expect(afterFailure?.last_failure_cause).toBe("unauthorized");
+      expect(afterFailure?.last_failure_detail).toBe("HTTP 401");
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({ profile_id: owner }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+        ),
+      );
+      expect((await refresh(db, next)).status).toBe(200);
+      const afterSuccess = await resolveHealth();
+      expect(afterSuccess?.consecutive_failures).toBe(0);
+      expect(afterSuccess?.last_success_at).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RESOLVE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    }
+  });
+
   it("still refreshes a principal who has never been approved — the state every login is born into", async () => {
     // `denied` is the birth state of every human who has ever logged in, and the only state from
     // which `Act::Request` is legal. Gating rotation on `has_system_access` (standing = approved)

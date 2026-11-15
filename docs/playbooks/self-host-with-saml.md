@@ -432,7 +432,7 @@ provisioning occurs (authentication still works).
 | --- | --- | --- |
 | `INTERNAL_RECONCILE_SECRET` | AS + API (shared) | Shared secret gating the internal reconcile call. Same value on both. Unset ⇒ reconcile disabled, no group provisioning. |
 | `INTERNAL_RECONCILE_URL` | AS | Full URL of the `temper-api` `/internal/saml/reconcile` endpoint the AS calls before minting (e.g. `https://<your-api-origin>/internal/saml/reconcile`). |
-| `INTERNAL_RESOLVE_URL` | AS | Full URL of the `temper-api` `/internal/principal/resolve` endpoint (e.g. `https://<your-api-origin>/internal/principal/resolve`). Gated by the same `INTERNAL_RECONCILE_SECRET`. The AS calls it to learn which profile a login belongs to, so an administrator's revoke can end that principal's refresh chains. Unset ⇒ chains are minted without an owner and are bounded by `AS_REFRESH_CHAIN_MAX_SECONDS` alone. |
+| `INTERNAL_RESOLVE_URL` | AS | Full URL of the `temper-api` `/internal/principal/resolve` endpoint (e.g. `https://<your-api-origin>/internal/principal/resolve`). Gated by the same `INTERNAL_RECONCILE_SECRET`. The AS calls it to learn which profile a login belongs to, so an administrator's revoke can end that principal's refresh chains. Unset ⇒ chains are minted without an owner and are bounded by `AS_REFRESH_CHAIN_MAX_SECONDS` alone, and the health check reports the `principal_resolve` channel as `sustained` (`config_missing`) until it is set. Its path must be exactly `/internal/principal/resolve`: a URL with another path, including a prefix a proxy strips, is refused before the call and reported the same way. `INTERNAL_RECONCILE_URL` has the same rule for `/internal/saml/reconcile`. |
 
 ### Slack account link (optional)
 

@@ -5,6 +5,7 @@ import {
   classifyInternalCallFailure,
   RESOLVE_CHANNEL,
   recordChannelFailure,
+  SubjectRefused,
 } from "../../src/oauth/reconcile-health.js";
 import { resolvePrincipal } from "../../src/oauth/resolve.js";
 
@@ -69,6 +70,8 @@ describe("resolvePrincipal", () => {
     ["a stray segment", "https://api.internal/v1/internal/principal/resolve"],
     ["the reconcile door", "https://api.internal/internal/saml/reconcile"],
     ["a value that is not a URL", "not a url"],
+    ["a scheme fetch cannot send", "htps://api.internal/internal/principal/resolve"],
+    ["userinfo in the URL", "https://u@api.internal/internal/principal/resolve"],
   ])("%s is config_missing and nothing is sent", async (_what, url) => {
     configure(url);
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
@@ -126,6 +129,28 @@ describe("resolvePrincipal", () => {
     configure();
     vi.stubGlobal("fetch", vi.fn(fetchImpl));
     expect(classifyInternalCallFailure(await failureOf())).toEqual(expected);
+  });
+
+  // FAILS IF: a machine-shaped subject is sent, or its refusal is recorded on the channel. The API
+  // answers it 401 behind a valid signature, which would page about the secret on one user's login.
+  it("a machine-shaped subject is refused locally and records nothing", async () => {
+    configure();
+    const fetchMock = vi.fn(async () => new Response("no", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const err = await resolvePrincipal({ ...payload, external_user_id: "abc@clients" }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(SubjectRefused);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const writes: unknown[][] = [];
+    const db = ((_strings: TemplateStringsArray, ...values: unknown[]) => {
+      writes.push(values);
+      return Promise.resolve([]);
+    }) as unknown as NeonClient;
+    await recordChannelFailure(db, RESOLVE_CHANNEL, err);
+    expect(writes).toEqual([]);
   });
 
   // FAILS IF: a refused resolve does not reach the health table as `unauthorized` on

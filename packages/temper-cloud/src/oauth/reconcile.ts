@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { logger } from "../logger.js";
 import { requireEnv } from "./env.js";
-import { InternalCallError } from "./reconcile-health.js";
+import { InternalCallError, SubjectRefused } from "./reconcile-health.js";
 
 /** Ceiling on an internal server-to-server call, so a slow dependency fails open rather than hanging. */
 const INTERNAL_CALL_TIMEOUT_MS = 5000;
@@ -108,18 +108,30 @@ export function requireReconcileEnv(name: string): string {
  * stray path segment, a trailing slash or the wrong door answers 401 exactly as a wrong secret
  * does, and the reader would page about the secret. The path is the half of the URL this side can
  * check against the door it signs for, so it is checked here, where the cause is known exactly. A
- * value that does not parse as a URL is the same kind of fact and gets the same cause. The detail
- * is a fixed string, never the URL itself.
+ * value that does not parse as a URL, names a scheme other than http(s), or carries userinfo is
+ * the same kind of fact and gets the same cause: each would otherwise fail inside `fetch` and be
+ * recorded as `transport`, which is weather and must recur before it pages. The detail is a fixed
+ * string, never the URL itself.
+ *
+ * The match is exact, so a deployment that reaches the API through a path prefix a proxy strips
+ * is refused here. That is the trade: the likelier mistake is a stray prefix (an origin copied with
+ * its `/api`), which the API would answer 401, and an exact match is what names it.
  */
 export function requireDoorUrl(name: string, door: string): string {
   const url = requireReconcileEnv(name);
-  let pathname: string | null = null;
+  let parsed: URL | null = null;
   try {
-    pathname = new URL(url).pathname;
+    parsed = new URL(url);
   } catch {
-    pathname = null;
+    parsed = null;
   }
-  if (pathname !== door) {
+  if (
+    parsed === null ||
+    (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.pathname !== door
+  ) {
     throw new InternalCallError(
       "config_missing",
       `${name} path`,
@@ -127,6 +139,21 @@ export function requireDoorUrl(name: string, door: string): string {
     );
   }
   return url;
+}
+
+/**
+ * A subject temper-api refuses as machine-shaped (`reject_machine_shaped`, the `@clients` suffix),
+ * refused here instead, before anything is sent.
+ *
+ * The API answers that refusal 401 behind a valid signature, which on the wire is the same answer
+ * as a wrong secret. Recorded, it would page at once with deployment advice, and any IdP user whose
+ * NameID wears the suffix could raise and hold that page by logging in. It is a fact about one
+ * principal, not about the channel, so it throws `SubjectRefused`, which the recorder skips.
+ */
+export function refuseMachineShapedSubject(externalUserId: string): void {
+  if (externalUserId.endsWith("@clients")) {
+    throw new SubjectRefused("subject is machine-shaped; temper-api refuses it as a human");
+  }
 }
 
 /**
@@ -149,19 +176,22 @@ export function transportDetail(err: unknown): string {
  * `require_internal_signature` middleware.
  */
 export async function reconcileMemberships(payload: ReconcileRequest): Promise<void> {
+  refuseMachineShapedSubject(payload.external_user_id);
   const url = requireDoorUrl("INTERNAL_RECONCILE_URL", RECONCILE_DOOR);
   const secret = requireReconcileEnv("INTERNAL_RECONCILE_SECRET");
   // Sign the exact body string we send — raw-body discipline, no re-serialization.
   const body = JSON.stringify(payload);
   const timestamp = Math.floor(Date.now() / 1000);
+  // Built before the `try`, so a failure to construct the request is never recorded as transport.
+  const headers = {
+    "content-type": "application/json",
+    ...signedHeaders(secret, RECONCILE_DOOR, timestamp, body),
+  };
   let res: Response;
   try {
     res = await fetch(url, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...signedHeaders(secret, RECONCILE_DOOR, timestamp, body),
-      },
+      headers,
       body,
       // Fail-open is only a mercy if it fails FAST. Both callers catch and carry on, but an
       // unbounded fetch does not reach the catch — it holds the request until the platform's own

@@ -77,6 +77,20 @@ export class InternalCallError extends Error {
 }
 
 /**
+ * A call this side declined to make because the API would refuse the SUBJECT, not the caller.
+ *
+ * Not a channel failure, so [`recordChannelFailure`] records nothing for it: the channel was not
+ * exercised, and a per-principal refusal recorded at grain (channel) would page about the
+ * deployment on one principal's say-so. The caller still logs it and still fails open.
+ */
+export class SubjectRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SubjectRefused";
+  }
+}
+
+/**
  * Classify an error caught around an internal call.
  *
  * An [`InternalCallError`] carries its own answer. Anything else is UNEXPECTED, and the fallback
@@ -142,6 +156,9 @@ export async function recordChannelFailure(
   channel: string,
   err: unknown,
 ): Promise<void> {
+  if (err instanceof SubjectRefused) {
+    return;
+  }
   const { cause, detail } = classifyInternalCallFailure(err);
   try {
     await db`INSERT INTO kb_internal_call_health

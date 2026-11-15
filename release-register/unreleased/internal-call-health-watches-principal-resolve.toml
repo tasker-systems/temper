@@ -14,9 +14,13 @@ without INTERNAL_RESOLVE_URL now reports principal_resolve as sustained with cau
 instead of nothing.
 
 Both calls check their own URL before signing: a path that is not the door the call signs for
-(a stray segment, a trailing slash, the other door) or a value that is not a URL is config_missing
-with detail "<VARIABLE> path", and nothing is sent. Before, it was sent, answered 401, and recorded
-as unauthorized. The meaning of unauthorized is reworded "the signature was refused or the door is
+(a stray segment, a trailing slash, the other door, or a prefix a proxy strips), a value that is
+not a URL, a scheme other than http(s), or a URL with userinfo is config_missing with detail
+"<VARIABLE> path", and nothing is sent. Before, it was sent and recorded as unauthorized or
+transport. A deployment that reached the API through a stripped path prefix stops reaching it and
+reports config_missing on both channels until the URLs name the doors directly. A subject temper-api
+refuses as machine-shaped (an @clients NameID) is no longer sent to either door, and is not recorded
+as a channel failure: the API's 401 for it would otherwise page as a wrong secret. The meaning of unauthorized is reworded "the signature was refused or the door is
 not served": temper-api answers every unauthenticated caller the same way, so the 401 cannot say
 which.
 
