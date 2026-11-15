@@ -67,7 +67,7 @@ describe("resolvePrincipal", () => {
 
   // FAILS IF: a URL whose path is not the resolve door is signed and sent.
   it.each([
-    ["a stray segment", "https://api.internal/v1/internal/principal/resolve"],
+    ["a segment after the door", "https://api.internal/internal/principal/resolve/x"],
     ["the reconcile door", "https://api.internal/internal/saml/reconcile"],
     ["a value that is not a URL", "not a url"],
     ["a scheme fetch cannot send", "htps://api.internal/internal/principal/resolve"],

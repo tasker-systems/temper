@@ -118,10 +118,33 @@ describe("reconcileMemberships", () => {
     expect(classifyInternalCallFailure(err)).toEqual({ cause: "unauthorized", detail: "HTTP 401" });
   });
 
+  // FAILS IF: a deployment behind a path prefix a proxy strips stops reaching the API. The door is
+  // never read from the URL, so a prefix was always supported (`temper_core::internal_sig`).
+  it("a path prefix in front of the door is sent, signed for the door", async () => {
+    vi.stubEnv("INTERNAL_RECONCILE_URL", "https://gw.internal/temper/internal/saml/reconcile");
+    vi.stubEnv("INTERNAL_RECONCILE_SECRET", "s3cr3t");
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await reconcileMemberships(payload);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const h = init.headers as Record<string, string>;
+    expect(h[SIGNATURE_V2_HEADER]).toBe(
+      signRequestV2(
+        "s3cr3t",
+        "POST",
+        RECONCILE_DOOR,
+        Number(h[TIMESTAMP_HEADER]),
+        h[NONCE_HEADER],
+        init.body as string,
+      ),
+    );
+  });
+
   // FAILS IF: a URL whose path is not the door is signed and sent. The API would answer it 401,
   // and the reader would page about the secret; caught here, the cause names the URL instead.
   it.each([
-    ["a stray segment", "https://api.internal/v1/internal/saml/reconcile"],
+    ["a segment after the door", "https://api.internal/internal/saml/reconcile/x"],
     ["a trailing slash", "https://api.internal/internal/saml/reconcile/"],
     ["the wrong door", "https://api.internal/internal/principal/resolve"],
     ["no path at all", "https://api.internal"],

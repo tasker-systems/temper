@@ -22,9 +22,10 @@ export const RESOLVE_DOOR = "/internal/principal/resolve";
  * Mirrors `temper_core::internal_sig::sign_v2`; pinned by the v2 known-answer vector in
  * tests/oauth/wire-contract.test.ts. We sign the RAW body string exactly as it is sent (never a
  * re-serialized form) so there is no cross-language canonicalization to drift on. `door` is the
- * route temper-api registers, never read back from the URL we post to. The URL's path must equal
- * the door all the same (`requireDoorUrl`), because a path the API does not serve is refused
- * exactly as a bad signature is, and only this side can tell the two apart. Binding the door and a
+ * route temper-api registers, never read back from the URL we post to, so a prefix or rewrite in
+ * front of the API does not break it. The URL's path must still end with the door
+ * (`requireDoorUrl`), because a path the API does not serve is refused exactly as a bad signature
+ * is, and only this side can catch a URL that names the wrong door or adds a segment after it. Binding the door and a
  * nonce is what lets the verifier accept a signature at one door, once.
  */
 export function signRequestV2(
@@ -113,9 +114,11 @@ export function requireReconcileEnv(name: string): string {
  * recorded as `transport`, which is weather and must recur before it pages. The detail is a fixed
  * string, never the URL itself.
  *
- * The match is exact, so a deployment that reaches the API through a path prefix a proxy strips
- * is refused here. That is the trade: the likelier mistake is a stray prefix (an origin copied with
- * its `/api`), which the API would answer 401, and an exact match is what names it.
+ * The path must END with the door, not equal it: a deployment may reach the API through a prefix
+ * a proxy strips (`temper_core::internal_sig`), and that must keep working. Every door begins with
+ * `/`, so the match is at a segment boundary. What it refuses is anything after the door (a stray
+ * segment, a trailing slash), the other door, and no door at all. A stray segment BEFORE the door
+ * passes, because this side cannot tell it from a prefix; the API's 401 stays the signal for that.
  */
 export function requireDoorUrl(name: string, door: string): string {
   const url = requireReconcileEnv(name);
@@ -130,7 +133,7 @@ export function requireDoorUrl(name: string, door: string): string {
     (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
     parsed.username !== "" ||
     parsed.password !== "" ||
-    parsed.pathname !== door
+    !parsed.pathname.endsWith(door)
   ) {
     throw new InternalCallError(
       "config_missing",

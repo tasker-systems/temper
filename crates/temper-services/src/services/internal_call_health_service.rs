@@ -27,8 +27,8 @@
 //! The distinction the task turns on is *"this is weather"* versus *"de-provisioning has stopped"*,
 //! and a threshold alone gets it wrong in both directions. Two of the four causes are **deployment
 //! facts**: an unset or mis-pathed `INTERNAL_RECONCILE_URL` does not heal, and neither does a
-//! refused signature or a door this deployment does not serve (this API answers all of those the
-//! same 401, so `unauthorized` cannot say which). One occurrence settles either, and waiting for a second would leave a channel
+//! refused signature or a door this deployment does not serve. This API answers both of the latter
+//! with the same 401, so `unauthorized` cannot say which. One occurrence settles either, and waiting for a second would leave a channel
 //! that will never recover sitting in a state named after recovery. The other two — a transport
 //! error, a non-2xx that is not an auth refusal — genuinely can be a blip, and must both **recur**
 //! and **outlive a window** before they are called sustained.
@@ -606,7 +606,9 @@ mod tests {
             });
             assert!(log.contains("ERROR"), "{channel}: no error line in {log:?}");
             assert!(
-                log.contains("cause=\"unauthorized\""),
+                // A leading space: the entered span prints `failure_cause="unauthorized"` too, and
+                // without it that substring would satisfy this on its own.
+                log.contains(" cause=\"unauthorized\""),
                 "{channel}: the line does not carry the cause: {log:?}"
             );
             assert!(
@@ -631,7 +633,7 @@ mod tests {
         let log = captured_log(|| {
             emit_channel_span(&sustained(RESOLVE_CHANNEL, "transport", "TypeError"));
         });
-        assert!(log.contains("cause=\"transport\""), "{log:?}");
+        assert!(log.contains(" cause=\"transport\""), "{log:?}");
         assert!(!log.contains("INTERNAL_RECONCILE_SECRET"), "{log:?}");
     }
 
