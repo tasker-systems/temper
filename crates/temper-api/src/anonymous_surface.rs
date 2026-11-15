@@ -21,7 +21,15 @@
 //!    the routed `OPTIONS` included. The layer would *answer* a routed `OPTIONS` rather than add
 //!    headers to it, so for that one method the headers are taken from the layer's answer to a
 //!    `GET` carrying the same request headers ([`CorsHeadersOnly`]).
-//! 4. Sets `x-request-id`, and removes `Allow` from every response that is not a 405.
+//! 4. While the bearer key store is failing, answers every pre-identity refusal (a response marked
+//!    [`PreIdentityRefusal`]) with the "authentication service unavailable" bytes instead, whatever
+//!    its path or cause. Unavailability is server-wide state: answered only where a bearer is
+//!    verified, it would tell a prober which paths verify one. Every such refusal first joins the
+//!    store's refresh when its keys are stale ([`JwksKeyStore::refresh_within`]), for at most
+//!    [`JwksKeyStore::REFRESH_WAIT`] from the request's arrival whatever its door, so an instance
+//!    whose routes never verify a bearer still learns of an outage, a failing store recovers
+//!    without bearer traffic, and the refresh runs inside a live request.
+//! 5. Sets `x-request-id`, and removes `Allow` from every response that is not a 405.
 //!
 //! The strip is keyed "unless 405", never "on 401": request decompression wraps every tier gate,
 //! so an undecodable `Content-Encoding` is a 415 before any gate runs, and on an unmounted method
@@ -41,6 +49,8 @@ use axum::Router;
 use tower::{Layer as _, Service, ServiceExt as _};
 
 use temper_services::cors::{Cors, CorsPolicy};
+use temper_services::error::{unavailable_response, PreIdentityRefusal};
+use temper_services::state::JwksKeyStore;
 use temper_services::transport::{insert_security_headers, RequestId, REQUEST_ID_HEADER};
 
 /// The most of a caller's own `x-request-id` the root span keeps. It is caller-chosen bytes, so
@@ -53,7 +63,7 @@ const MAX_INBOUND_REQUEST_ID_BYTES: usize = 128;
 pub(crate) struct InboundRequestId(pub(crate) String);
 
 /// Wrap a finished router in the outer service.
-pub(crate) fn wrap(inner: Router, cors: CorsPolicy) -> Router {
+pub(crate) fn wrap(inner: Router, cors: CorsPolicy, jwks: Arc<JwksKeyStore>) -> Router {
     let layer = cors.layer();
     Router::new().fallback_service(AnonymousSurface {
         preflight: layer.layer(NeverCalled),
@@ -61,6 +71,7 @@ pub(crate) fn wrap(inner: Router, cors: CorsPolicy) -> Router {
         actual: layer.layer(inner.clone()),
         inner,
         cors: Arc::new(cors),
+        jwks,
     })
 }
 
@@ -77,6 +88,9 @@ struct AnonymousSurface {
     /// CORS around an empty answer: the actual-response headers for a routed `OPTIONS`.
     headers_only: Cors<CorsHeadersOnly>,
     cors: Arc<CorsPolicy>,
+    /// Joined on every pre-identity refusal, then read through `is_failing` for the unavailable
+    /// swap.
+    jwks: Arc<JwksKeyStore>,
 }
 
 impl Service<Request> for AnonymousSurface {
@@ -97,6 +111,10 @@ impl Service<Request> for AnonymousSurface {
 
 impl AnonymousSurface {
     async fn handle(self, mut request: Request) -> Response {
+        let entered = tokio::time::Instant::now();
+        // Read before routing: a bearer lookup inside may run the refresh that clears it, and a
+        // refusal's answer must not depend on whether its door looked one up.
+        let was_failing = self.jwks.is_failing();
         let id = RequestId::mint();
         request.extensions_mut().insert(id.clone());
         // `to_str` succeeds only on visible ASCII, so any byte offset is a cut point.
@@ -145,9 +163,48 @@ impl AnonymousSurface {
             self.actual.oneshot(request).await
         };
 
+        if let Some(PreIdentityRefusal(cause)) = response.extensions().get().copied() {
+            // Join the store's refresh if its keys are stale, until the same deadline from the
+            // request's arrival for every door (a bearer lookup that already waited has used it
+            // up). "Unavailable" if the store was failing when the request arrived, is failing
+            // now, or still has no usable keys: a refusal whose wait saw the endpoint recover, or
+            // that gave up on a slow fetch, still tells its caller to retry rather than that its
+            // credential was refused.
+            let usable = self
+                .jwks
+                .refresh_within(entered + JwksKeyStore::REFRESH_WAIT)
+                .await;
+            let unavailable = was_failing || self.jwks.is_failing() || !usable;
+            // The one line an operator joins a caller's quoted `x-request-id` to. Emitted here, not
+            // under the root span, so it carries the id whatever the log filter does to spans.
+            tracing::warn!(
+                request_id = id.as_str(),
+                cause = cause.as_str(),
+                unavailable,
+                status_code = 401,
+                "auth error"
+            );
+            if unavailable {
+                response = unavailable_if_refused(response);
+            }
+        }
         finish(&mut response, &id);
         response
     }
+}
+
+/// A pre-identity refusal re-rendered as the "unavailable" bytes. Its headers (CORS, the security
+/// set) stay, since they depend on the request and not the cause; only the body and its length
+/// change. Every other response passes through untouched.
+fn unavailable_if_refused(response: Response) -> Response {
+    if response.extensions().get::<PreIdentityRefusal>().is_none() {
+        return response;
+    }
+    let (mut parts, _) = response.into_parts();
+    let (_, body) = unavailable_response().into_parts();
+    // The new body's exact size frames it; the old length would not.
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, body)
 }
 
 /// The two rules every answer leaves under: the request id, and `Allow` only on a 405.
@@ -201,5 +258,32 @@ impl Service<Request> for CorsHeadersOnly {
 
     fn call(&mut self, _request: Request) -> Self::Future {
         std::future::ready(Ok(Response::new(axum::body::Body::empty())))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temper_services::error::{ApiError, UnauthCause};
+
+    // FAILS IF: the unavailable swap touches a response that is not a marked pre-identity
+    // refusal (a verified-identity 401 such as `account is deactivated` would turn retryable), or
+    // misses a marked one.
+    #[tokio::test]
+    async fn only_a_marked_refusal_is_swapped() {
+        let verified = ApiError::Unauthorized("account is deactivated".to_string()).into_response();
+        let kept = unavailable_if_refused(verified);
+        let body = axum::body::to_bytes(kept.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("account is deactivated"));
+
+        let marked = ApiError::Unauthenticated(UnauthCause::MissingBearer).into_response();
+        let swapped = unavailable_if_refused(marked);
+        assert_eq!(swapped.headers().get(header::CONTENT_LENGTH), None);
+        let body = axum::body::to_bytes(swapped.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("Authentication service unavailable"));
     }
 }

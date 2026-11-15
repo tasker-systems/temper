@@ -150,7 +150,7 @@ async fn every_refusal_arm_renders_byte_identical_from_both_hosts(pool: PgPool) 
         (
             "expired-in-flight",
             common::generate_expired_jwt("e2e-test-user", "e2e@test.example.com"),
-            "This session's token has expired.",
+            "This call's credentials were not accepted.",
         ),
         (
             "machine credential",

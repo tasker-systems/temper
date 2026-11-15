@@ -50,7 +50,13 @@ pub async fn require_mcp_auth(
             return refuse(&state, "unknown_kid");
         }
         Err(e) => {
-            tracing::error!("JWKS retrieval failed: {e}");
+            // The store logs the outage once when it marks itself failing; repeated here only
+            // until it has.
+            if state.jwks_store.is_failing() {
+                tracing::debug!("JWKS retrieval failed: {e}");
+            } else {
+                tracing::error!("JWKS retrieval failed: {e}");
+            }
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };

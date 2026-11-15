@@ -365,8 +365,8 @@ async fn an_expired_bearer_speaks_the_re_authenticate_arm(pool: PgPool) {
     assert_eq!(code_of(&err), -32600, "terminal, not a caller error: {err}");
     assert_eq!(
         err.message,
-        "This session's token has expired. Re-authenticate (the MCP client's OAuth \
-         flow will refresh it) and retry the call."
+        "This call's credentials were not accepted. Re-authenticate (the MCP client's OAuth \
+         flow will refresh the token) and retry; if it recurs, contact the operator."
     );
 }
 
@@ -566,8 +566,8 @@ async fn query_expired_bearer_speaks_the_re_authenticate_arm(pool: PgPool) {
     assert_eq!(code_of(&err), -32600, "terminal, not a caller error: {err}");
     assert_eq!(
         err.message,
-        "This session's token has expired. Re-authenticate (the MCP client's OAuth \
-         flow will refresh it) and retry the call."
+        "This call's credentials were not accepted. Re-authenticate (the MCP client's OAuth \
+         flow will refresh the token) and retry; if it recurs, contact the operator."
     );
 }
 

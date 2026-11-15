@@ -412,10 +412,11 @@ fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
     // No CORS layer here either: CORS, the request id and the `Allow` rule live in the service
     // OUTSIDE routing (`anonymous_surface`), because a `Router::layer` runs inside axum's `Allow`
     // stamp and a CORS layer here answers every `OPTIONS` 200 with the path's methods.
+    let jwks = state.jwks_store.clone();
     let inner = temper_services::transport::apply_base_layers(app)
         .layer(axum::middleware::from_fn(root_span))
         .with_state(state);
-    crate::anonymous_surface::wrap(inner, cors)
+    crate::anonymous_surface::wrap(inner, cors, jwks)
 }
 
 /// The `http_request` root span, and the end of its life.

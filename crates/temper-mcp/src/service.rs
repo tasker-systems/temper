@@ -1076,6 +1076,18 @@ fn map_system_access_refusal(refusal: &ClientError) -> Option<rmcp::ErrorData> {
     ))
 }
 
+/// The API 401 causes whose remedy is re-authentication. The first is the API's uniform
+/// pre-identity refusal (`temper_services::error::UNAUTHENTICATED_MESSAGE` without its prefix);
+/// the rest are the per-gate messages an API from before that refusal still sends, kept so a
+/// relay deployed ahead of its API maps them the same way.
+const REAUTHENTICATE_CAUSES: [&str; 5] = [
+    "authentication required",
+    "Invalid or expired token",
+    "Missing Authorization header",
+    "Authorization header must use Bearer scheme",
+    "Invalid Authorization header encoding",
+];
+
 /// Map a post-edge authentication refusal onto the rmcp sentence that refusal's arm
 /// speaks (design §3 — the arm-for-arm mapping ruling 7 completed).
 ///
@@ -1091,10 +1103,11 @@ fn map_system_access_refusal(refusal: &ClientError) -> Option<rmcp::ErrorData> {
 /// - **Machine-principal gate** (the registration gate's own 401 message riding
 ///   `ProfileResolution`'s wire voice) → the same terminal framing the direct binding
 ///   gave it.
-/// - **Expired-in-flight** ("Invalid or expired token" — a face the direct binding
-///   could not produce: expiry used to die at the edge) → the NEW re-authenticate
-///   sentence, consistent with the `WWW-Authenticate` remediation the edge emits
-///   (design §10's named parity arm).
+/// - **Pre-identity refusal** ("authentication required": the API's one body for a
+///   credential that does not verify there — expired inside the hop, mangled in transit,
+///   absent) → the re-authenticate sentence, consistent with the `WWW-Authenticate`
+///   remediation the edge emits (design §10's named parity arm).
+/// - **Authentication service unavailable** → a retryable internal error, never terminal.
 /// - **Email resolution** (the API passes `EmailResolution` straight through as the
 ///   401 body) → the direct binding's terminal email sentence, via the shared
 ///   constant.
@@ -1128,35 +1141,23 @@ pub fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorData> {
         // the direct binding's `AuthzError::EmailResolution` sentence via the shared
         // constant.
         Some(terminal(TERMINAL_EMAIL_RESOLUTION_SENTENCE.to_string()))
-    } else if cause == "Invalid or expired token" {
-        // The expired-in-flight face. The bearer verified at the edge but no longer
-        // decodes at the API — its lifetime ended inside the hop. The remedy is
-        // re-authentication, the same one the edge's 401 advertises via
-        // `WWW-Authenticate`; this sentence names it because the hop's 401 body cannot
-        // carry that header's meaning through a JSON-RPC answer.
+    } else if REAUTHENTICATE_CAUSES.contains(&cause) {
+        // The API's pre-identity refusal: one body for every way a credential fails to verify
+        // there (expired inside the hop, mangled in transit, absent), because the API no longer
+        // tells an unauthenticated caller which. The edge verified A token, so each of those
+        // reduces to the same remedy, re-authentication, the one the edge's `WWW-Authenticate`
+        // advertises; this sentence names it because a JSON-RPC answer cannot carry that header.
         Some(terminal(
-            "This session's token has expired. Re-authenticate (the MCP client's OAuth \
-             flow will refresh it) and retry the call."
-                .to_string(),
-        ))
-    } else if cause == "Missing Authorization header"
-        || cause == "Authorization header must use Bearer scheme"
-        || cause == "Invalid Authorization header encoding"
-    {
-        // The bearer-scheme faces: the edge verified A token, so these mean the relay's
-        // re-issued credential was mangled in transit — an operator-visible fault
-        // phrased as the re-authentication it reduces to.
-        Some(terminal(
-            "This call's credentials did not survive the hop. Re-authenticate and retry; \
-             if it recurs, contact the operator."
+            "This call's credentials were not accepted. Re-authenticate (the MCP client's OAuth \
+             flow will refresh the token) and retry; if it recurs, contact the operator."
                 .to_string(),
         ))
     } else if cause == "Authentication service unavailable" {
-        // The API's JWKS-retrieval-failure 401 (auth middleware's `error!` arm): a
+        // The API's key-store-outage 401: while its bearer key store is failing, the API
+        // answers every pre-identity refusal with this body, whatever the path. A
         // transient infrastructure fault whose honest remedy is exactly a retry — the
-        // one 401 cause that must NOT take the terminal framing. It cannot be produced
-        // on demand at the listener (it needs the key store to fail, not the caller),
-        // so this arm is witnessed at the mapping's unit grain rather than on the wire.
+        // one 401 cause that must NOT take the terminal framing. Witnessed here at the
+        // mapping's unit grain; the API's own test drives the outage through the router.
         Some(rmcp::ErrorData::internal_error(
             "The authentication service is temporarily unavailable. Retry the call; if \
              it recurs, contact the operator."
@@ -1651,9 +1652,9 @@ mod tests {
 
     /// The JWKS-outage 401 ("Authentication service unavailable") is TRANSIENT — the
     /// one post-edge cause whose remedy is a retry [added — 2026-09-24, found in review]. The catch-all would
-    /// frame it terminal; this arm must map it to an internal, retryable voice. The
-    /// face needs the key store to FAIL, not the caller, so it cannot be produced on
-    /// demand at the listener — the mapping's other arms carry the wire witnesses.
+    /// frame it terminal; this arm must map it to an internal, retryable voice. The API
+    /// answers it, on every path, while its key store is failing; its own integration test
+    /// drives that outage through the router.
     #[test]
     fn the_jwks_outage_401_maps_retryable_never_terminal() {
         let err = map_post_edge_auth(&ClientError::UnauthorizedDetails {
@@ -1673,6 +1674,38 @@ mod tests {
             err.message.contains("Retry the call"),
             "the sentence names its remedy: {err}"
         );
+    }
+
+    /// The API's uniform pre-identity refusal maps to re-authentication, terminal (retrying the
+    /// same credential changes nothing), and so does each per-gate message an older API sends.
+    /// FAILS IF the uniform body falls to the catch-all, or the arms split again.
+    #[test]
+    fn the_uniform_pre_identity_401_maps_to_reauthentication() {
+        let uniform = map_post_edge_auth(&ClientError::UnauthorizedDetails {
+            message: "Unauthorized: authentication required".to_string(),
+        })
+        .expect("the arm maps");
+        assert!(
+            uniform.message.contains("Re-authenticate"),
+            "the uniform refusal names its remedy: {uniform}"
+        );
+        assert!(
+            !uniform.message.contains("should not be retried"),
+            "the uniform refusal must not fall to the catch-all: {uniform}"
+        );
+        for older in [
+            "Unauthorized: Invalid or expired token",
+            "Unauthorized: Missing Authorization header",
+            "Unauthorized: Authorization header must use Bearer scheme",
+            "Unauthorized: Invalid Authorization header encoding",
+        ] {
+            let err = map_post_edge_auth(&ClientError::UnauthorizedDetails {
+                message: older.to_string(),
+            })
+            .expect("the arm maps");
+            assert_eq!(err.message, uniform.message, "{older}");
+            assert_eq!(err.code, uniform.code, "{older}");
+        }
     }
 
     /// A `#[tool]` written into the wrong impl block compiles fine and is simply never advertised.

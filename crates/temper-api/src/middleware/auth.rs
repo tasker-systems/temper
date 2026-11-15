@@ -8,7 +8,7 @@ use std::future::Future;
 
 use temper_services::auth::{Caller, HumanPrincipal};
 
-use temper_services::error::ApiError;
+use temper_services::error::{ApiError, UnauthCause};
 use temper_services::state::{AppState, KeyLookupError};
 
 /// Newtype carrying the value of the `X-Temper-Device-Id` request header.
@@ -68,9 +68,7 @@ fn planted(parts: &Parts) -> Result<Caller, ApiError> {
         .extensions
         .get::<super::Planted>()
         .map(|planted| planted.0.clone())
-        .ok_or(ApiError::Unauthorized(
-            "Authentication required".to_string(),
-        ))
+        .ok_or(ApiError::Unauthenticated(UnauthCause::MissingBearer))
 }
 
 /// The classified caller `require_auth` planted, for the middleware layers that run after it.
@@ -125,11 +123,20 @@ pub async fn require_auth(
                 // `kid` is read from an unverified token header — attacker-chosen
                 // content at attacker-chosen length. Bounded.
                 tracing::debug!(kid = %temper_services::error::bounded(&kid), "token names an unpublished kid");
-                ApiError::Unauthorized("Invalid or expired token".to_string())
+                ApiError::Unauthenticated(UnauthCause::InvalidToken)
             }
+            // Rendered like every other pre-identity refusal. "Unavailable" is answered by the
+            // service outside routing, for every such refusal at once, while the key store says it
+            // is failing: answered here alone, it would tell a prober which paths verify a bearer.
             e => {
-                tracing::error!("JWKS key retrieval failed: {e}");
-                ApiError::Unauthorized("Authentication service unavailable".to_string())
+                // Once the store is failing, any caller can repeat this with a garbage bearer: the
+                // outage is reported where the store marks it, not once per such request.
+                if state.jwks_store.is_failing() {
+                    tracing::debug!("JWKS key retrieval failed: {e}");
+                } else {
+                    tracing::error!("JWKS key retrieval failed: {e}");
+                }
+                ApiError::Unauthenticated(UnauthCause::AuthUnavailable)
             }
         })?;
 
@@ -149,7 +156,7 @@ pub async fn require_auth(
     let token_data: TokenData<temper_services::auth::RawJwtClaims> =
         decode(&token, &vk.key, &validation).map_err(|e| {
             tracing::debug!("JWT verification failed: {e}");
-            ApiError::Unauthorized("Invalid or expired token".to_string())
+            ApiError::Unauthenticated(UnauthCause::InvalidToken)
         })?;
     let raw = token_data.claims;
 
@@ -221,15 +228,15 @@ fn extract_bearer_token(request: &Request<Body>) -> Result<String, ApiError> {
     let header = request
         .headers()
         .get(axum::http::header::AUTHORIZATION)
-        .ok_or_else(|| ApiError::Unauthorized("Missing Authorization header".to_string()))?;
+        .ok_or(ApiError::Unauthenticated(UnauthCause::MissingBearer))?;
 
     let value = header
         .to_str()
-        .map_err(|_| ApiError::Unauthorized("Invalid Authorization header encoding".to_string()))?;
+        .map_err(|_| ApiError::Unauthenticated(UnauthCause::BadScheme))?;
 
-    let token = value.strip_prefix("Bearer ").ok_or_else(|| {
-        ApiError::Unauthorized("Authorization header must use Bearer scheme".to_string())
-    })?;
+    let token = value
+        .strip_prefix("Bearer ")
+        .ok_or(ApiError::Unauthenticated(UnauthCause::BadScheme))?;
 
     Ok(token.to_string())
 }

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use temper_core::types::admin::{ReembedRequest, ReembedSummary};
 use temper_core::types::workflow_job::EmbedDispatchSummary;
-use temper_services::error::{ApiError, ApiResult, ErrorBody};
+use temper_services::error::{ApiError, ApiResult, ErrorBody, UnauthCause};
 use temper_services::services::embed_service::{self, ReembedScope};
 use temper_services::state::AppState;
 
@@ -84,8 +84,8 @@ fn arrived_on_cron_host(cron_host: Option<&str>, headers: &HeaderMap) -> bool {
 ///    server-side work (a drain pass, an ONNX warmup, a retention sweep, erasure's byte deletes)
 ///    fed by trust, not user auth, so an unconfigured deploy must refuse rather than expose them.
 ///
-/// `label` names the endpoint in the rejection log and the error so a misconfigured cron is
-/// diagnosable.
+/// `label` names the endpoint in the rejection log, never in the answer, so a misconfigured cron
+/// is diagnosable from the log while every refused caller gets the same bytes.
 ///
 /// Every door shares this one gate and `EMBED_DISPATCH_SECRET` rather than introducing a second
 /// secret-shaped env var: a new fail-closed variable would become a deploy-time prerequisite, the
@@ -116,7 +116,7 @@ pub(crate) fn require_dispatch_secret(
         Some(s) if !s.is_empty() => s,
         _ => {
             tracing::warn!("{label}: rejected (endpoint disabled — secret unset)");
-            return Err(ApiError::Unauthorized(format!("{label} disabled")));
+            return Err(ApiError::Unauthenticated(UnauthCause::CronDisabled));
         }
     };
     let presented = headers
@@ -126,7 +126,7 @@ pub(crate) fn require_dispatch_secret(
         .unwrap_or("");
     if !secret_matches(presented, expected) {
         tracing::warn!("{label}: rejected (bad or missing bearer secret)");
-        return Err(ApiError::Unauthorized(format!("invalid {label} secret")));
+        return Err(ApiError::Unauthenticated(UnauthCause::CronBadSecret));
     }
     Ok(())
 }
