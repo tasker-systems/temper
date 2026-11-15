@@ -12080,7 +12080,7 @@
             }
           },
           "404": {
-            "description": "Not found; also every answer to a caller who cannot read the resource, whatever its `expect` or `If-Match`",
+            "description": "Not found; also the answer to a caller who cannot read the resource for any well-formed `expect` or `If-Match`, matching or not (a malformed one is the 400 above, decided from the request alone)",
             "content": {
               "application/json": {
                 "schema": {
@@ -28205,7 +28205,7 @@
               "string",
               "null"
             ],
-            "description": "The body token of exactly [`Self::content`] ([`crate::body_token`]), computed over the\nbytes this same read returned: send it as `expect.body` on `PATCH /api/resources/{id}` to\nsave over those bytes only.\n\nPresent beside `content` on a single-resource read that asked for the `body` section, and\non the answer of a `PATCH` that wrote the body, where it is computed inside the write's\nown transaction and describes the whole readable body that write left (a per-block write\nincluded). Absent everywhere else: list and search rows carry `content` without a token,\nso a body read from a list cannot guard a save. Absent from a server that predates it."
+            "description": "The body token of exactly [`Self::content`] ([`crate::body_token`]), computed over the\nbytes this same read returned: send it as `expect.body` on `PATCH /api/resources/{id}` to\nsave over those bytes only.\n\nPresent beside `content` on a single-resource read that asked for the `body` section, and\non the answer of a `PATCH` that wrote the body, where it is computed inside the write's\nown transaction and describes the whole readable body that write left (a per-block write\nincluded). Absent everywhere else: list and search rows carry `content` without a token,\nso a body read from a list cannot guard a save. Absent from a server that predates it.\n\nOn a write's answer, only this field is the write's own: the rest of the view is read after\nthe commit, so `body_hash`, `bytes_merkle` and `updated` can already describe a later\nwrite. Guard the next save with this token, never with a hash."
           },
           "byte_blocks": {
             "type": [

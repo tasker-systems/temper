@@ -253,6 +253,10 @@ content?: string | null,
  * own transaction and describes the whole readable body that write left (a per-block write
  * included). Absent everywhere else: list and search rows carry `content` without a token,
  * so a body read from a list cannot guard a save. Absent from a server that predates it.
+ *
+ * On a write's answer, only this field is the write's own: the rest of the view is read after
+ * the commit, so `body_hash`, `bytes_merkle` and `updated` can already describe a later
+ * write. Guard the next save with this token, never with a hash.
  */
 body_token?: string | null, 
 /**

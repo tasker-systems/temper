@@ -169,6 +169,11 @@ fn content_etag(content: &ContentResponse) -> axum::http::HeaderMap {
             headers.insert(axum::http::header::ETAG, value);
         }
     }
+    // The answer is the caller's own read of a body it may read: never a shared cache's to keep.
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private"),
+    );
     headers
 }
 
@@ -382,7 +387,7 @@ pub async fn create(
         (status = 400, description = "Bad request (e.g. unknown open_meta key, content sent without server-side pipeline, a malformed `expect`, an `If-Match` that is `*`, unparseable, weak and naming the current body, or disagreeing with `expect.body`, code BAD_REQUEST), or a precondition header this route does not honour (code PRECONDITION_NOT_HONOURED: `If-None-Match`, `If-Unmodified-Since`)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
-        (status = 404, description = "Not found; also every answer to a caller who cannot read the resource, whatever its `expect` or `If-Match`", body = ErrorBody),
+        (status = 404, description = "Not found; also the answer to a caller who cannot read the resource for any well-formed `expect` or `If-Match`, matching or not (a malformed one is the 400 above, decided from the request alone)", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
         (status = 412, description = "An `expect` or `If-Match` did not hold (code PRECONDITION_FAILED); nothing was written, and `error.precondition` lists each failed expectation with what is there now (a `body` entry's `current` is the current body's token)", body = ErrorBody),
     )
@@ -454,8 +459,8 @@ pub async fn update(
 
     // `If-Match` is honoured on this route only, as a synonym for `expect.body`. It is carried
     // to the backend unparsed, so it is refused or judged in the order every other precondition
-    // is: after the modify floor, and after the read gate under the resource's lock. Several
-    // field lines are one list.
+    // is: a malformed one after the modify floor (a 400 that reads no state), a well-formed one
+    // under the resource's lock after the read gate. Several field lines are one list.
     let if_match = {
         let lines: Vec<String> = headers
             .get_all(axum::http::header::IF_MATCH)

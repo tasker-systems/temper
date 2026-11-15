@@ -935,7 +935,7 @@ impl DbBackend {
     ///
     /// `Ok(Some(token))` is the one answer that is neither: a body-only whole-body save
     /// (`retried_save`, its bytes) whose only failed expectation is the body, and whose bytes
-    /// already ARE the current body. That is a retried save that landed; the caller rolls back,
+    /// already ARE the current body, read back verbatim. That is a retried save that landed; the caller rolls back,
     /// writes nothing, and answers `200` with the current body's token. The ingest-state refusal
     /// a whole-body write meets still comes first.
     ///
@@ -984,19 +984,25 @@ impl DbBackend {
             // The token is of the body `/content` would serve now, read on this transaction under
             // the lock: never the write path's own live-block read, which differs whenever a
             // block has no stored bytes, and never a pool read, which cannot see this transaction.
-            let current = readback::body_on(&mut *conn, resource)
+            let read = readback::body_on(&mut *conn, resource)
                 .await
-                .map_err(map_readback_err)?
-                .content;
+                .map_err(map_readback_err)?;
+            let verbatim = read.bytes_merkle.is_some();
+            let current = read.content;
             let token = temper_core::body_token(&current);
             match condition.judge(&token) {
                 BodyJudgment::Holds => {}
                 BodyJudgment::WeakMatch => {
+                    // This 400 says the weak tag names the current body, so it is a disclosure
+                    // like a 412: read standing is asked once more first (see below).
+                    readback::ensure_visible(&mut *conn, self.profile_id, resource)
+                        .await
+                        .map_err(map_readback_err)?;
                     return Err(TemperError::BadRequest(
                         "If-Match holds a weak entity-tag; a body save is guarded only by a \
                          strong one. Send the body_token you read, quoted, without W/"
                             .into(),
-                    ))
+                    ));
                 }
                 BodyJudgment::Fails => {
                     failed.push(FailedExpectation {
@@ -1007,7 +1013,7 @@ impl DbBackend {
                     });
                 }
             }
-            current_body = Some((current, token));
+            current_body = Some((current, token, verbatim));
         }
         if failed.is_empty() {
             return Ok(None);
@@ -1019,7 +1025,10 @@ impl DbBackend {
             .await
             .map_err(map_readback_err)?;
         let only_the_body = failed.len() == 1 && failed[0].tier == PreconditionTier::Body;
-        if let (true, Some(sent), Some((current, token))) =
+        // Only a verbatim body can be a landed save: a whole-body save stores its bytes, so a body
+        // that reads back derived was never written by one, and a save of its reconstruction is a
+        // real write (it stores bytes), refused like any other stale save.
+        if let (true, Some(sent), Some((current, token, true))) =
             (only_the_body, retried_save, current_body)
         {
             if sent == current {

@@ -8,7 +8,7 @@ What changed: a body token is "bt1." + unpadded base64url(sha256(readable body b
 characters, computed by temper_core::body_token over exactly the bytes a read returns.
 
 - GET /api/resources/{id}/content answers ContentResponse.body_token and the header
-  ETag: "<body_token>" (strong). It is the only read with an ETag. If-None-Match is ignored there:
+  ETag: "<body_token>" (strong), with Cache-Control: private. It is the only read with an ETag. If-None-Match is ignored there:
   no 304 is ever answered.
 - GET /api/resources/{id}?sections=body answers ResourceView.body_token beside content. List and
   search rows carry no token (list refuses the body section; search rows never had one).
@@ -22,7 +22,8 @@ characters, computed by temper_core::body_token over exactly the bytes a read re
   {tier: "body", expected, current} (no key; current is the current token) in
   error.precondition.failed, beside any failed meta entries.
 - A body-only whole-body PATCH (content and nothing else: no title, meta, move, goal, sources or
-  content_block) whose guard fails but whose bytes already are the current body answers 200,
+  content_block) whose guard fails but whose bytes already are the current body, read back
+  verbatim, answers 200,
   writes nothing, and carries the current token: a retried save that landed recognizes itself.
 - The answer of a PATCH that writes the body carries ResourceView.body_token, computed inside the
   write's transaction: the token of the whole body that write left, a per-block write included. A
@@ -49,6 +50,9 @@ release's notes.
 Costs: a refused body save has already chunked its body and paid for any inline embed, which runs
 before the transaction so no lock is held across it. A /content read and a body-section read pay one
 sha256 of the body; a body-writing PATCH pays one more body read inside its transaction.
+
+The token is an unsalted content hash, held only where the body may be held: a holder can confirm a
+guess of the bytes it names, so it is never logged, persisted in an event, or put in a message.
 
 Why additive: optional response fields, one optional request member, one new header honoured on one
 route, one new enum value. openapi.json grows against the 0.6 pin.

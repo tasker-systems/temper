@@ -755,6 +755,33 @@ async fn the_content_token_guards_a_resource_with_a_byteless_block(pool: PgPool)
     assert_eq!(answer.body_token.as_deref(), Some(current.as_str()));
 }
 
+/// **A derived body is never answered as a landed retry.** A save of a derived body's own
+/// reconstruction with a stale token is a real write (it would store bytes the resource does not
+/// hold), so it is refused `412` like any stale save, never answered `200` as a no-op: only a
+/// verbatim body can be what a landed save left.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_derived_body_is_never_answered_as_a_landed_retry(pool: PgPool) {
+    let (owner, context) = seed_profile(&pool, "derived-retry@example.com").await;
+    let resource = create(&pool, owner, context, THREE).await;
+    sqlx::query(
+        "DELETE FROM kb_block_content bc USING kb_content_blocks b \
+          WHERE bc.block_revision_id = b.current_revision_id AND b.resource_id = $1",
+    )
+    .bind(Uuid::from(resource))
+    .execute(&pool)
+    .await
+    .expect("make the body derived");
+    let (derived, token) = content(&pool, owner, resource).await;
+    let before = events(&pool).await;
+    let f = failure(
+        backend(&pool, owner)
+            .update_resource(save(resource, &derived, Some("bt1.stale")))
+            .await,
+    );
+    assert_eq!(body_entry(&f), (json!("bt1.stale"), json!(token)));
+    assert_eq!(events(&pool).await, before);
+}
+
 // ── the answer's token ───────────────────────────────────────────────────────────────────────────
 
 /// **A write's answer token is its own.** A whole-body save answers the token of the body it left;
@@ -1054,6 +1081,18 @@ async fn a_modifier_who_cannot_read_gets_404_for_any_body_guard(pool: PgPool) {
             other => panic!("expected GET's 404, got {other:?}"),
         }
     }
+    // A malformed guard is refused from the request alone, the same 400 a reader gets: it is
+    // decided before any state is read, so it tells the non-reader nothing about the resource.
+    let mut disagree = save(telos, "# Telos\n\nx\n", Some(&matching));
+    disagree.if_match = Some("\"bt1.other\"".into());
+    for cmd in [
+        save_if_match(telos, "# Telos\n\nx\n", "*"),
+        save(telos, "# Telos\n\nx\n", Some("*")),
+        disagree,
+    ] {
+        let msg = bad_request(be.update_resource(cmd).await);
+        assert!(!msg.contains("bt1"), "{msg}");
+    }
     held.commit().await.expect("release");
 }
 
@@ -1127,6 +1166,26 @@ async fn the_order_of_body_refusals(pool: PgPool) {
     };
     let msg = bad_request(be.update_resource(empty).await);
     assert!(msg.contains("names no key"), "{msg}");
+    // A malformed body condition on a request that also writes nothing: the condition's shape is
+    // refused first, before the assembled write is judged.
+    for malformed in [
+        UpdateResource {
+            if_match: Some("*".into()),
+            ..UpdateResource {
+                body: None,
+                ..save(resource, "", Some("bt1.x"))
+            }
+        },
+        UpdateResource {
+            body: None,
+            ..save(resource, "", Some("*"))
+        },
+    ] {
+        let msg = bad_request(be.update_resource(malformed).await);
+        assert!(!msg.contains("writes nothing"), "the shape first: {msg}");
+    }
+    // A well-formed guard on a resource the caller cannot read never reaches the judgment: that
+    // order is `a_modifier_who_cannot_read_gets_404_for_any_body_guard`.
 }
 
 // ── the same response ────────────────────────────────────────────────────────────────────────────

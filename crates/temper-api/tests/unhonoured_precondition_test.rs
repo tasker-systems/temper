@@ -104,7 +104,9 @@ fn is_write(method: &str) -> bool {
 
 /// The one route and header the server honours (`HONOURED`): `If-Match` on the resource `PATCH`,
 /// the body token's header. It passes the layer and is judged in the handler's backend, so the
-/// refusal sweeps skip it and `the_honoured_header_reaches_its_handler_and_only_there` covers it.
+/// refusal sweeps skip it. The sweeps assert it reaches the handler (the same answer as without the
+/// header, and a 412 on a real resource); `temper-api`'s `body_token_http_test.rs` and
+/// `temper-services`' `body_precondition_test.rs` witness how it is judged.
 fn is_honoured(method: &str, template: &str, header: (&str, &str)) -> bool {
     method == "PATCH" && template == "/api/resources/{id}" && header.0 == "if-match"
 }

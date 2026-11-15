@@ -107,8 +107,8 @@ pub(crate) struct Honoured {
 ///   the raw value to the backend, which refuses a `*`, an unparseable list, a weak tag naming the
 ///   current body or a disagreement with `expect.body` (`400`), and judges the rest under the
 ///   resource's writer lock after the read gate (`412`, or GET's `404` to a non-reader). The
-///   witnesses are `temper-services`' `body_precondition_test` and this crate's
-///   `unhonoured_precondition_test`.
+///   witnesses are `temper-services`' `body_precondition_test.rs` and this crate's
+///   `body_token_http_test.rs` and `unhonoured_precondition_test.rs`.
 pub(crate) const HONOURED: &[Honoured] = &[Honoured {
     method: Method::PATCH,
     route: "/api/resources/{id}",

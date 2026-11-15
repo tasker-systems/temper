@@ -163,6 +163,20 @@ async fn the_etag_is_on_content_only_and_never_304s(pool: PgPool) {
         "every field of /content is a function of markdown and the URL"
     );
 
+    // The caller's own read: never a shared cache's to keep.
+    let raw = app
+        .client
+        .get(app.url(&format!("/api/resources/{}/content", who.resource)))
+        .header("Authorization", format!("Bearer {}", who.token))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(
+        raw.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("private")
+    );
     for inm in [
         format!("\"{token}\""),
         "*".to_string(),
