@@ -218,8 +218,10 @@ export async function reconcileMemberships(payload: ReconcileRequest): Promise<v
     // unauthenticated caller the same way whatever the reason, so this covers a wrong
     // INTERNAL_RECONCILE_SECRET, clock skew past the verifier's window, and a deployment of the API
     // that does not serve this door. Each is a deployment fact, not weather, and it is separated
-    // from every other status precisely so one occurrence can be treated as conclusive. A wrong
-    // path in our own URL never gets this far: `requireDoorUrl` refuses it before signing.
+    // from every other status precisely so one occurrence can be treated as conclusive. A URL that
+    // names the wrong door, or adds a segment after it, never gets this far: `requireDoorUrl`
+    // refuses it before signing. A stray segment before the door cannot be told from a proxy
+    // prefix, so it does get here, and this 401 is its signal.
     throw new InternalCallError(
       res.status === 401 || res.status === 403 ? "unauthorized" : "endpoint_error",
       `HTTP ${res.status}`,

@@ -51,7 +51,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * trust level. Throws on transport error or non-2xx; every caller treats that as "no owner yet"
  * rather than as a reason to refuse a login, and records it on the `principal_resolve` health
  * channel. Every throw is an `InternalCallError`, classified the way `reconcileMemberships`
- * classifies its own, because the cause decides whether one occurrence pages.
+ * classifies its own, because the cause decides whether one occurrence pages. The one exception is
+ * `SubjectRefused`, for a subject the API would refuse whatever the channel's health, which the
+ * recorder skips.
  */
 export async function resolvePrincipal(
   payload: ResolvePrincipalRequest,
