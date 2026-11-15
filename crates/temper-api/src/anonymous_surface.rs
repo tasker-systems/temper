@@ -112,6 +112,9 @@ impl Service<Request> for AnonymousSurface {
 impl AnonymousSurface {
     async fn handle(self, mut request: Request) -> Response {
         let entered = tokio::time::Instant::now();
+        // Read before routing: a bearer lookup inside may run the refresh that clears it, and a
+        // refusal's answer must not depend on whether its door looked one up.
+        let was_failing = self.jwks.is_failing();
         let id = RequestId::mint();
         request.extensions_mut().insert(id.clone());
         // `to_str` succeeds only on visible ASCII, so any byte offset is a cut point.
@@ -163,13 +166,15 @@ impl AnonymousSurface {
         if let Some(PreIdentityRefusal(cause)) = response.extensions().get().copied() {
             // Join the store's refresh if its keys are stale, until the same deadline from the
             // request's arrival for every door (a bearer lookup that already waited has used it
-            // up). "Unavailable" if the store was failing when the refusal was made or still is:
-            // a refusal whose wait saw the endpoint recover still tells its caller to retry.
-            let was_failing = self.jwks.is_failing();
-            self.jwks
+            // up). "Unavailable" if the store was failing when the request arrived, is failing
+            // now, or still has no usable keys: a refusal whose wait saw the endpoint recover, or
+            // that gave up on a slow fetch, still tells its caller to retry rather than that its
+            // credential was refused.
+            let usable = self
+                .jwks
                 .refresh_within(entered + JwksKeyStore::REFRESH_WAIT)
                 .await;
-            let unavailable = was_failing || self.jwks.is_failing();
+            let unavailable = was_failing || self.jwks.is_failing() || !usable;
             // The one line an operator joins a caller's quoted `x-request-id` to. Emitted here, not
             // under the root span, so it carries the id whatever the log filter does to spans.
             tracing::warn!(

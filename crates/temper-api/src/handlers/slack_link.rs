@@ -362,7 +362,12 @@ async fn resolve_existing(
                 ApiError::Unauthorized("Invalid or expired token".to_string())
             }
             e => {
-                tracing::error!("slack link: JWKS key retrieval failed: {e}");
+                // Debug once the store is failing: it has logged the outage itself.
+                if state.jwks_store.is_failing() {
+                    tracing::debug!("slack link: JWKS key retrieval failed: {e}");
+                } else {
+                    tracing::error!("slack link: JWKS key retrieval failed: {e}");
+                }
                 ApiError::Unauthorized("Authentication service unavailable".to_string())
             }
         })?;

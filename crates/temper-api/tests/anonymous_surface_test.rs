@@ -688,10 +688,30 @@ async fn a_failing_key_store_makes_every_refusal_unavailable(pool: PgPool) {
 
     // The raw shapes, and HEAD: the same unavailable answer, with no body. A refusal here waits
     // on the store's refresh, and hyper closes a connection whose request body was still unread
-    // when the answer went out. That is framing, decided by the body's size and the wait (which
-    // every door shares), not by the path, so it is left out of the comparison for the large
-    // bodies only.
+    // when the answer went out. That framing is held equal across the large bodies, on a
+    // signature door and a bearer door alike, and then left out of the comparison with the
+    // small-body constant.
     let mut answers = raw_refusals(&app).await;
+    let large = app
+        .client
+        .post(app.url("/api/profile"))
+        .body(vec![b'x'; 70 * 1024])
+        .send()
+        .await
+        .expect("sent");
+    answers.push((
+        "70 KiB body to a bearer door".to_string(),
+        answer_of(large).await,
+    ));
+    let framing: Vec<_> = answers
+        .iter()
+        .filter(|(what, _)| what.starts_with("70 KiB"))
+        .map(|(what, answer)| (what.clone(), answer.header("connection").map(str::to_owned)))
+        .collect();
+    assert!(
+        framing.windows(2).all(|w| w[0].1 == w[1].1),
+        "the large bodies are framed alike on every door: {framing:?}"
+    );
     for (what, answer) in &mut answers {
         if what.starts_with("70 KiB") {
             answer.headers.remove("connection");
@@ -874,11 +894,10 @@ async fn an_internal_app_no_bearer_reaches_still_reports_the_outage(pool: PgPool
     assert_refusals(&answers, &unavailable());
 }
 
-// FAILS IF: a JWKS endpoint that accepts and never answers holds a refusal for longer than the
-// bounded wait, or holds a bearer refusal differently from one with no bearer: before the store
-// has failed, and again once it is failing and a fresh fetch (past the backoff) hangs. A bearer
-// that waited out the fetch's own timeout would take five seconds where every other door takes
-// one, a timing a prober could read.
+// FAILS IF: a JWKS endpoint that accepts and never answers holds a bearer refusal and one with
+// no bearer differently (a prober could tell which paths verify a bearer), answers either before
+// the fetch it joined has ended, or answers either as anything but "unavailable": before the store
+// has failed, inside the backoff, and once a fresh fetch past the backoff hangs again.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_hanging_key_endpoint_holds_every_refusal_alike(pool: PgPool) {
     let mode = std::sync::Arc::new(std::sync::Mutex::new(KeyEndpoint::Hang));
@@ -893,41 +912,51 @@ async fn a_hanging_key_endpoint_holds_every_refusal_alike(pool: PgPool) {
         let answer = send(app, Method::GET, "/api/profile", headers).await;
         (started.elapsed(), answer)
     }
-    let check = |what: &str, held: std::time::Duration, answer: &Answer, expected: &Answer| {
-        assert!(
-            held < wait * 2,
-            "{what}: held {held:?}, past the bounded wait"
+    // A bearer refusal and one without, sent together so both meet the same store state.
+    async fn pair(app: &common::TestApp) -> [(std::time::Duration, Answer); 2] {
+        let (bearer, bare) = tokio::join!(
+            timed(app, &[("authorization", "Bearer garbage")]),
+            timed(app, &[])
         );
-        assert_eq!(&without_cors(answer), expected, "{what}");
+        [bearer, bare]
+    }
+    let check = |phase: &str, answers: &[(std::time::Duration, Answer); 2], at_least| {
+        let [(bearer, b), (bare, n)] = answers;
+        for (door, held, answer) in [("bearer", bearer, b), ("no bearer", bare, n)] {
+            assert_eq!(&without_cors(answer), &unavailable(), "{phase}: {door}");
+            assert!(
+                *held < wait + std::time::Duration::from_secs(1),
+                "{phase}: {door} held {held:?}"
+            );
+            assert!(
+                *held >= at_least,
+                "{phase}: {door} answered after {held:?}, before its fetch ended"
+            );
+        }
+        let apart = if bearer > bare {
+            *bearer - *bare
+        } else {
+            *bare - *bearer
+        };
+        assert!(
+            apart < std::time::Duration::from_millis(750),
+            "{phase}: bearer {bearer:?} against no bearer {bare:?}"
+        );
     };
+    // The fetch's own timeout: a refusal that joined it waits until it gives up.
+    let fetch = std::time::Duration::from_millis(4500);
 
-    // Before anything has failed: both join the hanging refresh for the bounded wait at most.
-    let (held, answer) = timed(&app, &[]).await;
-    check("no bearer, refresh hanging", held, &answer, &u401());
-    let (held, answer) = timed(&app, &[("authorization", "Bearer garbage")]).await;
-    check("bearer, refresh hanging", held, &answer, &u401());
-
-    // The fetch runs into the client timeout, and the store is failing.
-    until_answered(&unavailable(), std::time::Duration::from_secs(15), || {
-        send(&app, Method::GET, "/api/profile", &[])
-    })
-    .await;
-    // Past the failed-refresh backoff, the next refusal starts a fresh fetch, which hangs too.
+    // Cold: both join the one hanging fetch and answer when it gives up, failed.
+    check("cold, fetch hanging", &pair(&app).await, fetch);
+    // Inside the backoff the failed refresh answers for everyone, at once.
+    check(
+        "failing, inside the backoff",
+        &pair(&app).await,
+        std::time::Duration::ZERO,
+    );
+    // Past it, both join a fresh fetch, which hangs too.
     tokio::time::sleep(std::time::Duration::from_millis(5500)).await;
-    let (bearer, answer) = timed(&app, &[("authorization", "Bearer garbage")]).await;
-    check(
-        "bearer, failing, fetch hanging",
-        bearer,
-        &answer,
-        &unavailable(),
-    );
-    let (bare, answer) = timed(&app, &[]).await;
-    check(
-        "no bearer, failing, fetch hanging",
-        bare,
-        &answer,
-        &unavailable(),
-    );
+    check("failing, fetch hanging again", &pair(&app).await, fetch);
 }
 
 // FAILS IF: a failing store recovers only when a bearer drives a refresh: with no bearer traffic
@@ -943,11 +972,22 @@ async fn a_failing_store_recovers_with_no_bearer(pool: PgPool) {
     .await;
 
     *mode.lock().expect("mode lock") = KeyEndpoint::Serve;
-    // Past the failed-refresh backoff, a refusal's poke refetches and the store is healthy.
-    until_answered(&u401(), std::time::Duration::from_secs(15), || {
-        signed_refusal(&app, "/internal/slack/mint")
-    })
+    // Past the failed-refresh backoff, the next refusal refetches and the store is healthy. That
+    // first request arrived while the store was failing, so it still answers "unavailable", and
+    // alike on a bearer door, whose own lookup is what runs the refresh, and any other.
+    tokio::time::sleep(std::time::Duration::from_millis(5500)).await;
+    let first = send(
+        &app,
+        Method::GET,
+        "/api/profile",
+        &[("authorization", "Bearer garbage")],
+    )
     .await;
+    assert_eq!(
+        without_cors(&first),
+        unavailable(),
+        "the request that saw the recovery, on a bearer door"
+    );
     let answers = vec![
         (
             "bearer".to_string(),

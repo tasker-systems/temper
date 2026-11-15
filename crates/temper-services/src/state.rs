@@ -193,22 +193,28 @@ struct Shared {
     /// Whether a background refresh started by [`JwksKeyStore::poke`] is still running. At most one
     /// runs at a time, so a flood of refusals is one spawned task, not one per request.
     poke_in_flight: std::sync::atomic::AtomicBool,
-    /// Bumped when a poke's refresh finishes, however it finishes: what a request joining that
-    /// refresh waits on.
+    /// The id of the most recently started poke refresh (1, 2, …).
+    poke_started: std::sync::atomic::AtomicU64,
+    /// The id of the most recently finished poke refresh, however it finished: what a request
+    /// joining a refresh waits on, for that refresh's own id. Ids rather than a bare "something
+    /// finished", so the end of an earlier refresh never wakes a request waiting on a later one.
     poke_done: tokio::sync::watch::Sender<u64>,
 }
 
 /// Clears `poke_in_flight` and announces the end of a poke's refresh when the task ends, by
 /// return, panic or cancellation alike. A flag left set would make every later poke a no-op, and a
 /// failing store would then never refresh again.
-struct PokeFinished(Arc<Shared>);
+struct PokeFinished(Arc<Shared>, u64);
 
 impl Drop for PokeFinished {
     fn drop(&mut self) {
+        let id = self.1;
+        // Announced before the flag clears: a request that still sees the flag set then finds this
+        // id already done, rather than waiting on a flight that has ended.
+        self.0.poke_done.send_modify(|done| *done = (*done).max(id));
         self.0
             .poke_in_flight
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        self.0.poke_done.send_modify(|n| *n = n.wrapping_add(1));
     }
 }
 
@@ -221,6 +227,9 @@ impl std::fmt::Debug for JwksKeyStore {
     }
 }
 
+/// The most a JWKS fetch may take, end to end.
+const JWKS_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// The HTTP client used to fetch the JWKS.
 ///
 /// Bounded deliberately. An endpoint that accepts the connection and never answers would otherwise
@@ -228,7 +237,7 @@ impl std::fmt::Debug for JwksKeyStore {
 /// outbound call in this crate already carries a timeout.
 fn jwks_http_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(JWKS_FETCH_TIMEOUT)
         .connect_timeout(Duration::from_secs(2))
         .build()
         // Only fails if the TLS backend cannot be initialised, which is not a runtime condition
@@ -311,45 +320,57 @@ impl JwksKeyStore {
     /// refreshing from the JWKS endpoint if the cache is absent, expired, or does not hold that key.
     ///
     /// **An absent or expired cache is refreshed by joining one shared refresh, for at most
-    /// [`Self::REFRESH_WAIT`].** If the refresh has not produced a usable cache by then, the lookup
-    /// is `Unavailable`; the refresh carries on, and the next request joins it. A request never
-    /// waits for the fetch's own timeout: a hanging JWKS would otherwise hold every bearer refusal
-    /// for five seconds, a timing a prober can tell from a door that verifies no bearer, which the
-    /// service outside routing holds for the same bounded wait.
+    /// [`Self::REFRESH_WAIT`].** The wait outlasts the fetch's own timeout, so the refresh this
+    /// request needs ends while the request is live; if it has not produced a usable cache, the
+    /// lookup is `Unavailable`. The service outside routing holds every other refusal for the same
+    /// refresh, so a bearer door and a door without one wait alike.
     pub async fn get_decoding_key_for_token(
         &self,
         token: &str,
     ) -> Result<VerificationKey, KeyLookupError> {
         let asked = Instant::now();
-        self.refresh_within(tokio::time::Instant::now() + Self::REFRESH_WAIT)
-            .await;
-        self.shared.get_decoding_key_for_token(token, asked).await
+        let deadline = tokio::time::Instant::now() + Self::REFRESH_WAIT;
+        self.refresh_within(deadline).await;
+        match self.shared.get_decoding_key_for_token(token, asked).await {
+            // The TTL lapsed between the staleness check and the read, so no refresh was joined:
+            // join one now, within the same deadline, rather than refuse a request that never
+            // waited.
+            Err(KeyLookupError::Unavailable(_))
+                if self.shared.cache_is_stale() && tokio::time::Instant::now() < deadline =>
+            {
+                self.refresh_within(deadline).await;
+                self.shared.get_decoding_key_for_token(token, asked).await
+            }
+            other => other,
+        }
     }
 
-    /// The longest a request waits on a shared refresh of a stale cache ([`Self::refresh_within`]).
-    /// A healthy JWKS answers well inside it; a slow or hanging one costs every refusal the same
-    /// bounded wait, whatever its door.
-    pub const REFRESH_WAIT: Duration = Duration::from_secs(1);
+    /// The longest a request waits on a shared refresh of a stale cache ([`Self::refresh_within`]):
+    /// a little longer than a fetch may take, so the request that needs a refresh sees it end. A
+    /// platform that suspends an instance between invocations could otherwise freeze a fetch that
+    /// outlived its request, and the instance would never finish one. A healthy JWKS answers well
+    /// inside it; a hanging one costs every refusal the same wait, whatever its door.
+    pub const REFRESH_WAIT: Duration =
+        Duration::from_millis(JWKS_FETCH_TIMEOUT.as_millis() as u64 + 500);
 
     /// If the cache is absent or past its TTL, start a refresh ([`Self::poke`]) or join the one in
-    /// flight, and wait for it until `deadline` at most. Returns at once on a fresh cache.
+    /// flight, and wait for it until `deadline` at most. Returns at once on a fresh cache. True if
+    /// the cache is usable afterwards.
     ///
     /// The wait is what keeps a refresh inside a request: on a platform that suspends an instance
-    /// between invocations, a spawned task makes progress only while some invocation is live, so
-    /// every request that needs the refresh lends it time, and a healthy fetch completes inside
-    /// the request that started it.
-    pub async fn refresh_within(&self, deadline: tokio::time::Instant) {
+    /// between invocations, a spawned task makes progress only while some invocation is live.
+    pub async fn refresh_within(&self, deadline: tokio::time::Instant) -> bool {
         use std::sync::atomic::Ordering;
         if !self.shared.cache_is_stale() {
-            return;
+            return true;
         }
-        // Subscribed before the poke, so a refresh that ends between the two still counts.
-        let mut done = self.shared.poke_done.subscribe();
         self.poke();
-        if !self.shared.poke_in_flight.load(Ordering::SeqCst) {
-            return;
+        if self.shared.poke_in_flight.load(Ordering::SeqCst) {
+            let flight = self.shared.poke_started.load(Ordering::SeqCst);
+            let mut done = self.shared.poke_done.subscribe();
+            let _ = tokio::time::timeout_at(deadline, done.wait_for(|d| *d >= flight)).await;
         }
-        let _ = tokio::time::timeout_at(deadline, done.changed()).await;
+        !self.shared.cache_is_stale()
     }
 
     /// Start a refresh on a spawned task if the cache is absent or past its TTL, and return at
@@ -379,7 +400,8 @@ impl JwksKeyStore {
         {
             return;
         }
-        let finished = PokeFinished(Arc::clone(&self.shared));
+        let id = self.shared.poke_started.fetch_add(1, Ordering::SeqCst) + 1;
+        let finished = PokeFinished(Arc::clone(&self.shared), id);
         tokio::spawn(async move {
             if let Err(e) = finished.0.refresh_stale().await {
                 tracing::debug!("JWKS refresh failed: {e}");
@@ -439,6 +461,7 @@ impl Shared {
             failing: std::sync::atomic::AtomicBool::new(false),
             refresh_generation: std::sync::atomic::AtomicU64::new(0),
             poke_in_flight: std::sync::atomic::AtomicBool::new(false),
+            poke_started: std::sync::atomic::AtomicU64::new(0),
             poke_done: tokio::sync::watch::Sender::new(0),
         }
     }
@@ -477,6 +500,7 @@ impl Shared {
             failing: std::sync::atomic::AtomicBool::new(false),
             refresh_generation: std::sync::atomic::AtomicU64::new(0),
             poke_in_flight: std::sync::atomic::AtomicBool::new(false),
+            poke_started: std::sync::atomic::AtomicU64::new(0),
             poke_done: tokio::sync::watch::Sender::new(0),
         }
     }
@@ -1378,16 +1402,15 @@ mod tests {
         }
     }
 
-    // FAILS IF: a stale lookup waits for a hanging fetch's own timeout (every bearer refusal would
-    // take five seconds, a timing the doors without a bearer never show) rather than the bounded
-    // wait, or answers without leaving the refresh running for the next request to join.
+    // FAILS IF: a lookup on a hanging endpoint returns before the fetch it joined has ended (on a
+    // platform that suspends idle instances, a fetch outliving its request may never finish), or
+    // waits past the bounded wait.
     #[tokio::test]
-    async fn a_hanging_refresh_holds_a_lookup_for_the_bounded_wait_only() {
+    async fn a_hanging_refresh_ends_inside_the_lookup_that_waits_on_it() {
         let token = sign_with(Some("key-1"), TEST_PRIVATE_PEM);
         let hanging = slow_jwks_server(
             vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)],
-            // Longer than one wait, shorter than two.
-            JwksKeyStore::REFRESH_WAIT * 3 / 2,
+            Duration::from_secs(60),
         )
         .await;
         let store = JwksKeyStore::new(format!("{}/.well-known/jwks.json", hanging.uri()));
@@ -1397,27 +1420,73 @@ mod tests {
         let held = started.elapsed();
         assert!(
             matches!(answer, Err(KeyLookupError::Unavailable(_))),
-            "a refresh still in flight is the endpoint's fault: {answer:?}"
+            "{answer:?}"
         );
         assert!(
-            held >= JwksKeyStore::REFRESH_WAIT && held < JwksKeyStore::REFRESH_WAIT * 2,
-            "held {held:?}, not the bounded wait"
+            held >= JWKS_FETCH_TIMEOUT
+                && held < JwksKeyStore::REFRESH_WAIT + Duration::from_secs(1),
+            "held {held:?}"
         );
         assert!(
-            store
+            store.is_failing(),
+            "the fetch ended, and failed, inside the lookup"
+        );
+        assert!(
+            !store
                 .shared
                 .poke_in_flight
                 .load(std::sync::atomic::Ordering::SeqCst),
-            "the refresh carries on for the next request"
+            "nothing is left running after the request"
         );
-        // The next lookup joins the same refresh, which completes inside its wait.
+    }
+
+    // FAILS IF: a lookup on a cold cache with a healthy endpoint is held for the whole bounded
+    // wait (the waiter is never woken by the refresh's end), rather than for the fetch.
+    #[tokio::test]
+    async fn a_healthy_cold_lookup_waits_only_for_the_fetch() {
+        let server = jwks_server(vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)]).await;
+        let store = JwksKeyStore::new(format!("{}/.well-known/jwks.json", server.uri()));
+        let started = Instant::now();
         store
-            .get_decoding_key_for_token(&token)
+            .get_decoding_key_for_token(&sign_with(Some("key-1"), TEST_PRIVATE_PEM))
             .await
-            .expect("served once the slow fetch lands");
-        assert_eq!(
-            hanging.received_requests().await.unwrap_or_default().len(),
-            1
+            .expect("served");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "held {:?}",
+            started.elapsed()
+        );
+    }
+
+    // FAILS IF: a request joining a refresh is woken by the end of an earlier one, and refuses
+    // while the refresh it needs is still running.
+    #[tokio::test]
+    async fn the_end_of_an_earlier_refresh_does_not_release_a_later_waiter() {
+        let store = JwksKeyStore::new("http://127.0.0.1:1/.well-known/jwks.json".to_string());
+        // An earlier flight has ended.
+        store.shared.poke_done.send_modify(|d| *d = 1);
+        store
+            .shared
+            .poke_started
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+        // Flight 2 is in flight (held by hand, so it never ends during the wait).
+        store
+            .shared
+            .poke_in_flight
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        store
+            .shared
+            .poke_started
+            .store(2, std::sync::atomic::Ordering::SeqCst);
+        let started = Instant::now();
+        let usable = store
+            .refresh_within(tokio::time::Instant::now() + Duration::from_millis(300))
+            .await;
+        assert!(!usable);
+        assert!(
+            started.elapsed() >= Duration::from_millis(300),
+            "released by flight 1's end after {:?}",
+            started.elapsed()
         );
     }
 
