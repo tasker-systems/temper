@@ -145,8 +145,8 @@ An unmatched path is answered the same way. Without a validly signed bearer it i
 With one, it is the 404 `No route matches …`, whether or not the token's identity has a profile,
 unless a gated route would refuse the same token for itself (a deactivated account, an unregistered
 or revoked machine, an email that cannot be resolved), which keeps that answer. Resolving the caller
-never creates a profile; like sign-in, it may refresh an auth link or attach a verified email's link
-to the profile that holds it. Under `/internal/` (however many leading slashes, or the bare
+never creates a profile; like sign-in, it may refresh an auth link, attach a verified email's link
+to the profile that holds it, or touch a registered machine's last-seen time. Under `/internal/` (however many leading slashes, or the bare
 `/internal`), where no bearer route lives, every unmatched path is the refusal whoever asks. The
 cost of the bearer check on an unmatched path is one token verification and one profile lookup,
 plus the email lookup (and possibly one call to the identity provider's `/userinfo`) when the token

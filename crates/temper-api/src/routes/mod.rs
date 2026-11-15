@@ -136,7 +136,8 @@ const SWAGGER: (&str, Anonymous) = (
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Fallback {
     /// Verify the bearer and resolve the profile lookup-only; the uniform refusal without a validly
-    /// signed bearer, the 404 with one (`fallback::lookup_then_not_found`).
+    /// signed bearer, and with one the answer a gated route gives that token when it is a refusal
+    /// about the credential, otherwise the 404 (`fallback::lookup_then_not_found`).
     LookupThenNotFound,
     /// The uniform refusal, whoever asks (`fallback::refused_prefix`).
     Refused,

@@ -13,7 +13,8 @@
 //! account. The cost per unmatched authenticated request is one JWT verification and one profile
 //! lookup, plus the email ladder (and possibly one `/userinfo` call) when the token carries no
 //! email claim and no link is cached. It creates no profile; like sign-in, it may refresh an auth
-//! link's verification, or attach a verified email's link to the profile that already holds it.
+//! link's verification, attach a verified email's link to the profile that already holds it, or
+//! touch a registered machine's `last_seen_at` (at most once per five minutes).
 //! Reaching any of it takes a validly signed token, so it is no lever for an anonymous caller.
 //!
 //! A signed caller gets the answer a gated route gives the same token when that answer is a refusal

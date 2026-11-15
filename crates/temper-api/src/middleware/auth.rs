@@ -107,7 +107,7 @@ pub async fn require_auth(
     // 3b. The token verified, so this caller is one of ours: join its trace by *link*, never by
     //     parenting (decision `019f95ff` rule 2). Deliberately here rather than after
     //     `authenticate_token` below — the trust event is the signature verifying, not the profile
-    //     resolving, which is what lets the same sentence describe all four gates and keeps a
+    //     resolving, which is what lets the same sentence describe every gate and keeps a
     //     deactivated-profile 401 joined to the trace that will be used to debug it.
     //     `Span::current()` is the `http_request` root span, the same deferred seam `profile_id`
     //     uses further down. See `temper_telemetry::link` for what "one of ours" means.

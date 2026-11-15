@@ -25,9 +25,9 @@
 //!   classified [`Caller`], holding exactly one of [`HumanPrincipal`] / [`MachinePrincipal`].
 //!   Both surfaces' every authed request.
 //! - [`authenticate_caller_existing_only`] — the same token path, LOOKUP-ONLY: it refuses rather
-//!   than provisioning. For flows that authenticate a person but are not registration routes (the
-//!   Slack account-link callback). Same seam, same Level 1 gate, same classification; it differs
-//!   only in never minting a profile.
+//!   than provisioning. For flows that are not registration routes (the Slack account-link
+//!   callback, the declared fallback). Same seam, same Level 1 gate, same classification, and a
+//!   machine takes the same machine resolver; it differs only in never minting a profile.
 //! - [`resolve_federated_human`] — the federated path. An assertion already
 //!   authenticated out-of-band (SAML/HMAC, no JWT) ⇒ resolved-or-JIT'd profile.
 //! - [`require_system_access`] — Level 2, consuming proof of Level 1.
@@ -1044,23 +1044,45 @@ mod tests {
         assert_eq!(authed.profile.id, expected);
     }
 
-    /// The narrowing must not become a door: a machine token that authenticates fine on the
-    /// login path must not reach a profile through the lookup-only path either.
+    /// The narrowing must not become a door: a machine on the lookup-only path takes the machine
+    /// resolver, which only looks a registration up. A registered machine reaches its own agent
+    /// profile (the Slack callback then refuses it as a machine, at classification) and an
+    /// unregistered one is refused; neither creates a profile.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn lookup_only_token_path_refuses_a_registered_machine(pool: PgPool) {
-        register_machine(&pool, "lookup-only-client").await;
+    async fn lookup_only_token_path_resolves_a_machine_without_provisioning(pool: PgPool) {
+        let registered = register_machine(&pool, "lookup-only-client").await;
+        let count = || async {
+            sqlx::query_scalar!("SELECT count(*) FROM kb_profiles")
+                .fetch_one(&pool)
+                .await
+                .expect("count")
+        };
+        let before = count().await;
 
-        let err = authenticate_token_existing_only(
+        let authed = authenticate_token_existing_only(
             &state(pool.clone()),
             &machine_raw("lookup-only-client"),
             "tok",
         )
         .await
-        .expect_err("a machine must not resolve a human profile via the lookup-only path");
+        .expect("a registered machine resolves to its registration's profile");
+        assert_eq!(authed.profile.id, registered);
 
+        let err = authenticate_token_existing_only(
+            &state(pool.clone()),
+            &machine_raw("lookup-only-stranger"),
+            "tok",
+        )
+        .await
+        .expect_err("an unregistered machine is refused, never provisioned");
         assert!(
-            matches!(err, AuthzError::ProfileResolution(ApiError::Unauthorized(ref m)) if m.contains("machine-shaped")),
-            "expected a machine-shaped refusal, got {err:?}"
+            !matches!(err, AuthzError::Refused(why) if why == NO_EXISTING_PROFILE),
+            "an unregistered machine gets the machine refusal, not the human one: {err:?}"
+        );
+        assert_eq!(
+            count().await,
+            before,
+            "the lookup-only path created a profile"
         );
     }
 
