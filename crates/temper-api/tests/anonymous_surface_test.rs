@@ -1318,11 +1318,7 @@ async fn a_slow_signed_body_holds_every_door_alike_while_keys_hang(pool: PgPool)
     for (path, _, line) in [&bearer, &bare] {
         assert_eq!(line, "HTTP/1.1 401 Unauthorized", "{path}");
     }
-    let apart = if bearer.1 > bare.1 {
-        bearer.1 - bare.1
-    } else {
-        bare.1 - bearer.1
-    };
+    let apart = bearer.1.abs_diff(bare.1);
     assert!(
         apart < std::time::Duration::from_millis(1500),
         "bearer door {:?} against a door with no bearer {:?}",
