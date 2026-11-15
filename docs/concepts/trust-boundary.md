@@ -118,7 +118,12 @@ The public routes are:
   instance with no Slack linking configured) with one page, so its page does not say how the
   instance is configured (its timing can; see the residues);
 - the discovery and OAuth doors the Node and MCP functions serve: `/.well-known/*`, `/oauth/*`,
-  `/mcp`;
+  `/mcp` and `/mcp/*`. On the Vercel deployment each of those functions is also reachable at its
+  own path under `/api/` (`/api/oauth/*`, `/api/auth/cli-callback`, `/api/auth/mcp-callback`,
+  `/api/mcp`), because `vercel.json` serves the function files before its rewrites. These
+  functions answer for themselves, not with this page's refusal: the MCP function answers a path
+  it does not serve under its prefixes with its own `404`, so a caller can tell those prefixes are
+  MCP's. Their answers are outside what this page holds the API to;
 - the API reference under `/api-docs/`, only when an operator enables it, so whether it answers
   says whether it is enabled.
 
@@ -228,8 +233,8 @@ The residues, stated so nobody has to rediscover them:
 - **Timing between doors.** Outside the refresh, the work before a refusal differs by door (a
   signature is checked against its body, a bearer against a key), and no attempt is made to
   equalise that.
-- **The MCP surface** answers its own outage as `503`, not `401`; it is a different host, already
-  told apart by its discovery documents.
+- **The MCP surface** answers its own outage as `503`, not `401`. It is a different function,
+  reached at `/mcp`, and already told apart by its discovery documents.
 
 ## The error contract
 
