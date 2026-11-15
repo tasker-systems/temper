@@ -547,8 +547,11 @@ async fn send_owned(
     send(app, method, path, &borrowed).await
 }
 
+/// Request headers owned by the request list.
+type Headers = Vec<(&'static str, String)>;
+
 /// The anonymous requests every gate kind refuses, with the credential each might present.
-fn refused_requests() -> Vec<(Method, String, Vec<(&'static str, String)>)> {
+fn refused_requests() -> Vec<(Method, String, Headers)> {
     let id = Uuid::new_v4();
     let mut out = Vec::new();
     for bearer in unverified_bearers() {
