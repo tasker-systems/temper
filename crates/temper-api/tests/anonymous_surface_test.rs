@@ -686,8 +686,17 @@ async fn a_failing_key_store_makes_every_refusal_unavailable(pool: PgPool) {
     let health = send(&app, Method::GET, "/api/health", &[]).await;
     assert_eq!(health.status, 200, "{health:?}");
 
-    // The raw shapes, and HEAD: the same unavailable answer, with no body.
+    // The raw shapes, and HEAD: the same unavailable answer, with no body. A refusal here waits
+    // on the store's refresh, and hyper closes a connection whose request body was still unread
+    // when the answer went out. That is framing, decided by the body's size and the wait (which
+    // every door shares), not by the path, so it is left out of the comparison for the large
+    // bodies only.
     let mut answers = raw_refusals(&app).await;
+    for (what, answer) in &mut answers {
+        if what.starts_with("70 KiB") {
+            answer.headers.remove("connection");
+        }
+    }
     let head = send(&app, Method::HEAD, "/api/profile", &[]).await;
     assert_eq!(head.body, "", "HEAD carries no body");
     assert_eq!(
@@ -865,52 +874,60 @@ async fn an_internal_app_no_bearer_reaches_still_reports_the_outage(pool: PgPool
     assert_refusals(&answers, &unavailable());
 }
 
-// FAILS IF: a JWKS endpoint that accepts and never answers holds a refusal for the fetch: a door
-// without a bearer while the refresh it poked is in flight, or a bearer request once the store is
-// failing. Either delay is a timing a prober could tell apart from the instant refusal.
+// FAILS IF: a JWKS endpoint that accepts and never answers holds a refusal for longer than the
+// bounded wait, or holds a bearer refusal differently from one with no bearer: before the store
+// has failed, and again once it is failing and a fresh fetch (past the backoff) hangs. A bearer
+// that waited out the fetch's own timeout would take five seconds where every other door takes
+// one, a timing a prober could read.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_hanging_key_endpoint_never_holds_a_refusal(pool: PgPool) {
+async fn a_hanging_key_endpoint_holds_every_refusal_alike(pool: PgPool) {
     let mode = std::sync::Arc::new(std::sync::Mutex::new(KeyEndpoint::Hang));
     let app = app_with_key_endpoint(&pool, key_endpoint(mode).await).await;
-    let bound = std::time::Duration::from_millis(500);
+    let wait = temper_services::state::JwksKeyStore::REFRESH_WAIT;
 
-    // A door without a bearer pokes the store and is answered without waiting on that refresh.
-    let started = std::time::Instant::now();
-    let first = send(&app, Method::GET, "/api/profile", &[]).await;
-    assert!(started.elapsed() < bound, "held {:?}", started.elapsed());
-    assert_eq!(without_cors(&first), u401(), "nothing has failed yet");
-    let started = std::time::Instant::now();
-    let during = signed_refusal(&app, "/internal/slack/mint").await;
-    assert!(
-        started.elapsed() < bound,
-        "held behind the hanging refresh: {:?}",
-        started.elapsed()
-    );
-    assert_eq!(without_cors(&during), u401());
+    async fn timed(
+        app: &common::TestApp,
+        headers: &[(&str, &str)],
+    ) -> (std::time::Duration, Answer) {
+        let started = std::time::Instant::now();
+        let answer = send(app, Method::GET, "/api/profile", headers).await;
+        (started.elapsed(), answer)
+    }
+    let check = |what: &str, held: std::time::Duration, answer: &Answer, expected: &Answer| {
+        assert!(
+            held < wait * 2,
+            "{what}: held {held:?}, past the bounded wait"
+        );
+        assert_eq!(&without_cors(answer), expected, "{what}");
+    };
 
-    // The background fetch runs into the client timeout, and the store is failing.
+    // Before anything has failed: both join the hanging refresh for the bounded wait at most.
+    let (held, answer) = timed(&app, &[]).await;
+    check("no bearer, refresh hanging", held, &answer, &u401());
+    let (held, answer) = timed(&app, &[("authorization", "Bearer garbage")]).await;
+    check("bearer, refresh hanging", held, &answer, &u401());
+
+    // The fetch runs into the client timeout, and the store is failing.
     until_answered(&unavailable(), std::time::Duration::from_secs(15), || {
         send(&app, Method::GET, "/api/profile", &[])
     })
     .await;
-
-    // From then on a bearer is answered at once too, though its refresh would hang.
-    for _ in 0..3 {
-        let started = std::time::Instant::now();
-        let answer = send(
-            &app,
-            Method::GET,
-            "/api/profile",
-            &[("authorization", "Bearer garbage")],
-        )
-        .await;
-        assert!(
-            started.elapsed() < bound,
-            "a bearer refusal waited for the fetch: {:?}",
-            started.elapsed()
-        );
-        assert_eq!(without_cors(&answer), unavailable());
-    }
+    // Past the failed-refresh backoff, the next refusal starts a fresh fetch, which hangs too.
+    tokio::time::sleep(std::time::Duration::from_millis(5500)).await;
+    let (bearer, answer) = timed(&app, &[("authorization", "Bearer garbage")]).await;
+    check(
+        "bearer, failing, fetch hanging",
+        bearer,
+        &answer,
+        &unavailable(),
+    );
+    let (bare, answer) = timed(&app, &[]).await;
+    check(
+        "no bearer, failing, fetch hanging",
+        bare,
+        &answer,
+        &unavailable(),
+    );
 }
 
 // FAILS IF: a failing store recovers only when a bearer drives a refresh: with no bearer traffic
