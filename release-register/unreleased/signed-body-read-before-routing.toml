@@ -1,0 +1,27 @@
+title    = "A request carrying the signature headers has its body read before routing, on every path"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "internal"]
+status   = "signal-only"
+body = '''
+What changed: a request carrying all three X-Temper-* signature headers (X-Temper-Timestamp,
+X-Temper-Nonce, X-Temper-Signature-V2) now has its body read into memory, up to 64 KiB, before
+routing, on every path, and the router sees that buffered body. Before, only the signature doors
+read it, so a request declaring a body it never sent stalled only at a door, and
+Expect: 100-continue drew 100 Continue only at a door. Now both happen alike on every path for the
+same request.
+
+A signed request whose body is over 64 KiB (by declared length or as read), cannot be read, or is
+not all in within 10 seconds of its headers is answered the uniform pre-identity 401 on every path.
+That includes public routes such as /api/health, unmatched paths (otherwise 404), routes that
+accept larger bodies, and requests whose Content-Encoding would otherwise be a 415. So a request
+carrying those three headers cannot send more than 64 KiB to any path. A declared length over the
+cap is refused before any 100 Continue. The cause is logged as hmac_body on the "auth error" line
+with the request id. The 64 KiB cap moved to temper_core::internal_sig::MAX_BODY_BYTES, which both
+reads use. It counts the bytes on the wire; a signature door checks the decompressed body against
+the same limit.
+
+Unchanged: a request without all three signature headers is not read early, and its answers are
+unchanged. A validly signed request reaches its door's handler with the same body, declared or
+chunked, with or without Expect: 100-continue.
+'''

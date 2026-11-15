@@ -1131,3 +1131,430 @@ async fn the_recovering_request_answers_unavailable_on_a_bearer_door(pool: PgPoo
     .await;
     assert_eq!(without_cors(&next), u401(), "after recovery");
 }
+
+// ---- The signed-body equaliser: a signed request's body is read alike on every path -------------
+
+/// The representative paths that are not public. A public route answers by its own rules, and an
+/// unmatched one is still the 404 fallback until the declared fallback lands, so the unsigned arms
+/// below assert timing on every path and the status only where a gate refuses.
+fn non_public_paths() -> Vec<String> {
+    representative_paths()
+        .into_iter()
+        .filter(|p| p != "/api/health" && p != "/api/auth/slack/callback")
+        .collect()
+}
+
+fn is_unmatched(path: &str) -> bool {
+    path.ends_with("/no-such")
+}
+
+/// The three signature headers as raw request lines, valid in shape and not verifying.
+fn signature_lines() -> String {
+    bad_signature()
+        .into_iter()
+        .map(|(n, v)| format!("{n}: {v}\r\n"))
+        .collect()
+}
+
+/// Each way to send two of the three signature headers: not a signed request, so never read early.
+fn two_of_three_lines() -> Vec<String> {
+    (0..3)
+        .map(|missing| {
+            bad_signature()
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| *i != missing)
+                .map(|(_, (n, v))| format!("{n}: {v}\r\n"))
+                .collect()
+        })
+        .collect()
+}
+
+/// How long an answer that is not waiting on a body may take. Generous: every refusal passes the
+/// key store's refresh check, and a loaded runner is slow.
+const AT_ONCE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How long a waiting request is watched before it is called waiting.
+const WAITING: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Send a raw request and read until the server closes, reading concurrently with the write so an
+/// early answer is never lost to a reset when the server closes on unread bytes.
+async fn raw_exchange(app: &common::TestApp, head: String, body: Vec<u8>) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let stream = tokio::net::TcpStream::connect(app.addr)
+        .await
+        .expect("connect");
+    let (mut read, mut write) = stream.into_split();
+    let reader = tokio::spawn(async move {
+        let mut raw = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), read.read(&mut buf)).await
+            {
+                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                Ok(Ok(n)) => raw.extend_from_slice(&buf[..n]),
+            }
+        }
+        raw
+    });
+    let _ = write.write_all(head.as_bytes()).await;
+    let _ = write.write_all(&body).await;
+    String::from_utf8_lossy(&reader.await.expect("reader")).into_owned()
+}
+
+// FAILS IF: a signed request's body is read on some paths and not others. A declared body that
+// never arrives would then stall only where a signature gate reads it, which names the doors.
+// Unsigned, or with only two of the three headers, nothing reads it before refusing, so every path
+// answers at once.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn signed_requests_wait_alike(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    for path in representative_paths() {
+        let signed = format!(
+            "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{}\r\n",
+            signature_lines()
+        );
+        assert_eq!(
+            first_status_line(&app, &signed, WAITING).await,
+            None,
+            "{path}: a signed request with a declared body must wait for it"
+        );
+        let shapes = std::iter::once(("unsigned".to_string(), String::new())).chain(
+            two_of_three_lines()
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| (format!("two of three, missing #{i}"), l)),
+        );
+        for (what, lines) in shapes {
+            let head =
+                format!("POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{lines}\r\n");
+            let line = first_status_line(&app, &head, AT_ONCE).await;
+            assert!(line.is_some(), "{path} {what}: must answer at once");
+            if non_public_paths().contains(&path) && !is_unmatched(&path) {
+                assert_eq!(
+                    line.as_deref(),
+                    Some("HTTP/1.1 401 Unauthorized"),
+                    "{path} {what}"
+                );
+            }
+        }
+    }
+}
+
+// FAILS IF: a signed body that never arrives is waited on forever, or the deadline answers with
+// anything but the uniform refusal. Without it, a caller dripping a signed body holds a connection
+// on every path for as long as it likes.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_signed_body_that_never_arrives_is_refused_at_the_deadline(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    let probe = |path: &'static str| {
+        let app = &app;
+        async move {
+            let head = format!(
+                "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: 1000\r\n{}\r\n",
+                signature_lines()
+            );
+            let line = first_status_line(app, &head, std::time::Duration::from_secs(15)).await;
+            (path, line)
+        }
+    };
+    let answers = tokio::join!(
+        probe("/api/profile"),
+        probe("/internal/saml/reconcile"),
+        probe("/api/health")
+    );
+    for (path, line) in [answers.0, answers.1, answers.2] {
+        assert_eq!(line.as_deref(), Some("HTTP/1.1 401 Unauthorized"), "{path}");
+    }
+}
+
+// FAILS IF: a slow signed body, sent while the key endpoint hangs, is answered later on a door
+// that looks a bearer up than on one that does not. Each refusal waits on the store's refresh; if
+// the outer service counted that wait from arrival while the bearer lookup counted it from the
+// lookup, which comes after the body, the bearer doors would answer a body's delay later.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_slow_signed_body_holds_every_door_alike_while_keys_hang(pool: PgPool) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mode = std::sync::Arc::new(std::sync::Mutex::new(KeyEndpoint::Hang));
+    let app = app_with_key_endpoint(&pool, key_endpoint(mode).await).await;
+    let delay = std::time::Duration::from_secs(3);
+    let timed = |path: &'static str, bearer: bool| {
+        let app = &app;
+        async move {
+            let auth = if bearer {
+                "authorization: Bearer garbage\r\n"
+            } else {
+                ""
+            };
+            let head = format!(
+                "POST {path} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\
+                 content-length: 2\r\n{auth}{}\r\n",
+                signature_lines()
+            );
+            let started = std::time::Instant::now();
+            let mut stream = tokio::net::TcpStream::connect(app.addr)
+                .await
+                .expect("connect");
+            stream.write_all(head.as_bytes()).await.expect("head");
+            tokio::time::sleep(delay).await;
+            stream.write_all(b"{}").await.expect("body");
+            let mut buf = [0u8; 64];
+            let n = tokio::time::timeout(std::time::Duration::from_secs(20), stream.read(&mut buf))
+                .await
+                .expect("answered")
+                .expect("read");
+            let line = String::from_utf8_lossy(&buf[..n])
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            (path, started.elapsed(), line)
+        }
+    };
+    let (bearer, bare) = tokio::join!(
+        timed("/api/profile", true),
+        timed("/internal/saml/reconcile", false)
+    );
+    for (path, _, line) in [&bearer, &bare] {
+        assert_eq!(line, "HTTP/1.1 401 Unauthorized", "{path}");
+    }
+    let apart = bearer.1.abs_diff(bare.1);
+    assert!(
+        apart < std::time::Duration::from_millis(1500),
+        "bearer door {:?} against a door with no bearer {:?}",
+        bearer.1,
+        bare.1
+    );
+}
+
+// FAILS IF: `Expect: 100-continue` on a signed request draws `100 Continue` on some paths and the
+// refusal on others: the first line would name the paths whose gate reads the body. A declared
+// length over the cap is refused before any `100`, on every path.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn signed_expect_continue_is_uniform(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    let wait = std::time::Duration::from_millis(1500);
+    for (length, expected) in [
+        (10, "HTTP/1.1 100 Continue"),
+        (70 * 1024, "HTTP/1.1 401 Unauthorized"),
+    ] {
+        for path in representative_paths() {
+            let head = format!(
+                "POST {path} HTTP/1.1\r\nhost: x\r\ncontent-length: {length}\r\n\
+                 expect: 100-continue\r\n{}\r\n",
+                signature_lines()
+            );
+            assert_eq!(
+                first_status_line(&app, &head, wait).await.as_deref(),
+                Some(expected),
+                "{path}, content-length {length}"
+            );
+        }
+    }
+}
+
+// FAILS IF: a signed body over the cap is refused only where a gate reads it, or with anything but
+// the uniform 401, or a public route lets it through; declared, chunked, or with an `Origin`, whose
+// CORS headers must be those a routed refusal carries for the same origin.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_70_kib_signed_body_is_u401_everywhere(pool: PgPool) {
+    let app = allowlisted_app(&pool).await;
+    let body = "x".repeat(70 * 1024);
+    for origin in [None, Some(ORIGIN), Some("https://foreign.example")] {
+        let mut answers = Vec::new();
+        let routed = {
+            let mut headers = Vec::new();
+            if let Some(origin) = origin {
+                headers.push(("origin", origin.to_string()));
+            }
+            send_owned(&app, Method::POST, "/api/profile", &headers).await
+        };
+        for path in representative_paths() {
+            let mut declared = app.client.post(app.url(&path)).body(body.clone());
+            for (n, v) in bad_signature() {
+                declared = declared.header(n, v);
+            }
+            if let Some(origin) = origin {
+                declared = declared.header("origin", origin);
+            }
+            let answer = answer_of(declared.send().await.expect("sent")).await;
+            assert_eq!(
+                cors_headers(&answer),
+                cors_headers(&routed),
+                "{path} {origin:?}: the CORS headers of a routed refusal"
+            );
+            answers.push((format!("{path} {origin:?}"), answer));
+        }
+        // Refused on its declared length, so its body is never read and the connection closes:
+        // framed alike on every path, then left out of the comparison with the constant.
+        assert_connection_alike_then_drop(&mut answers);
+        assert_refusals(&answers, &u401());
+    }
+
+    for path in representative_paths() {
+        // Chunked: no declared length, so the cap is met while reading.
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\
+             transfer-encoding: chunked\r\n{}\r\n{:x}\r\n",
+            signature_lines(),
+            body.len()
+        );
+        let mut chunk = body.clone().into_bytes();
+        chunk.extend_from_slice(b"\r\n0\r\n\r\n");
+        let raw = raw_exchange(&app, head, chunk).await;
+        assert!(
+            raw.starts_with("HTTP/1.1 401 Unauthorized"),
+            "{path} chunked: {raw}"
+        );
+        assert!(raw.ends_with(&u401().body), "{path} chunked: {raw}");
+    }
+}
+
+// FAILS IF: an oversize signed request, refused before routing, is not swapped to "unavailable"
+// while the key store is failing, as every other pre-identity refusal is.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_oversize_signed_body_is_unavailable_while_the_store_fails(pool: PgPool) {
+    let app = common::setup_test_app_with_state(pool.clone(), |state| {
+        state.jwks_store = std::sync::Arc::new(temper_services::state::JwksKeyStore::new(
+            "http://127.0.0.1:1/.well-known/jwks.json".to_string(),
+        ));
+    })
+    .await;
+    let primed = send(
+        &app,
+        Method::GET,
+        "/api/profile",
+        &[("authorization", "Bearer garbage")],
+    )
+    .await;
+    let mut answers = Vec::new();
+    for path in ["/api/profile", "/internal/saml/reconcile", "/api/health"] {
+        let mut request = app.client.post(app.url(path)).body("x".repeat(70 * 1024));
+        for (n, v) in bad_signature() {
+            request = request.header(n, v);
+        }
+        answers.push((
+            path.to_string(),
+            answer_of(request.send().await.expect("sent")).await,
+        ));
+    }
+    assert_connection_alike_then_drop(&mut answers);
+    answers.push(("the priming request".to_string(), primed));
+    assert_refusals(&answers, &unavailable());
+}
+
+/// A refusal that leaves a body unread closes its connection. That framing must be the same on
+/// every path in `answers`; it is then removed so the rest compares with the small-body constant.
+fn assert_connection_alike_then_drop(answers: &mut [(String, Answer)]) {
+    let framing: Vec<_> = answers
+        .iter()
+        .map(|(what, a)| (what.clone(), a.header("connection").map(str::to_owned)))
+        .collect();
+    assert!(
+        framing.windows(2).all(|w| w[0].1 == w[1].1),
+        "framed alike on every path: {framing:?}"
+    );
+    for (_, answer) in answers.iter_mut() {
+        answer.headers.remove("connection");
+    }
+}
+
+/// A resolve request signed with the test app's reconcile secret.
+fn signed_resolve() -> (String, Vec<(&'static str, String)>) {
+    let body = format!(
+        r#"{{"external_user_id":"eq-{}","email":"eq@example.test","email_verified":true}}"#,
+        Uuid::new_v4().simple()
+    );
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let nonce = Uuid::new_v4().simple().to_string();
+    let signature = temper_core::internal_sig::sign_v2(
+        b"reconcile-secret",
+        "POST",
+        temper_core::internal_sig::DOOR_PRINCIPAL_RESOLVE,
+        now,
+        &nonce,
+        body.as_bytes(),
+    );
+    let headers = vec![
+        (temper_core::internal_sig::TIMESTAMP_HEADER, now.to_string()),
+        (temper_core::internal_sig::NONCE_HEADER, nonce),
+        (temper_core::internal_sig::SIGNATURE_V2_HEADER, signature),
+        ("content-type", "application/json".to_string()),
+    ];
+    (body, headers)
+}
+
+// FAILS IF: the equaliser loses or alters a signed body on its way to the gate, declared or
+// chunked, or an admitted caller that asks to continue is not continued. Any of these breaks every
+// real signer.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_signed_request_reaches_its_handler_with_and_without_expect(pool: PgPool) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let app = allowlisted_app(&pool).await;
+
+    let (body, headers) = signed_resolve();
+    let mut request = app
+        .client
+        .post(app.url("/internal/principal/resolve"))
+        .body(body);
+    for (n, v) in headers {
+        request = request.header(n, v);
+    }
+    let answer = answer_of(request.send().await.expect("sent")).await;
+    assert_eq!(answer.status, 200, "{answer:?}");
+    assert!(answer.body.contains("profile_id"), "{answer:?}");
+
+    let (body, headers) = signed_resolve();
+    let lines: String = headers
+        .iter()
+        .map(|(n, v)| format!("{n}: {v}\r\n"))
+        .collect();
+    let head = format!(
+        "POST /internal/principal/resolve HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\
+         transfer-encoding: chunked\r\n{lines}\r\n"
+    );
+    let chunked = format!("{:x}\r\n{body}\r\n0\r\n\r\n", body.len()).into_bytes();
+    let raw = raw_exchange(&app, head, chunked).await;
+    assert!(raw.contains("HTTP/1.1 200 OK"), "chunked: {raw}");
+    assert!(raw.contains("profile_id"), "chunked: {raw}");
+
+    let (body, headers) = signed_resolve();
+    let lines: String = headers
+        .iter()
+        .map(|(n, v)| format!("{n}: {v}\r\n"))
+        .collect();
+    let head = format!(
+        "POST /internal/principal/resolve HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\
+         content-length: {}\r\nexpect: 100-continue\r\n{lines}\r\n",
+        body.len()
+    );
+    let mut stream = tokio::net::TcpStream::connect(app.addr)
+        .await
+        .expect("connect");
+    stream.write_all(head.as_bytes()).await.expect("write head");
+    let mut buf = vec![0u8; 64];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+        .await
+        .expect("continued in time")
+        .expect("read");
+    assert!(
+        String::from_utf8_lossy(&buf[..n]).starts_with("HTTP/1.1 100 Continue"),
+        "{:?}",
+        String::from_utf8_lossy(&buf[..n])
+    );
+    stream.write_all(body.as_bytes()).await.expect("write body");
+    let mut rest = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        stream.read_to_end(&mut rest),
+    )
+    .await
+    .expect("answered in time")
+    .expect("read");
+    let rest = String::from_utf8_lossy(&rest);
+    assert!(rest.contains("HTTP/1.1 200 OK"), "{rest}");
+    assert!(rest.contains("profile_id"), "{rest}");
+}
