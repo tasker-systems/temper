@@ -998,6 +998,38 @@ derive_contract partial partial-moved '.components.schemas.Foo.properties.y.type
 out="$(compat_check partial partial partial-moved)"; rc=$?
 expect_charged "COMPAT-1: a ref into the middle of a component leaves the rest judged as unreached" "$out" "$rc" "component schemas/Foo"
 
+# A $ref'd parameter's non-prose siblings are ignored (OAS Reference Object), as a generator
+# ignores them: a sibling restating the released schema cannot hide a narrowed target.
+derive_contract release q-param '.paths."/items/{id}".get.parameters += [{"$ref":"#/components/parameters/Q"}]
+  | .components.parameters = {"Q":{"in":"query","name":"q","schema":{"type":"string","enum":["a","b"]}}}'
+derive_contract q-param q-masked '.components.parameters.Q.schema.enum = ["a"]
+  | .paths."/items/{id}".get.parameters[-1].schema = {"type":"string","enum":["a","b"]}'
+out="$(compat_check q-param q-param q-masked)"; rc=$?
+expect_charged "COMPAT-1: a sibling beside a \$ref'd parameter cannot mask its narrowed target" "$out" "$rc" "op GET /items/{}"
+
+# A chain of refs landing on one location, where one carries non-prose siblings, gives each
+# enclosing node its own cycle marker: re-pointing B.next from A to B is a different contract.
+derive_contract release chain '.paths."/chain" = {"get":{"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CA"}}}}}}}
+  | .components.schemas.CA = {"$ref":"#/components/schemas/CB","properties":{"tag":{"type":"string","enum":["a"]}}}
+  | .components.schemas.CB = {"type":"object","properties":{"next":{"$ref":"#/components/schemas/CA"}}}'
+derive_contract chain chain-moved '.components.schemas.CB.properties.next."$ref" = "#/components/schemas/CB"'
+out="$(compat_check chain chain chain-moved)"; rc=$?
+expect_charged "COMPAT-1: a cycle through a sibling-carrying \$ref chain keeps distinct markers" "$out" "$rc" "op GET /chain"
+
+# `required` written out wherever it is a boolean: a callback parameter, a request body and an
+# unreached parameter component that gain it are judged, never a comparator crash.
+derive_contract cb cb-param '.paths."/items".post.callbacks.done."{$request.body#/url}".post.parameters = [{"in":"header","name":"X-Sig","schema":{"type":"string"}}]'
+derive_contract cb-param cb-param-req '.paths."/items".post.callbacks.done."{$request.body#/url}".post.parameters[0].required = true'
+out="$(compat_check cb-param cb-param cb-param-req)"; rc=$?
+expect_charged "COMPAT-1: a callback parameter gaining required is judged, not a crash" "$out" "$rc" "op POST /items"
+derive_contract release rb-req '.paths."/items".post.requestBody.required = true'
+out="$(compat_check release release rb-req)"; rc=$?
+expect_charged "COMPAT-1: a request body gaining required is judged, not a crash" "$out" "$rc" "op POST /items"
+derive_contract release lone-param '.components.parameters = {"L":{"in":"query","name":"l","schema":{"type":"string"}}}'
+derive_contract lone-param lone-param-req '.components.parameters.L.required = true'
+out="$(compat_check lone-param lone-param lone-param-req)"; rc=$?
+expect_charged "COMPAT-1: an unreached parameter component gaining required is judged, not a crash" "$out" "$rc" "component parameters/L"
+
 # example/examples beside a $ref are prose, as broke_node reads them.
 derive_contract release ex '.paths."/items/{id}".get.responses."200".content."application/json".schema.examples = [{"id":"z"}]'
 out="$(compat_check release release ex)"; rc=$?

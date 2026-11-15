@@ -115,6 +115,11 @@ class Resolver:
         ref = node.get("$ref")
         if isinstance(ref, str) and ref.startswith("#"):
             siblings = {k: v for k, v in node.items() if k != "$ref"}
+            # With non-prose siblings the target sits at allOf/0 of the form built here (see
+            # overlay), so it is entered there: a chain of refs that all land on one location
+            # must not give two different enclosing nodes one cycle marker.
+            wrapped = bool(siblings) and not all(k in PROSE for k in siblings)
+            t_at, s_at = (f"{at}/allOf/0", f"{at}/allOf/1") if wrapped else (at, at)
             entered = dict(stack)
             if ref in entered:
                 target: Any = {"$cycle": entered[ref] or "/"}
@@ -122,8 +127,8 @@ class Resolver:
                 comp = component_of(ref)
                 if comp:
                     self.touched.add(comp)
-                target = self.resolve(pointer_get(self.doc, ref), (*stack, (ref, at)), at)
-            return self.overlay(target, self.resolve(siblings, stack, at))
+                target = self.resolve(pointer_get(self.doc, ref), (*stack, (ref, t_at)), t_at)
+            return self.overlay(target, self.resolve(siblings, stack, s_at))
         out = {k: self.resolve(v, stack, f"{at}/{k}") for k, v in node.items()}
         if isinstance(out.get("discriminator"), dict):
             out["discriminator"] = self.discriminator(node, out["discriminator"], stack, at)
@@ -158,15 +163,22 @@ class Resolver:
         return {**resolved, "mapping": mapping}
 
     def path_item(self, raw: dict) -> dict:
-        """A path item, its own `$ref` resolved. Its siblings (summary, description, and in 3.1
-        anything else) overlay the target: a path item is a map of operations, never a schema, so
-        an `allOf` wrapper would make its operations vanish."""
+        """A path item, its own `$ref` resolved. Its siblings overlay the target: a path item is a
+        map of operations, never a schema, so an `allOf` wrapper would make its operations
+        vanish. A non-prose field defined on both sides is refused."""
         if "$ref" not in raw:
             return raw
         target = pointer_get(self.doc, raw["$ref"])
         if not isinstance(target, dict):
             raise Unresolvable(f"path item $ref {raw['$ref']} is not an object")
+        comp = component_of(raw["$ref"])
+        if comp:
+            self.touched.add(comp)
         siblings = {k: v for k, v in raw.items() if k != "$ref"}
+        # A field in both is undefined behaviour (OAS 3.1, Path Item Object): refuse to guess.
+        clash = sorted(k for k in siblings if k in target and k not in PROSE)
+        if clash:
+            raise Unresolvable(f"path item $ref {raw['$ref']} and its siblings both define {clash}")
         return self.path_item({**target, **siblings})
 
 
@@ -176,16 +188,20 @@ def erase(template: str) -> str:
 
 def as_parameter(p: Any) -> dict:
     """A resolved parameter, with its identity. A `$ref`'d parameter with non-prose siblings
-    resolves to `allOf: [target, siblings]`; a parameter is no schema, so the siblings overlay
-    it instead. A parameter with no `in`+`name` cannot be told apart from another: refuse."""
+    resolves to `allOf: [target, siblings]`; a parameter is no schema, and OAS (3.0 and 3.1,
+    Reference Object) has a Reference Object's other siblings ignored, so the target stands with
+    only its prose siblings, as a generator reads it. A sibling can never re-key or re-shape the
+    parameter. A parameter with no `in`+`name` cannot be told apart from another: refuse."""
     if (
         isinstance(p, dict)
         and set(p) == {"allOf"}
         and len(p["allOf"]) == 2
         and isinstance(p["allOf"][0], dict)
         and "in" in p["allOf"][0]
+        and isinstance(p["allOf"][1], dict)
     ):
-        p = {**p["allOf"][0], **p["allOf"][1]}
+        prose = {k: v for k, v in p["allOf"][1].items() if k in PROSE}
+        p = {**p["allOf"][0], **prose}
     if not (
         isinstance(p, dict) and isinstance(p.get("in"), str) and isinstance(p.get("name"), str)
     ):
@@ -207,6 +223,35 @@ def parameter_list(resolved: list, where: str) -> list[dict]:
         seen.add(key)
         out.append(p)
     return out
+
+
+def with_required(x: Any) -> Any:
+    """`required` defaults to false on a request body and a header (OAS 3.1), as on a parameter:
+    written out, so one that gains it compares as a boolean instead of crashing broke_node."""
+    return {"required": False, **x} if isinstance(x, dict) else x
+
+
+def normalize_operation(form: dict, where: str) -> dict:
+    """The `required` defaults inside one resolved operation (parameters, request body, response
+    headers), and the same for every callback operation it declares, judged server-sent."""
+    if "parameters" in form:
+        form["parameters"] = parameter_list(form["parameters"] or [], where)
+    if isinstance(form.get("requestBody"), dict):
+        form["requestBody"] = with_required(form["requestBody"])
+    for response in (form.get("responses") or {}).values():
+        if isinstance(response, dict) and isinstance(response.get("headers"), dict):
+            response["headers"] = {k: with_required(h) for k, h in response["headers"].items()}
+    if isinstance(form.get("callbacks"), dict):
+        for name, cb in form["callbacks"].items():
+            if not isinstance(cb, dict):
+                continue
+            for expr, item in cb.items():
+                if not isinstance(item, dict):
+                    continue
+                for k, v in list(item.items()):
+                    if k in METHODS and isinstance(v, dict):
+                        item[k] = server_sent(normalize_operation(v, f"callback {name} {expr}"))
+    return form
 
 
 def server_sent(form: dict) -> dict:
@@ -257,22 +302,8 @@ def operation_form(
         "openapi": doc.get("openapi"),
         "jsonSchemaDialect": doc.get("jsonSchemaDialect"),
     }
-    # Callbacks are server-sent operations wherever they appear.
-    if isinstance(form.get("callbacks"), dict):
-        form["callbacks"] = {
-            name: {
-                expr: {
-                    k: server_sent(v) if k in METHODS and isinstance(v, dict) else v
-                    for k, v in (item_ or {}).items()
-                }
-                if isinstance(item_, dict)
-                else item_
-                for expr, item_ in (cb or {}).items()
-            }
-            if isinstance(cb, dict)
-            else cb
-            for name, cb in form["callbacks"].items()
-        }
+    # Request-body and header defaults, and callbacks (server-sent wherever they appear).
+    form = normalize_operation(form, where)
     return server_sent(form) if sent else form
 
 
@@ -310,6 +341,10 @@ def entry_points(doc: dict) -> dict[str, Any]:
             comp = f"{kind}/{name}"
             pointer = f"#/components/{kind}/{name.replace('~', '~0').replace('/', '~1')}"
             form = r.resolve({"$ref": pointer})
+            if kind == "parameters":
+                form = as_parameter(form)
+            elif kind in ("headers", "requestBodies"):
+                form = with_required(form)
             out[f"component {comp}"] = {"reached": comp in reached, "form": form}
     return out
 

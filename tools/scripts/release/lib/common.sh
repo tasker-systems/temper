@@ -366,8 +366,8 @@ surfaces_intersect() {
 #   * the remote lists no other release tag that <commit> contains and that is a descendant of
 #     it or a higher version; a listed tag whose commit this clone cannot place, or a remote whose tags
 #     cannot be listed, cannot show that, so it is a fallback too.
-# Otherwise LAST_RELEASE_IS_FALLBACK=true. LAST_RELEASE_REF is then the nearest tag if one was
-# found (the calculator's best guess at its window, flagged), else the root commit. A fallback
+# Otherwise LAST_RELEASE_IS_FALLBACK=true. LAST_RELEASE_REF is then the newest release-form
+# ancestor tag if one was found (the calculator's best guess at its window, flagged), else the root commit. A fallback
 # is NEVER a release: a consumer that needs one must not use LAST_RELEASE_REF when the flag is
 # true, and a consumer that cannot read the flag treats it as true.
 last_release() {
