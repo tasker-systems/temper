@@ -145,7 +145,13 @@ matters operationally:
 - `TransientError` → `ServerError`, `RateLimited` (with `retry_after`), `TransportError`.
   Let these escape a job; a retry is what fixes them.
 - `PermanentError` → `Unauthorized`, `Forbidden`, `SystemAccessRequired`, `NotFound`,
-  `Conflict`, `BadRequest`. Catch these and dead-letter them.
+  `Conflict`, `PreconditionFailed`, `BadRequest`. Catch these and dead-letter them.
+
+`PreconditionFailed` (412) is a guarded write (`expect`, `expect.body`, `If-Match`) that found
+the resource other than it expected; nothing was written. `failed` lists each expectation that did
+not hold, with `tier`, `key`, `expected` and `current` (`None`: absent now), and `precondition`
+returns the whole payload as a generated model. Re-read and decide rather than retry. A claim
+whose `current` equals the value you wrote is your own earlier attempt having landed, not a loss.
 
 `SystemAccessRequired.refusal` returns the typed refusal the server sent (`Denied`,
 `Revoked`, `IllegalTransition`, …) so a worker can tell "never granted" from "granted

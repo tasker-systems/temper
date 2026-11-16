@@ -72,6 +72,28 @@ module Temper
   class Conflict < PermanentError; end
   class BadRequest < PermanentError; end
 
+  # A guarded write (`expect`, `expect.body` or `If-Match`) found the resource other than it
+  # expected, so nothing was written. Permanent because the same request is refused again: the
+  # caller re-reads and decides. A claim whose `current` equals the value it wrote is the caller's
+  # own earlier attempt having landed, not a loss -- compare before treating it as one.
+  class PreconditionFailed < PermanentError
+    def initialize(message = nil, precondition: nil, **kwargs)
+      super(message, **kwargs)
+      @precondition_hash = precondition.is_a?(Hash) ? precondition : nil
+    end
+
+    # The refusal's `error.precondition` as a generated model, or `nil` when the server sent none.
+    def precondition
+      @precondition_hash && Temper::Generated::PreconditionFailure.build_from_hash(@precondition_hash)
+    end
+
+    # Every expectation that did not hold, each with `tier`, `key` (absent on a body entry),
+    # `expected` and `current` (`nil`: absent now). Empty when the server sent no payload.
+    def failed
+      precondition&.failed || []
+    end
+  end
+
   # Translates the generated core's one flat ApiError into the tree above.
   #
   # The split is load-bearing rather than decorative: a 409 classified transient
@@ -81,7 +103,7 @@ module Temper
     SYSTEM_ACCESS_REQUIRED = 'SYSTEM_ACCESS_REQUIRED'
 
     # 422 is declared on no operation but is what a serde rejection surfaces as.
-    # 403 and 429 are not here: each needs more than the status to classify.
+    # 403, 412 and 429 are not here: each needs more than the status to classify.
     STATUS_CLASSES = {
       400 => BadRequest,
       401 => Unauthorized,
@@ -94,7 +116,7 @@ module Temper
 
     def call(api_error)
       status = api_error.code
-      code, message, details = parse_envelope(api_error.response_body)
+      code, message, details, precondition = parse_envelope(api_error.response_body)
       # ApiError#message decorates itself with status/headers/body when it has
       # them. A transport failure has none, so this fallback stays clean.
       message ||= api_error.message
@@ -103,6 +125,7 @@ module Temper
       # A nil status means the generated ApiClient rescued a Faraday transport
       # failure (timeout / connection refused) and re-raised it code-less.
       return ConnectionError.new(message, **kwargs) if status.nil?
+      return PreconditionFailed.new(message, precondition: precondition, **kwargs) if status == 412
 
       build(status, message, code, kwargs, api_error)
     end
@@ -127,22 +150,23 @@ module Temper
       Forbidden.new(message, **kwargs)
     end
 
-    # The server speaks exactly one envelope: {"error":{code,message,details}}.
+    # The server speaks exactly one envelope: {"error":{code,message,details}}, plus
+    # `precondition` on a 412.
     # Anything else -- an HTML 502 from a proxy, an undeclared 500 -- degrades to
     # a raw body on #details rather than raising inside the error path.
     #
     # 422/429/500/503 are declared on NO operation, so those bodies are parsed
     # opportunistically and classified off the raw HTTP status.
     def parse_envelope(body)
-      return [nil, nil, nil] if body.nil? || body.to_s.empty?
+      return [nil, nil, nil, nil] if body.nil? || body.to_s.empty?
 
       parsed = JSON.parse(body.to_s)
       error = parsed.is_a?(Hash) ? parsed['error'] : nil
-      return [nil, nil, body] unless error.is_a?(Hash)
+      return [nil, nil, body, nil] unless error.is_a?(Hash)
 
-      [error['code'], error['message'], error['details']]
+      [error['code'], error['message'], error['details'], error['precondition']]
     rescue JSON::ParserError
-      [nil, nil, body]
+      [nil, nil, body, nil]
     end
 
     def retry_after_of(api_error)

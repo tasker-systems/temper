@@ -116,6 +116,13 @@ every approved person, so attaching one hands the parent's material to the whole
 watcher pool for a team is an auto-join watcher team attached **under** it
 (`temper admin team auto-join <team> watcher`).
 
+Temper recognises three pools: temper-system, the gating team, and auto-join teams. A team filled
+by an identity-provider group that covers every user (an "all employees" group mapped through
+`temper admin saml map-group`) reaches just as far, but Temper cannot tell that from the mapping,
+so attaching it, or opening a team to an anchor above it, is **not** an admin's act. Keeping such a
+group off any team that others can attach or open to is the operator's responsibility; see
+[Self-host with a SAML IdP](../playbooks/self-host-with-saml.md#map-idp-groups-to-temper-teams-and-roles).
+
 Every link and unlink is recorded on the admin ledger, readable by the parent's managers.
 
 ## Lifecycle: delete, restore, rename

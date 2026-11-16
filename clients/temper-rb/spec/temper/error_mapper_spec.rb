@@ -137,6 +137,43 @@ RSpec.describe Temper::ErrorMapper do
     expect(err).not_to be_a(Temper::PermanentError)
   end
 
+  # A 412 used to fall through to the bare Error: neither transient nor permanent, so a job runner
+  # rescuing PermanentError let a lost claim escape and retried it forever, and the payload naming
+  # who holds the claim was dropped with the envelope's unread `precondition` member.
+  describe 'a refused guarded write' do
+    def refused(precondition)
+      body = JSON.generate(error: { code: 'PRECONDITION_FAILED', message: 'precondition failed: open.claim_id',
+                                    precondition: precondition })
+      described_class.call(api_error(412, body))
+    end
+
+    it 'is a permanent PreconditionFailed' do
+      err = refused({ 'failed' => [] })
+      expect(err).to be_a(Temper::PreconditionFailed)
+      expect(err).to be_a(Temper::PermanentError)
+      expect(err.status).to eq(412)
+      expect(err.code).to eq('PRECONDITION_FAILED')
+    end
+
+    it 'carries every failed expectation with its current value' do
+      err = refused({ 'failed' => [
+                      { 'tier' => 'open', 'key' => 'claim_id', 'expected' => nil, 'current' => 'claim-a' },
+                      { 'tier' => 'body', 'expected' => 'bt1.old', 'current' => 'bt1.new' }
+                    ] })
+      expect(err.precondition).to be_a(Temper::Generated::PreconditionFailure)
+      expect(err.failed.map(&:key)).to eq(['claim_id', nil])
+      expect(err.failed.map(&:current)).to eq(%w[claim-a bt1.new])
+      expect(err.failed.first.expected).to be_nil
+    end
+
+    it 'is still PreconditionFailed, with nothing failed, when the server sent no payload' do
+      err = described_class.call(api_error(412, envelope('PRECONDITION_FAILED', 'precondition failed')))
+      expect(err).to be_a(Temper::PreconditionFailed)
+      expect(err.precondition).to be_nil
+      expect(err.failed).to eq([])
+    end
+  end
+
   it 'every Temper::Error carries status, code, message, details' do
     err = described_class.call(api_error(409, envelope('CONFLICT', 'dup', { 'id' => 'x' })))
     expect(err).to respond_to(:status, :code, :message, :details)

@@ -6,6 +6,8 @@ from temper import (
     Conflict,
     Forbidden,
     NotFound,
+    PermanentError,
+    PreconditionFailed,
     RateLimited,
     ServerError,
     SystemAccessRequired,
@@ -88,6 +90,45 @@ def test_a_403_with_no_refusal_payload_degrades_rather_than_raising():
     assert isinstance(error, SystemAccessRequired)
     assert error.refusal is None
     assert error.refusal_kind is None
+
+
+def _refused(precondition):
+    error = {"code": "PRECONDITION_FAILED", "message": "precondition failed: open.claim_id"}
+    if precondition is not None:
+        error["precondition"] = precondition
+    return map_error(api_error(412, __import__("json").dumps({"error": error})))
+
+
+# A 412 used to fall through to the bare TemperError, neither transient nor permanent, and the
+# payload naming who holds a claim was dropped with the envelope's unread `precondition` member.
+def test_a_412_is_a_permanent_precondition_failed():
+    error = _refused({"failed": []})
+    assert isinstance(error, PreconditionFailed)
+    assert isinstance(error, PermanentError)
+    assert error.status == 412
+    assert error.code == "PRECONDITION_FAILED"
+
+
+def test_a_412_carries_every_failed_expectation_with_its_current_value():
+    error = _refused(
+        {
+            "failed": [
+                {"tier": "open", "key": "claim_id", "expected": None, "current": "claim-a"},
+                {"tier": "body", "expected": "bt1.old", "current": "bt1.new"},
+            ]
+        }
+    )
+    assert error.precondition is not None
+    assert [f.key for f in error.failed] == ["claim_id", None]
+    assert [f.current for f in error.failed] == ["claim-a", "bt1.new"]
+    assert error.failed[0].expected is None
+
+
+def test_a_412_with_no_payload_is_still_precondition_failed_with_nothing_failed():
+    error = _refused(None)
+    assert isinstance(error, PreconditionFailed)
+    assert error.precondition is None
+    assert error.failed == []
 
 
 def test_a_429_carries_retry_after():

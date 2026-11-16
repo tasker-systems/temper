@@ -26,6 +26,8 @@ from typing import Any
 import urllib3.exceptions
 
 from temper.generated.exceptions import ApiException
+from temper.generated.models.failed_expectation import FailedExpectation
+from temper.generated.models.precondition_failure import PreconditionFailure
 from temper.generated.models.refusal import Refusal
 
 
@@ -142,10 +144,51 @@ class BadRequest(PermanentError):
     pass
 
 
+class PreconditionFailed(PermanentError):
+    """A guarded write (`expect`, `expect.body` or `If-Match`) found the resource other than it
+    expected, so nothing was written.
+
+    Permanent because the same request is refused again: the caller re-reads and decides. A claim
+    whose `current` equals the value it wrote is the caller's own earlier attempt having landed,
+    not a loss — compare before treating it as one.
+    """
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        precondition: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(message, **kwargs)
+        self._precondition = precondition if isinstance(precondition, dict) else None
+
+    @property
+    def precondition(self) -> PreconditionFailure | None:
+        """The refusal's `error.precondition` as a generated model.
+
+        `None` when the server sent none, or sent one this build cannot read (a tier added after
+        it was generated).
+        """
+        if self._precondition is None:
+            return None
+        try:
+            return PreconditionFailure.from_dict(self._precondition)
+        except ValueError:
+            return None
+
+    @property
+    def failed(self) -> list[FailedExpectation]:
+        """Every expectation that did not hold, each with `tier`, `key` (absent on a body entry),
+        `expected` and `current` (`None`: absent now). Empty when there is no readable payload."""
+        failure = self.precondition
+        return list(failure.failed) if failure is not None else []
+
+
 SYSTEM_ACCESS_REQUIRED = "SYSTEM_ACCESS_REQUIRED"
 
 # 422 is declared on no operation but is what a serde rejection surfaces as.
-# 403 and 429 are absent on purpose: each needs more than the status to classify.
+# 403, 412 and 429 are absent on purpose: each needs more than the status to classify.
 _STATUS_CLASSES: dict[int, type[TemperError]] = {
     400: BadRequest,
     401: Unauthorized,
@@ -155,8 +198,9 @@ _STATUS_CLASSES: dict[int, type[TemperError]] = {
 }
 
 
-def _parse_envelope(body: Any) -> tuple[str | None, str | None, Any]:
-    """The server speaks exactly one envelope: ``{"error":{code,message,details}}``.
+def _parse_envelope(body: Any) -> tuple[str | None, str | None, Any, Any]:
+    """The server speaks exactly one envelope: ``{"error":{code,message,details}}``, plus
+    ``precondition`` on a 412.
 
     Anything else — an HTML 502 from a proxy, an undeclared 500 — degrades to a raw
     body on `details` rather than raising inside the error path.
@@ -165,17 +209,17 @@ def _parse_envelope(body: Any) -> tuple[str | None, str | None, Any]:
     opportunistically and classified off the raw HTTP status.
     """
     if body is None or body == "":
-        return None, None, None
+        return None, None, None, None
     try:
         parsed = json.loads(body)
     except (ValueError, TypeError):
-        return None, None, body
+        return None, None, body, None
     if not isinstance(parsed, dict):
-        return None, None, body
+        return None, None, body, None
     error = parsed.get("error")
     if not isinstance(error, dict):
-        return None, None, body
-    return error.get("code"), error.get("message"), error.get("details")
+        return None, None, body, None
+    return error.get("code"), error.get("message"), error.get("details"), error.get("precondition")
 
 
 def _retry_after(exc: ApiException) -> int | None:
@@ -210,7 +254,7 @@ def map_error(exc: BaseException) -> TemperError:
         raise TypeError(f"map_error expects ApiException or urllib3 HTTPError, got {type(exc)!r}")
 
     status = exc.status
-    code, message, details = _parse_envelope(exc.body)
+    code, message, details, precondition = _parse_envelope(exc.body)
     # ApiException.__str__ decorates itself with status/headers/body when it has
     # them, so it is only a useful fallback once the envelope yielded nothing.
     if message is None:
@@ -224,6 +268,11 @@ def map_error(exc: BaseException) -> TemperError:
     if status == 403:
         cls = SystemAccessRequired if code == SYSTEM_ACCESS_REQUIRED else Forbidden
         return cls(message, status=status, code=code, details=details)
+
+    if status == 412:
+        return PreconditionFailed(
+            message, precondition=precondition, status=status, code=code, details=details
+        )
 
     if status == 429:
         return RateLimited(

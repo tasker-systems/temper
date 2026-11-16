@@ -1,0 +1,34 @@
+# A release-register entry. Scaffold one with:
+#   python3 tools/manifest/manifest.py register new <id>
+# which copies this file to release-register/unreleased/<id>.toml. The id is the file name:
+# lowercase kebab-case, at most 64 characters, never renamed once merged (corrections.json
+# cites entries by id). Every key below is required, and the empty values fail validation
+# until you fill them in. The vocabulary is release-register/vocabulary.toml; what each
+# token means is release-register/README.md.
+
+# One line: the change, stated as what is now true.
+title = "The Ruby and Python SDKs raise a permanent PreconditionFailed on a 412 and carry its failed expectations"
+pr = "self"
+classes = ["additive", "behavioral"]
+surfaces = ["clients"]
+status = "signal-only"
+
+body = '''
+temper-rb gains Temper::PreconditionFailed < PermanentError and temper-py gains
+temper.PreconditionFailed(PermanentError), raised by each error mapper for a
+412 PRECONDITION_FAILED. Each reads the envelope's error.precondition member, which the mappers
+previously dropped: #failed / .failed lists every expectation that did not hold (tier, key,
+expected, current) as the generated FailedExpectation model, and #precondition / .precondition
+returns the whole PreconditionFailure. With no payload, precondition is nil/None and failed is
+empty.
+
+Behavioral: a 412 was the bare Temper::Error / TemperError, neither transient nor permanent. It is
+now permanent, so a worker that rescues PermanentError (the gem's documented Sidekiq pattern)
+dead-letters a refused guarded write instead of letting it escape and be retried, and a claimant
+can read who holds the claim. Code rescuing the base class still catches it. No other status
+changes class, and nothing about the request changes.
+
+Witnesses: the "a refused guarded write" examples in
+clients/temper-rb/spec/temper/error_mapper_spec.rb and the test_a_412_* tests in
+clients/temper-py/tests/test_errors.py. Release relevance: clients only; signal-only.
+'''
