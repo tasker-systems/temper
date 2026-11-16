@@ -42,6 +42,11 @@ This:
    cargo make release-prepare-minor     # minor: 0.1.x → 0.2.0
    cargo make release-prepare-major     # major: 0.x.y → 1.0.0
    ```
+   Every variant releases the whole fleet: the crates ride `VERSION`, and each leaf package
+   (temper-rb, temper-py, temper-ts, temper-telemetry-ts, temper-design, temper-ui, temper-cloud)
+   moves to `max(its patch + 1, the new VERSION)`. `cargo make release-check` dry-runs the same
+   set. To release one leaf on its own, run `tools/scripts/release/release-prepare.sh` directly
+   with only that leaf's flag.
 4. Prints a summary and asks for confirmation.
 5. Creates a `release/v<X.Y.Z>` branch, writes the new version into `VERSION` and `crates/temper-cli/Cargo.toml`, runs `cargo check` as a sanity gate, commits, pushes, and opens a PR via `gh`.
 
