@@ -219,6 +219,7 @@ Temper::Error
    │  └─ SystemAccessRequired      (403 with code SYSTEM_ACCESS_REQUIRED)
    ├─ NotFound         (404)
    ├─ Conflict         (409)
+   ├─ PreconditionFailed (412, #failed)
    └─ BadRequest       (400 / 422)
 ```
 

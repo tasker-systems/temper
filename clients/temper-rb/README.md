@@ -111,10 +111,24 @@ Temper::Error
    │  └─ SystemAccessRequired
    ├─ NotFound         (404)
    ├─ Conflict         (409)
+   ├─ PreconditionFailed (412, #failed)
    └─ BadRequest       (400 / 422)
 ```
 
 Every exception carries `#status`, `#code`, `#message`, and `#details`.
+
+`PreconditionFailed` is a guarded write (`expect`, `expect.body`, `If-Match`) that found the
+resource other than it expected; nothing was written. `#failed` lists each expectation that did not
+hold, with `tier`, `key`, `expected` and `current` (`nil`: absent now), and `#precondition` returns
+the whole payload as a generated model. It is permanent: the same request is refused again, so
+re-read and decide. A claim whose `current` equals the value you wrote is your own earlier attempt
+having landed, not a loss:
+
+```ruby
+rescue Temper::PreconditionFailed => e
+  held = e.failed.find { |f| f.key == 'claim_id' }&.current
+  held == my_claim_id ? proceed! : move_on!
+```
 
 `SystemAccessRequired` adds `#refusal` — a **typed** reason the server refused,
 which is what lets a worker tell "never granted" from "granted and then revoked"

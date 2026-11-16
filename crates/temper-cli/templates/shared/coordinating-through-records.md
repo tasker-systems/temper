@@ -148,9 +148,10 @@ UUIDs. Integers stay within 2^53 − 1.
 - **Save the `through` of each page you have handled.** It is the answer's own `through`, never a
   position read after you looked at the subjects. Handling is at-least-once, and every pattern
   below is safe to repeat.
-- **An entry is a pointer, never content.** It carries its position, kind, subject (and `block` for
-  a content-block change), actor, time and `act`, and never authorship. On a relevant entry,
-  re-read the subject.
+- **An entry is a pointer, never content.** It carries its kind, subject (and `block` for a
+  content-block change), actor, time and `act`, and never authorship. It carries no position of its
+  own: the page's `through` is the only position, so resume from a page, never from an entry. On a
+  relevant entry, re-read the subject.
 - **Re-query on a timer as well.** The feed is a change hint, not a guarantee, and it never
   announces an admin act. So periodically re-read the work items you hold, and drop any your read
   now refuses. Re-read your candidate work even when nothing woke you.

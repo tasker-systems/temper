@@ -291,6 +291,17 @@ is removed.
    is accepted. Re-running
    an identical mapping changes nothing. `temper admin saml unmap-group` removes one.
 
+   **A group that covers every user is a pool, and only you know it is one.** Temper treats
+   temper-system, the gating team and auto-join teams as instance-wide: placing one beneath a
+   team, or opening a team's contexts to an anchor above one, is a system admin's act. A mapping
+   of an "all employees" (or "everyone") group fills a team just as completely, but Temper cannot
+   see that from the mapping, so none of those acts asks for an admin. Once that team exists, any
+   manager who can attach it can hand a parent's material to the whole instance. So do not map
+   such a group onto an ordinary team. When everyone should read a team's material, give it an
+   auto-join team (`temper admin team auto-join`): Temper knows that one is a pool, so placing it
+   stays an admin's act. Check the `--from-seen` list for groups that cover everyone before you
+   map them.
+
    Owning the gating team does not make anyone a system admin: that is the governance grant
    (`temper admin promote`). The **first** admin still requires the SQL bootstrap step; SAML does
    not bootstrap the system.
