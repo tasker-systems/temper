@@ -145,11 +145,21 @@ The public routes are:
     a body declaring a `Content-Length` over the door's limit is the `413` before the gate. These
     sort the MCP function's paths from the API's; `vercel.json` already says which paths those
     are.
-  - **Case.** If the platform matches routes without regard to case, a case variant of a door
+  - **Case.** The platform matches `vercel.json` routes without regard to case: a preview probe
+    showed `/MCP` and `/OAUTH/register` reaching the MCP function. So a case variant of a door
     reaches that door's function. Every router here matches bytes, so the variant gets what its
     byte-exact spelling would get there: a public door's own answer, the family's `404` (for
     example `/.well-known/OAUTH-PROTECTED-RESOURCE`), the `/mcp` gate's challenge (`/mcp/HEALTH`),
-    or the refusal;
+    or the refusal.
+  - **The web UI on the canonical origin.** On `temperkb.io` the web UI is the origin's front
+    door. Its server proxy (`packages/temper-ui/src/lib/server/proxy.ts`) forwards `/api`, `/mcp`,
+    `/oauth` and `/.well-known`, and everything under them, to the deployment above. It serves
+    every other path itself: its own pages, and its own `404` page for a path it does not have
+    (`/no-such-path`). It matches those prefixes by exact case, so a case variant of a prefix
+    (`/MCP`, `/OAUTH/register`, `/API/x`) is the UI's `404` page there, never the API's. The UI is
+    public by design, and its `404` is the same for every path it does not serve, so it says
+    nothing about which API routes exist. A path under a lower-case `/api/` reaches the API
+    whatever the case of the rest, and gets the refusal (`/api/NO-SUCH`);
 - the API reference under `/api-docs/`, only when an operator enables it, so whether it answers
   says whether it is enabled.
 
