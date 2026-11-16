@@ -190,7 +190,10 @@ What shares the number, what releases independently (spec §3):
   (temper-rb, temper-py, temper-ts, temper-telemetry-ts) and the npm packages
   (temper-ui, temper-cloud, temper-design).
   When the floor's M moves, a leaf below the new floor re-bases to it (its float P
-  count restarts); a leaf already above stays.
+  count restarts); a leaf already above stays. The float is what a leaf *may* do: the
+  `cargo make release-*` tasks release every leaf at every bump, patch included, so a
+  fleet release never leaves a changed leaf behind. A leaf released alone goes through
+  `release-prepare.sh` with only its flag.
 - **One contract number for the server wire.** `openapi.json` `info.version` derives
   from `VERSION` at emit time; HTTP and MCP share the number. CLI stdout rides
   `VERSION` too — its stdout/exit contract is consumed by external parsers, so its

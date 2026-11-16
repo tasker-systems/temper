@@ -7,20 +7,25 @@
 #   cargo make release-check    — dry-run: what would release-prepare do?
 #   cargo make release-prepare  — real run: bump version, open release PR
 #
+# Every task here releases the WHOLE FLEET: each leaf flag (--rb --py --ts
+# --telemetry --design --ui --cloud) rides every bump, patch included. A leaf
+# released on its own is a deliberate act run through release-prepare.sh
+# directly with only that leaf's flag; cargo-make tasks cannot forward args.
+#
 # See: temper-artifacts:specs/2026-04-17-temper-cli-binary-release-design.md
 
 [tasks.release-check]
-description = "Dry-run release preparation — detect changes, show next version"
+description = "Dry-run release preparation — detect changes, show the next version of every crate and package (the whole fleet, as release-prepare runs it)"
 category = "Release"
 script = [
-    "./tools/scripts/release/release-prepare.sh --dry-run"
+    "./tools/scripts/release/release-prepare.sh --dry-run --rb --py --ts --telemetry --design --ui --cloud"
 ]
 
 [tasks.release-prepare]
-description = "Bump version, create release branch, and open release PR. Patch bump; packages float independently — to align them, invoke tools/scripts/release/release-prepare.sh directly with leaf flags (--rb --py --ts --telemetry --design --ui --cloud); cargo-make tasks cannot forward extra args."
+description = "Bump version, create release branch, and open release PR. Patch bump, and the WHOLE FLEET rides: every leaf package moves to at least the new VERSION, not only the crates (a patch that named no leaf left all seven behind while their trees had changed). A leaf already floated above the floor still bumps its own P."
 category = "Release"
 script = [
-    "./tools/scripts/release/release-prepare.sh"
+    "./tools/scripts/release/release-prepare.sh --rb --py --ts --telemetry --design --ui --cloud"
 ]
 
 [tasks.release-prepare-minor]
