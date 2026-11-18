@@ -24,7 +24,11 @@ use crate::output;
 /// spawns the real binary with `--vault` pointed away from both the config file
 /// and `TEMPER_VAULT`, and asserts at both ends — the tree appears where the flag
 /// said, and does not appear where it would have gone otherwise.
-pub fn run(context: &str, vault: Option<&str>) -> crate::error::Result<()> {
+pub fn run(
+    context: &str,
+    vault: Option<&str>,
+    fmt: crate::format::OutputFormat,
+) -> crate::error::Result<()> {
     let context = context.to_string();
     let vault = vault.map(str::to_owned);
     let summary = runtime::with_client(|client| {
@@ -36,9 +40,7 @@ pub fn run(context: &str, vault: Option<&str>) -> crate::error::Result<()> {
         })
     })?;
 
-    output::success(format!(
-        "Pulled context '{}': {} written, {} pruned",
-        summary.context, summary.written, summary.pruned
-    ));
+    // One document in the resolved format: `{context, written, pruned}`.
+    output::plain(crate::format::render(&summary, fmt)?);
     Ok(())
 }

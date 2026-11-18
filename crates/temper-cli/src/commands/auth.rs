@@ -522,8 +522,24 @@ pub fn request_access(message: Option<&str>) -> Result<()> {
     })
 }
 
-/// Withdraw a pending system-access request.
-pub fn withdraw_request() -> Result<()> {
+/// What `auth withdraw-request` found and did. Rendered as `{"outcome": …}` in the resolved
+/// format; only `Withdrawn` wrote anything.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum WithdrawOutcome {
+    /// The pending request was withdrawn.
+    Withdrawn,
+    /// The caller has no request at all.
+    NoRequest,
+    /// The caller's request was approved: they already have system access.
+    AlreadyApproved,
+    /// The caller's request exists but is not pending.
+    NoActiveRequest,
+}
+
+/// Withdraw a pending system-access request. Prints `{"outcome": …}` in the resolved format; the
+/// sentence for a person goes to stderr.
+pub fn withdraw_request(fmt: OutputFormat) -> Result<()> {
     runtime::with_client(|client| {
         Box::pin(async move {
             let request = client
@@ -532,10 +548,8 @@ pub fn withdraw_request() -> Result<()> {
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
 
-            match request {
-                None => {
-                    output::plain("Nothing to withdraw — you don't have a pending request.");
-                }
+            let outcome = match request {
+                None => WithdrawOutcome::NoRequest,
                 Some(req) => match req.status {
                     JoinRequestStatus::Pending => {
                         client
@@ -543,16 +557,16 @@ pub fn withdraw_request() -> Result<()> {
                             .withdraw_request()
                             .await
                             .map_err(crate::actions::runtime::client_err_to_temper)?;
-                        output::success("Request withdrawn.");
+                        WithdrawOutcome::Withdrawn
                     }
-                    JoinRequestStatus::Approved => {
-                        output::plain("You already have system access.");
-                    }
-                    _ => {
-                        output::plain("Nothing to withdraw — no active request.");
-                    }
+                    JoinRequestStatus::Approved => WithdrawOutcome::AlreadyApproved,
+                    _ => WithdrawOutcome::NoActiveRequest,
                 },
-            }
+            };
+            output::plain(crate::format::render(
+                &serde_json::json!({ "outcome": outcome }),
+                fmt,
+            )?);
             Ok(())
         })
     })

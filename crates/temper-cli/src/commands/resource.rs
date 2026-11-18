@@ -995,7 +995,9 @@ fn link_session_to_task(
                     .map_err(crate::actions::runtime::client_err_to_temper)
             });
             match result {
-                Ok(_) => output::success(format!("Linked session → task {}", task_info.slug)),
+                // stderr: a best-effort tail note on a create whose payload is the created
+                // resource. On stdout it followed that document and broke `--format json`.
+                Ok(_) => output::success_err(format!("Linked session → task {}", task_info.slug)),
                 Err(e) => tracing::warn!(
                     task = task_slug,
                     error = %e,

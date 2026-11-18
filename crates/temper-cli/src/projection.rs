@@ -737,8 +737,8 @@ pub fn remove_resource_file(
     }
 }
 
-/// Outcome of a `pull_context` call, for the command's output line.
-#[derive(Debug, Clone)]
+/// Outcome of a `pull_context` call: what `temper pull` renders.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PullSummary {
     pub context: String,
     pub written: usize,

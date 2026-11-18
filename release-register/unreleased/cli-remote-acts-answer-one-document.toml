@@ -1,0 +1,41 @@
+title    = "Eleven CLI acts that printed a prose line now print one document in the requested format"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+Behavioral: these commands printed a sentence to stdout on success. Under `--format json`, which is
+the default on a non-TTY stdout, a parser got prose. Two of them got a sentence followed by a JSON
+document. Each now prints one document through the output format layer. Where the server answers
+nothing to render, the document is a receipt built from what the act knows: the ids it acted on and
+an `outcome`.
+
+- `temper team decline-invitation`: `{outcome: "declined"}`. The token is a credential and is not
+  echoed.
+- `temper team revoke-invitation`: `{team_id, invitation_id, outcome: "revoked"}`.
+- `temper team delete`: `{team_id, outcome: "deleted", public_within?}`.
+- `temper team detach`: `{parent_id, child_id, outcome: "detached", public_within?}`. For both, the
+  `public_within` report the server returns used to be a second document after the sentence. It is
+  now a key on the receipt, present on the same rule as before.
+- `temper team leave`: `{team_id, profile_id, outcome: "left", residual_owned}`.
+- `temper team remove-member`: `{team_id, profile_id, outcome: "removed", residual_owned}`. The
+  hand-off nudge stays on stderr.
+- `temper team public-within close`: `{team_id, anchor_id, outcome: "closed"}`.
+- `temper auth withdraw-request`: `{outcome}`, one of `withdrawn`, `no_request`,
+  `already_approved` or `no_active_request`.
+- `temper pull`: `{context, written, pruned}`.
+- `temper update`, when already up to date: the same `{current, latest, up_to_date, install_dir}`
+  report that `--check` prints.
+- `temper resource create --type session --task …`: the "Linked session → task" line moves to
+  stderr. It followed the created resource's document on stdout.
+
+Under `--format toon` the same receipt renders as TOON in place of the sentence. Exit codes and
+refusals are unchanged.
+
+Who observes: anyone reading these commands' stdout. Witnesses: `temper-cli/tests/format_guard.rs`,
+a source scan that fails on a stdout prose writer outside its named allowlist. The allowlist still
+names the local and tooling commands (skill, memory, context subscribe, admin saml, and interactive
+init, migrate and config output). The end-to-end witnesses are `team_metadata_soft_delete_e2e`
+(delete), `cli_public_within_e2e` (close) and `projection_pull_test` (pull), which parse stdout as
+JSON. The other acts are covered only by the source scan. Release relevance: signal-only.
+'''
