@@ -231,7 +231,7 @@ pub fn provision(args: ProvisionArgs) -> Result<()> {
     match &args.env_out {
         Some(path) => {
             write_env_file(path, &env)?;
-            output::dim(format!("Wrote env bundle to {path} (mode 0600)"));
+            output::dim_err(format!("Wrote env bundle to {path} (mode 0600)"));
         }
         None => println!("{env}"),
     }
@@ -240,7 +240,7 @@ pub fn provision(args: ProvisionArgs) -> Result<()> {
         Some(path) => {
             std::fs::write(path, &sql)
                 .map_err(|e| TemperError::Config(format!("writing SQL to '{path}': {e}")))?;
-            output::dim(format!("Wrote kb_saml_idp SQL to {path}"));
+            output::dim_err(format!("Wrote kb_saml_idp SQL to {path}"));
         }
         None => println!("{sql}"),
     }
@@ -248,7 +248,7 @@ pub fn provision(args: ProvisionArgs) -> Result<()> {
     // 8. Apply the SQL, or guide the operator.
     if args.apply {
         apply_sql_via_psql(&sql)?;
-        output::success("Applied kb_saml_idp SQL via psql.");
+        output::success_err("Applied kb_saml_idp SQL via psql.");
     } else {
         output::hint(
             "Paste the env bundle into BOTH Vercel functions (temper-api and the Authorization \
@@ -385,47 +385,66 @@ pub fn from_seen(idp_key: &str) -> Result<()> {
     Ok(())
 }
 
+/// One probe `temper admin saml verify` ran.
+#[derive(Debug, serde::Serialize)]
+struct VerifyCheck {
+    check: String,
+    ok: bool,
+    detail: String,
+}
+
 /// `temper admin saml verify` — probe a provisioned instance: AS metadata reachable, caller is a
 /// system admin (proves the caller holds a governance grant and approved standing), and — with
 /// `--db` — exactly one active `kb_saml_idp` row.
+///
+/// Every probe runs before the verdict. When all pass, stdout carries one document,
+/// `{ok: true, checks: [{check, ok, detail}]}`. When any fails, each probe's line goes to stderr
+/// and the command fails, so stdout carries only the error payload.
 pub async fn verify(
     client: &temper_client::TemperClient,
     instance_url: &str,
     db_check: bool,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let base = instance_url.trim_end_matches('/');
     let http = reqwest::Client::new();
-    let mut ok = true;
+    let mut checks: Vec<VerifyCheck> = Vec::new();
+    let mut record = |check: &str, ok: bool, detail: String| {
+        checks.push(VerifyCheck {
+            check: check.to_string(),
+            ok,
+            detail,
+        });
+    };
 
     // 1. AS metadata + JWKS reachable ⇒ AS mode on.
     for path in ["/.well-known/oauth-authorization-server", "/oauth/jwks"] {
         let url = format!("{base}{path}");
         match http.get(&url).send().await {
             Ok(r) if r.status().is_success() => {
-                output::success(format!("AS reachable: {path}"));
+                record(path, true, format!("AS reachable: {path}"));
             }
-            Ok(r) => {
-                ok = false;
-                output::error(format!("{path} → HTTP {}", r.status()));
-            }
-            Err(e) => {
-                ok = false;
-                output::error(format!("{path} unreachable: {e}"));
-            }
+            Ok(r) => record(path, false, format!("{path} → HTTP {}", r.status())),
+            Err(e) => record(path, false, format!("{path} unreachable: {e}")),
         }
     }
 
     // 2. Caller is a system admin (governance grant + approved standing; a silent-403 otherwise).
     match client.admin().get_settings().await {
-        Ok(_) => output::success("caller is a system admin (is_system_admin = true)"),
-        Err(e) => {
-            ok = false;
-            output::error(format!(
+        Ok(_) => record(
+            "system_admin",
+            true,
+            "caller is a system admin (is_system_admin = true)".to_string(),
+        ),
+        Err(e) => record(
+            "system_admin",
+            false,
+            format!(
                 "admin check failed ({e}) — the caller needs an approved principal standing AND \
 a system-admin grant. Promote with `temper admin promote <profile>`; team ownership does not \
 confer either."
-            ));
-        }
+            ),
+        ),
     }
 
     // 3. Optional: exactly one active kb_saml_idp row.
@@ -440,25 +459,43 @@ confer either."
             .output()
             .map_err(|e| TemperError::Config(format!("failed to launch psql: {e}")))?;
         if !out.status.success() {
-            ok = false;
-            output::error(format!(
-                "psql failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            ));
+            record(
+                "active_idp_row",
+                false,
+                format!("psql failed: {}", String::from_utf8_lossy(&out.stderr)),
+            );
         } else {
             let count = String::from_utf8_lossy(&out.stdout).trim().to_owned();
             if count == "1" {
-                output::success("exactly one active kb_saml_idp row");
+                record(
+                    "active_idp_row",
+                    true,
+                    "exactly one active kb_saml_idp row".to_string(),
+                );
             } else {
-                ok = false;
-                output::error(format!("expected 1 active kb_saml_idp row, found {count}"));
+                record(
+                    "active_idp_row",
+                    false,
+                    format!("expected 1 active kb_saml_idp row, found {count}"),
+                );
             }
         }
     }
 
-    if ok {
+    if checks.iter().all(|c| c.ok) {
+        output::plain(crate::format::render(
+            &serde_json::json!({ "ok": true, "checks": checks }),
+            fmt,
+        )?);
         Ok(())
     } else {
+        for c in &checks {
+            if c.ok {
+                output::success_err(&c.detail);
+            } else {
+                output::error(&c.detail);
+            }
+        }
         Err(TemperError::Api("one or more SAML checks failed".into()))
     }
 }

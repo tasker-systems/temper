@@ -432,13 +432,15 @@ fn gather_self_host_config(theme: &ColorfulTheme) -> Result<SelfHostConfig> {
     })
 }
 
+/// The wizard's summary, shown before it writes anything. On stderr: it is for the person at the
+/// prompt, and stdout carries only the command's rendered result.
 fn print_summary(answers: &WizardAnswers, register_global: bool) {
-    output::blank();
-    output::header("Ready to initialize:");
-    output::label("Vault", &answers.vault_path);
+    output::blank_err();
+    output::header_err("Ready to initialize:");
+    output::label_err("Vault", &answers.vault_path);
     let mut ctxs = vec!["default".to_string()];
     ctxs.extend(answers.extra_contexts.iter().cloned());
-    output::label("Contexts", ctxs.join(", "));
+    output::label_err("Contexts", ctxs.join(", "));
     let auth_label = match &answers.auth_choice {
         AuthChoice::Hosted => "auth0",
         AuthChoice::SelfHosted(sh) => match &sh.idp {
@@ -448,11 +450,11 @@ fn print_summary(answers: &WizardAnswers, register_global: bool) {
         },
         AuthChoice::None => "none",
     };
-    output::label("Auth", auth_label);
+    output::label_err("Auth", auth_label);
     if register_global {
-        output::label("Config", global_config_path().display().to_string());
+        output::label_err("Config", global_config_path().display().to_string());
     }
-    output::blank();
+    output::blank_err();
 }
 
 /// Write config (if `register_global`) and ensure server-side contexts exist.

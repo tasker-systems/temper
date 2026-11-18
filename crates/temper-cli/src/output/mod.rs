@@ -128,6 +128,21 @@ pub fn dim_err(msg: impl std::fmt::Display) {
     writeln!(out, "{DIM}{msg}{DIM:#}").ok();
 }
 
+/// Print a section header to **stderr** — the diagnostic twin of [`header`].
+///
+/// For an interactive block (a wizard's summary before its confirm prompt): the person reads it,
+/// and stdout stays empty or holds only the command's document; see [`plain_err`].
+pub fn header_err(msg: impl std::fmt::Display) {
+    let mut out = anstream::stderr().lock();
+    writeln!(out, "{HEADER}{msg}{HEADER:#}").ok();
+}
+
+/// Print a labeled value to **stderr** — the diagnostic twin of [`label`]; see [`header_err`].
+pub fn label_err(name: impl std::fmt::Display, value: impl std::fmt::Display) {
+    let mut out = anstream::stderr().lock();
+    writeln!(out, "  {LABEL}{name}:{LABEL:#} {value}").ok();
+}
+
 /// Print inline progress to stderr (no trailing newline).
 pub fn progress(msg: impl std::fmt::Display) {
     let mut out = anstream::stderr().lock();

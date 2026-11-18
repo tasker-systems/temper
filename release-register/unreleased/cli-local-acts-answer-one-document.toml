@@ -1,0 +1,39 @@
+title    = "The CLI's local and tooling commands print one document, and interactive prose moves to stderr"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+Behavioral: the commands below printed sentences or checklists to stdout. Under `--format json`,
+which is the default on a non-TTY stdout, a parser got prose. Each now prints one document through
+the output format layer (TOON under `--format toon`), or nothing on stdout.
+
+- `temper context subscribe` / `unsubscribe`: `{context, outcome: "subscribed" | "unsubscribed"}`.
+- `temper skill emit`: `{path, written}`. The "Emitted N skill files" line stays, on stderr, because
+  `check-skills-drift.sh` reads it.
+- `temper skill install`: `{skill_dir, up_to_date, total, changed, removed_legacy,
+  removed_retired, removed_admin}`. `up_to_date` means no skill file was rewritten.
+- `temper skill check`: `{skill_dir, skill_dir_found, expected_files, missing_files, config_hash?,
+  command_wrapper?}`. `config_hash.status` is `up_to_date`, `stale` (with `embedded` and `current`)
+  or `unknown`. `command_wrapper.status` is `not_applicable`, `found` or `missing`. The "Run: temper
+  skill install" remedy is a stderr hint.
+- `temper memory emit`: `{written: [path]}`.
+- `temper memory check`: `[{path, verdict}]`, where `verdict` is `match`, `absent` or `drifted`.
+  The absent and drifted explanations and the diff stay on stderr, and drift still exits 1.
+- `temper admin saml verify`: when every probe passes, `{ok: true, checks: [{check, ok, detail}]}`.
+  When any fails, each probe's line goes to stderr and the command fails as before, so stdout
+  carries only the error payload.
+- `temper admin saml provision`: its "Wrote …" and "Applied …" status lines move to stderr. The env
+  bundle and SQL it prints when no `--*-out` path is given are raw artifacts and are unchanged.
+- Interactive output moves to stderr and leaves stdout alone: `temper init`'s summary before its
+  prompt, `temper memory migrate`'s confirm block, and `temper config edit`'s "Config saved" and
+  "Seeded default config" lines.
+
+Exit codes and refusals are unchanged.
+
+Who observes: anyone reading these commands' stdout. Witnesses: `temper-cli/tests/format_guard.rs`,
+whose allowlist now holds only the two human-only TOON arms (`edge` and `facet` `print_ack`), and
+`skill_test.rs::unknown_hash_arm_reports_on_stdout_like_its_siblings`, which parses `skill check`'s
+stdout as JSON. The other commands are covered only by the source scan. Release relevance:
+signal-only.
+'''

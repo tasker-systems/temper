@@ -323,11 +323,11 @@ fn confirm_batch(proposal_count: usize, context_ref: &str, cohort: &str) -> Resu
     output::warning(format!(
         "about to create {proposal_count} memor{plural} in {context_ref} from the `{cohort}` cohort"
     ));
-    output::plain(
+    output::plain_err(
         "  Near-duplicates are NOT detected: nothing here is checked against what the context \
          already holds. Adjudicate overlap before migrating — this command will not.",
     );
-    output::plain("  Re-run with --dry-run to see the per-file plan without writing.");
+    output::plain_err("  Re-run with --dry-run to see the per-file plan without writing.");
     dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
         .with_prompt("Create them?")
         .default(false)
