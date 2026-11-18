@@ -1,0 +1,22 @@
+title    = "temper resource update's relationship flags write the canonical open_meta keys (depends_on, relates_to, preceded_by, derived_from), not hyphenated ones nothing reads"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+`temper resource update --depends-on`, `--relates-to`, `--preceded-by` and `--derived-from` now
+add to `open_meta.depends_on`, `relates_to`, `preceded_by` and `derived_from`. Before, they wrote
+`depends-on`, `relates-to`, `preceded-by` and `derived-from`: the server accepts those as aliases on
+write, but stores them under the hyphenated key, and nothing that reads the open tier (its edge
+projection, `ResourceRelationships`, and the coordination convention reading `depends_on`) sees
+them, so a need or relation added with a flag was invisible and a resource could carry both keys.
+The flags now serialize through `temper_core::types::graph::ResourceRelationships`, so a flag cannot
+name a key of its own. `--references`, `--extends`, `--tags` and `--aliases` already wrote their
+canonical keys and are unchanged.
+
+Who observes: a caller of those four flags, and anyone reading the records they write. The open
+meta the command writes, and so its `--format json` answer, carries the underscore key. No HTTP,
+MCP or client shape changes. Records already written with the hyphenated keys are not rewritten
+here. Witness: `open_meta_flags_write_the_keys_the_open_tier_is_read_by` in
+`crates/temper-cli/src/commands/resource.rs`. Release relevance: signal-only.
+'''
