@@ -309,7 +309,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Update a resource's title, slug, or content. Only provided fields are changed. New content triggers re-indexing. The returned `body_hash` is prose-chunk identity, not byte identity. A heading-only edit writes the new content and moves `updated`, but usually leaves `body_hash` unchanged. Detect an edit by `updated`, never by `body_hash`. Pass `expect` to make the update conditional on per-key meta values; if any does not hold, nothing is written and the error result's `structuredContent.precondition.failed` lists each key with its current value. Guard on a value unique to you: a `current` equal to your own value means an earlier attempt of yours landed.",
+        description = "Update a resource's title, slug, or content. Only provided fields are changed. New content triggers re-indexing. The returned `body_hash` is prose-chunk identity, not byte identity. A heading-only edit writes the new content and moves `updated`, but usually leaves `body_hash` unchanged. Detect an edit by `updated`, never by `body_hash`. Pass `expect` to make the update conditional on per-key meta values; if any does not hold, nothing is written and the error result's `structuredContent.precondition.failed` lists each key with its current value. Guard on a value unique to you: a `current` equal to your own value means an earlier attempt of yours landed. `context_to` moves the resource to another context and `type_to` converts its doc type; each keeps the id, body and both meta tiers. A move needs write access to the destination as well as to the resource, and a refusal of either names both causes; a bare context name or an unknown type is refused by name.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -345,7 +345,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Update a resource's frontmatter (managed_meta and open_meta) without re-chunking or re-embedding. Use for metadata-only edits like stage, tags, or relationship declarations. For content changes, use update_resource. Returns `{updated, id, view}`, where `view` is the resource as this write left it. Pass `expect` (e.g. `{\"open\": {\"claim_id\": null}}`) to write only if every named key holds the expected value now (`null`: absent); otherwise nothing is written and the error result's `structuredContent.precondition.failed` lists each key with its current value.",
+        description = "Update a resource's frontmatter (managed_meta and open_meta) without re-chunking or re-embedding. Use for metadata-only edits like stage, tags, or relationship declarations. For content changes, use update_resource. Returns `{updated, id, view}`, where `view` is the resource as this write left it. Pass `expect` (e.g. `{\"open\": {\"claim_id\": null}}`) to write only if every named key holds the expected value now (`null`: absent); otherwise nothing is written and the error result's `structuredContent.precondition.failed` lists each key with its current value. Meta only, by decision: it never moves or converts a resource — use `update_resource` with `context_to` or `type_to` for that.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
