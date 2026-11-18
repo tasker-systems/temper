@@ -1,7 +1,7 @@
 # This repository's pin on the tasker-systems conventions baseline. Doctrine: CONS-* in
 # .conventions/baseline/doctrine/consuming.md. `revision` is written by `conventions.py bump`.
 name = "temper"
-revision = "65588eceb9ba45ca623355937ee468b3e0874038"
+revision = "56f3bd4f343a89883c67a9a0aa058cef8aa21dac"
 
 # Each adopted canonical file: where it lives here, and how it is compared (exact, extends,
 # table, superset). Not yet adopted, each a measured step of its own (status.toml says so):

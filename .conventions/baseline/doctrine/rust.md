@@ -261,9 +261,10 @@ runtime query is the one place a schema change can break production without brea
 
 ## Not specified in v0
 
-- The `too-many-arguments` threshold: temper treats more than five domain parameters as a smell to
-  fix with a parameter struct; tasker-core sets the threshold at ten. Clippy's default (seven) is
-  left in place until that is ruled.
+- The `too-many-arguments` threshold: temper uses clippy's default of seven — more than seven
+  parameters take a parameter struct, enforced by `too_many_arguments` under `-D warnings`, so it
+  needs no `clippy.toml` override; tasker-core sets the threshold at ten. The baseline sets no
+  cross-repo threshold, so the canonical `clippy.toml` leaves clippy's default in place.
 - Clippy's `pedantic`, `style`, `complexity` and `perf` groups: off, as in tasker-core today. Turning
   any on is a separate ruling, adopted per [RUST-LINT-4](#lints). Single lints from them come in
   under [RUST-LINT-5](#lints).
