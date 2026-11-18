@@ -1,0 +1,24 @@
+title    = "The server refuses, by name, a resource write whose shape it used to reshape silently"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "clients"]
+status   = "signal-only"
+body = '''
+Behavioral, `POST /api/ingest` (one-shot and segmented begin) answers 400 naming the field for:
+- `sources` with an empty `content`. The sources used to be dropped, because an empty body is no
+  body and the create had no block to attribute them to.
+- a non-empty `context_ref` together with `home_cogmap_id`. The cogmap used to win, and
+  `context_ref` was ignored.
+- an empty `doc_type_name`. A resource of type `""` used to be created.
+
+Behavioral, `PATCH /api/resources/{id}` answers 400 naming the field for:
+- `sources` or `content_block` with no `content`. They used to be ignored.
+- an empty `type_to`. Any non-empty `type_to` is still accepted, including a name no schema knows,
+  as a create of that type is.
+
+Nothing that is written changes for any request the server accepted and honoured before. The CLI
+and MCP already refused each of these before sending, so neither door's answer changes; only a
+direct HTTP or SDK caller sees the new 400s. No request or response shape changes; the
+`IngestPayload.home_cogmap_id`/`sources` and `ResourceUpdateRequest.sources`/`content_block` field
+descriptions now state the refusals, which regenerates `openapi.json` and the SDKs' doc text.
+'''

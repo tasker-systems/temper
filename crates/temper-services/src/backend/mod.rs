@@ -11,5 +11,6 @@ pub mod query_read;
 pub mod region_clocks;
 pub mod substrate_read;
 pub mod write_floor;
+pub mod write_request;
 
 pub use db_backend::{DbBackend, ACT_SPAN_FIELDS};

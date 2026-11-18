@@ -40,13 +40,13 @@ pub async fn create(
     Json(payload): Json<IngestPayload>,
 ) -> ApiResult<Json<IngestCreateResponse>> {
     let profile_id = ProfileId::from(auth.0.profile().id);
+    temper_services::backend::write_request::check_ingest_payload(&payload)?;
     // Segmented-begin metadata is consumed AFTER create lands block 0 (below); take it now so the
     // rest of the function can move `payload` field-by-field into the CreateResource command.
     let segmented = payload.segmented.clone();
 
-    // Resolve the home anchor — exactly one of a cognitive map or a context.
-    // The cogmap branch takes precedence: when `home_cogmap_id` is set the home
-    // is that map and `context_ref` is ignored.
+    // Resolve the home anchor — exactly one of a cognitive map or a context. A payload naming
+    // both was refused above; with `home_cogmap_id` set, `context_ref` is empty.
     let home = match payload.home_cogmap_id {
         Some(map) => {
             // Auth before writes still runs, one layer down: `DbBackend::create_resource`'s F1 gate

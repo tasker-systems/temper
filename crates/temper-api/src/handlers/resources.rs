@@ -404,6 +404,8 @@ pub async fn update(
     use temper_core::types::ids::ResourceId;
     use temper_workflow::operations::{BodyUpdate, GoalPatch, MoveSpec, UpdateResource};
 
+    temper_services::backend::write_request::check_update_request(&req)?;
+
     // Client-supplied chunks_packed (+ content_hash) are HONORED: the client did the
     // extract→chunk→embed locally, so the server carries them verbatim and only embeds
     // server-side as a fallback when they are absent. (Reverses PR#71's discard contract.)
