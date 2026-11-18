@@ -1,6 +1,6 @@
 title    = "The server refuses, by name, a resource write whose shape it used to reshape silently"
 pr       = "self"
-classes  = ["behavioral"]
+classes  = ["additive", "behavioral"]
 surfaces = ["http", "clients"]
 status   = "signal-only"
 body = '''
@@ -18,7 +18,9 @@ Behavioral, `PATCH /api/resources/{id}` answers 400 naming the field for:
 
 Nothing that is written changes for any request the server accepted and honoured before. The CLI
 and MCP already refused each of these before sending, so neither door's answer changes; only a
-direct HTTP or SDK caller sees the new 400s. No request or response shape changes; the
-`IngestPayload.home_cogmap_id`/`sources` and `ResourceUpdateRequest.sources`/`content_block` field
-descriptions now state the refusals, which regenerates `openapi.json` and the SDKs' doc text.
+direct HTTP or SDK caller sees the new 400s.
+
+Additive: no field, type or route changes. The `IngestPayload.home_cogmap_id`/`sources` and
+`ResourceUpdateRequest.sources`/`content_block` field descriptions now state the refusals, which
+regenerates `openapi.json` and the SDKs' doc text.
 '''
