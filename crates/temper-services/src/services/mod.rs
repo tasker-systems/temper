@@ -48,6 +48,7 @@ pub mod shape_loader;
 pub mod shape_service;
 pub mod slack_disconnect_service;
 pub mod slack_grant_vault_service;
+pub mod slack_link_complete_service;
 pub mod slack_link_service;
 pub mod slack_link_state;
 pub mod slack_mint_service;

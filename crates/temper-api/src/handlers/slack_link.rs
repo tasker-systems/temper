@@ -12,7 +12,7 @@ use temper_core::types::ids::ProfileId;
 use temper_services::auth::{AuthzError, Caller, HumanPrincipal, RawJwtClaims};
 use temper_services::error::ApiError;
 use temper_services::services::{
-    slack_disconnect_service, slack_grant_vault_service, slack_link_service, standing_service,
+    slack_link_complete_service, slack_link_service, standing_service,
 };
 use temper_services::state::{AppState, KeyLookupError};
 use temper_services::{link_provider, oauth_client};
@@ -195,131 +195,74 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<CallbackOutc
                 .to_string()
         })?;
 
-    // ONE TRANSACTION for the identity row AND the sealed grant.
-    //
-    // They used to be two independent autocommits, and the window between them was not benign.
-    // Process death after the directory row committed and before the vault row did left the user
-    // LINKED with a refresh token that existed only in this stack frame — and unrecoverable,
-    // because `consume_intent` burned the state nonce above, so no retry of this callback can
-    // re-derive it. The old comment here argued the failure was benign because "the user is shown
-    // a retry page"; that holds for an observable `Err` return below and does NOT hold for a kill
-    // between two commits, where no page renders at all. A rollback of both is recoverable (the
-    // user mentions @temper and gets a fresh intent); a half-write is not.
-    let mut tx =
-        state.pool.begin().await.map_err(|_| {
-            "Something went wrong saving the link. Mention @temper again.".to_string()
-        })?;
-
-    // Auth before write: the profile is resolved and gated above this line.
-    //
-    // A principal binds ONCE. If it is already bound to a different profile the write is
-    // refused rather than moved — see `link_slack_principal` and spec D4.
-    let outcome =
-        slack_link_service::link_slack_principal(&mut tx, &profile, &intent.slack_principal_id)
-            .await
-            .map_err(|_| {
-                "Something went wrong saving the link. Mention @temper again.".to_string()
-            })?;
-
-    if outcome == slack_link_service::SlackLinkOutcome::AlreadyLinkedToAnotherProfile {
-        tracing::warn!(
-            profile_id = %profile.profile().id,
-            "slack link: refused (principal already bound to a different profile)",
-        );
-        // DELIBERATE, BOUNDED DISCLOSURE. This message admits the principal IS linked, which
-        // the generic "no temper account is linked" refusal does not. That is the right
-        // trade: the legitimate user needs to understand why their link failed and what to do
-        // about it, and collapsing this into the generic message would actively mislead them
-        // — they'd be told to sign in at temperkb.io, which would not help. An attacker who
-        // stole a link URL learns only that their attack failed. The other profile's handle is
-        // NOT named: which account holds it is not theirs to learn.
-        return Err(
-            "This Slack account is already connected to a different temper account. \
-                    Disconnect it there first, then mention @temper again to reconnect."
-                .into(),
-        );
-    }
-
-    // T3 SEAM. The exchange requested `offline_access`, so `tokens.refresh_token` is the
-    // per-user grant -- its own independent family, never an export of the user's CLI grant.
-    // Encrypt and store it here, keyed by the whole opaque principal. Identity (the row above)
-    // and secret (this vault) stay in separate tables; kb_profile_auth_links has no secret column.
-    //
-    // Auth-before-write: the profile is resolved and gated well above this line, and the vault
-    // write comes after. Both now ride `tx`, so a failure on either rolls back BOTH — there is no
-    // longer a "linked but not vaulted" state for this handler to leave behind.
-    let Some(refresh_token) = tokens.refresh_token.as_deref() else {
-        // `offline_access` was requested but the IdP returned no refresh token — a client
-        // misconfiguration (offline_access or refresh-token rotation not enabled on the link
-        // client). There is nothing to vault, so acting as the human is impossible: this link
-        // could never mint.
-        //
-        // THIS ARM MUST NOT RENDER SUCCESS. It used to `warn!` and return `Ok(slug)`, which
-        // rendered "Account connected." at a user whose link was inert — they were told the
-        // thing worked, then hit an unexplained failure at their next mention, with no reason
-        // to suspect the link. Telling them the truth costs one retry; the lie costs a silent
-        // dead end. (`tests/e2e/tests/slack_link_test.rs` documented that broken shape.)
-        //
-        // `tx` is DROPPED without commit, so the directory row is rolled back too. That is the
-        // deliberate call: half-linked is the worst of the three states. Linked-with-no-grant
-        // reads as "connected" to `lookup_linked_handle` (which reads the auth-link table, not
-        // the vault), so the user's next mention costs a mint that answers `not_vaulted` before
-        // it can hand them a re-link URL. Rolling back leaves the user cleanly UNLINKED, where
-        // their next mention gets a fresh intent straight from link-state, and they try again
-        // once the operator fixes the client.
-        tracing::warn!(
-            profile_id = %profile.profile().id,
-            "slack link: NO refresh token returned -- link rolled back rather than left inert; \
-             check the link client's offline_access / refresh-token-rotation settings",
-        );
-        return Err(
-            "Your account was verified, but the connection could not be completed — this \
-             instance's sign-in client did not return the credential needed to act on your \
-             behalf. Nothing was saved. Mention @temper again to retry, and tell your temper \
-             administrator if it keeps happening."
-                .into(),
-        );
-    };
-
-    // A re-link (the mint's `not_vaulted` URL) overwrites a stored grant, and the vault holds the
-    // only copy of its plaintext. In AS mode that grant may still be live, so it is revoked here,
-    // in this transaction, before the overwrite. See `revoke_superseded_grant` for why ExternalIdp
-    // mode must not do the same.
-    slack_disconnect_service::revoke_superseded_grant(
-        &mut tx,
+    // The identity row and the sealed grant are one write, owned by the service command: it opens
+    // the transaction, and this handler renders what it did. Why they are one transaction, and
+    // the order the writes run in, are documented on `slack_link_complete_service`.
+    let outcome = slack_link_complete_service::complete_link(
+        &state.pool,
         &cfg.vault_key,
         state.config.auth.mode,
+        &profile,
         &intent.slack_principal_id,
-        refresh_token,
-    )
-    .await
-    .map_err(|e| {
-        // Logged here because the page string below is shared with `store_grant` and the commit,
-        // so without this line a failed revoke is indistinguishable from either of them.
-        tracing::error!(error = %e, "slack link: revoking the superseded grant failed");
-        "Something went wrong saving your connection. Mention @temper again.".to_string()
-    })?;
-
-    slack_grant_vault_service::store_grant(
-        &mut tx,
-        &cfg.vault_key,
-        slack_grant_vault_service::NewGrant {
-            owner: &profile,
-            slack_principal_id: &intent.slack_principal_id,
-            refresh_token,
+        slack_link_complete_service::LinkGrant {
+            refresh_token: tokens.refresh_token.as_deref(),
             access_token: &tokens.access_token,
             access_ttl_secs: tokens.expires_in,
         },
     )
     .await
-    .map_err(|_| {
-        "Something went wrong saving your connection. Mention @temper again.".to_string()
+    .map_err(|e| match e {
+        slack_link_complete_service::CompleteLinkError::Link(_) => {
+            "Something went wrong saving the link. Mention @temper again.".to_string()
+        }
+        slack_link_complete_service::CompleteLinkError::Grant(_) => {
+            "Something went wrong saving your connection. Mention @temper again.".to_string()
+        }
     })?;
 
-    // The commit is the point: identity and grant land together or not at all.
-    tx.commit().await.map_err(|_| {
-        "Something went wrong saving your connection. Mention @temper again.".to_string()
-    })?;
+    match outcome {
+        slack_link_complete_service::CompleteLinkOutcome::Linked => {}
+        slack_link_complete_service::CompleteLinkOutcome::AlreadyLinkedToAnotherProfile => {
+            tracing::warn!(
+                profile_id = %profile.profile().id,
+                "slack link: refused (principal already bound to a different profile)",
+            );
+            // DELIBERATE, BOUNDED DISCLOSURE. This message admits the principal IS linked, which
+            // the generic "no temper account is linked" refusal does not. That is the right
+            // trade: the legitimate user needs to understand why their link failed and what to do
+            // about it, and collapsing this into the generic message would actively mislead them
+            // — they'd be told to sign in at temperkb.io, which would not help. An attacker who
+            // stole a link URL learns only that their attack failed. The other profile's handle
+            // is NOT named: which account holds it is not theirs to learn.
+            return Err(
+                "This Slack account is already connected to a different temper account. \
+                        Disconnect it there first, then mention @temper again to reconnect."
+                    .into(),
+            );
+        }
+        slack_link_complete_service::CompleteLinkOutcome::NoRefreshToken => {
+            // `offline_access` was requested but the IdP returned no refresh token, so acting as
+            // the human is impossible and the link was rolled back rather than left inert.
+            //
+            // THIS ARM MUST NOT RENDER SUCCESS. It used to `warn!` and return `Ok(slug)`, which
+            // rendered "Account connected." at a user whose link was inert — they were told the
+            // thing worked, then hit an unexplained failure at their next mention, with no reason
+            // to suspect the link. Telling them the truth costs one retry; the lie costs a silent
+            // dead end. (`tests/e2e/tests/slack_link_test.rs` documented that broken shape.)
+            tracing::warn!(
+                profile_id = %profile.profile().id,
+                "slack link: NO refresh token returned -- link rolled back rather than left inert; \
+                 check the link client's offline_access / refresh-token-rotation settings",
+            );
+            return Err(
+                "Your account was verified, but the connection could not be completed — this \
+                 instance's sign-in client did not return the credential needed to act on your \
+                 behalf. Nothing was saved. Mention @temper again to retry, and tell your temper \
+                 administrator if it keeps happening."
+                    .into(),
+            );
+        }
+    }
 
     tracing::info!(profile_id = %profile.profile().id, "slack link: established and grant vaulted");
 
