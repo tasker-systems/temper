@@ -3,17 +3,11 @@
 /**
  * One addable or removable part of a [`ResourceView`].
  *
- * Replaces `--meta-only`, which conflated two axes because the two commands differ in
- * what they otherwise return: on `show` it means *drop the body*
- * (`temper-cli/src/cli.rs:571-575` — "Show everything except the body"), on `list` it
- * means *add both meta tiers* (`:537-542` — "each row carries both the managed and open
- * meta tiers ... on top of the usual row fields"). Once both commands answer in one
- * shape, that flag has two meanings and no coherent one.
- *
- * Naming the parts lets a caller add or remove each independently — including
- * `show --with edges --without body`, which is **unreachable today**: `meta_only`
- * carries `conflicts_with = "edges"` (`temper-cli/src/cli.rs:574`), so the present
- * design needs a rule to forbid a combination that is merely useful.
+ * `show` and `list` answer in one shape, so one flag cannot mean *drop the body* on one
+ * and *add the meta tiers* on the other. Naming the parts instead lets a caller add or
+ * remove each independently, with `--with` and `--without` — including
+ * `show --with edges --without body`
+ * (`cli::section_flag_tests::show_with_edges_without_body_parses`).
  *
  * The managed tier is deliberately **not** a section: [`ResourceView::managed_meta`] is
  * always present, which is what makes dropping the hoisted workflow fields lossless.

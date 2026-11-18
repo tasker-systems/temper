@@ -19,7 +19,7 @@ use temper_workflow::operations::{Backend, RecordCitationAudit};
 // command, dispatch it, map the error. No persistence here.
 //
 // The real authorization subject is the block's owning finding, resolved server-side from
-// `req.block_id` (`temper-services/src/authz/audit_gate.rs:65-77`).
+// `req.block_id` (`temper_services::authz::audit_gate::finding_of_block`).
 // `citation_audit_service::record_citation_audit` derives that finding and refuses with 404 if
 // it disagrees with `id`.
 //

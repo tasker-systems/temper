@@ -77,10 +77,9 @@
 //! passes, and every audit 404s in production because the machine cannot see the corpus. What was
 //! established, from the code:
 //!
-//! * `--team <ref>:member` writes exactly one row per team — `INSERT INTO kb_team_members
-//!   (team_id, profile_id, role)` (`machine_registration_service.rs:120-131`, `apply_reach`). It
-//!   writes **no** `kb_access_grants` row; grants come only from the separate `--cogmap` reach
-//!   (`:133-153`).
+//! * `--team <ref>:member` writes exactly one `kb_team_members` row per team (`apply_reach`,
+//!   through `team_membership::membership_write`). It writes **no** `kb_access_grants` row; grants
+//!   come only from the separate `--cogmap` reach (`apply_reach`'s `insert_grant` loop).
 //! * `profile_effective_teams` is **role-agnostic** — any `kb_team_members` row on an active team
 //!   counts, `member` included (`20260703000001_team_metadata_soft_delete.sql:38-44`).
 //! * `resources_visible_to` carries a cogmap-membership arm: *"resources homed in a cognitive map
@@ -90,9 +89,10 @@
 //!
 //! Findings are cogmap-homed by spec §6.2. So a machine in a team joined to the finding's cogmap
 //! **is** returned by `resources_visible_to`, and the read arm of this gate admits it. Standing
-//! does not interfere: a machine is born `denied` (`machine_registration_service.rs:275-280`), but
-//! standing is read by `has_system_access`, which `resources_visible_to` never consults, and
-//! machine admission checks registration + revocation only (`profile_service.rs:230-249`).
+//! does not interfere: a machine is born `denied` (`machine_registration_service::provision`'s
+//! `principal_standing_apply` call), but standing is read by `has_system_access`, which
+//! `resources_visible_to` never consults, and machine admission checks registration, revocation and
+//! issuer only (`profile_service::resolve_machine_from_claims`).
 //!
 //! **The hazard is on the other side.** `can_modify_resource`'s container-write cascade calls
 //! `cogmap_authorable_by_profile` (`20260715000040_demote_originator_from_access.sql:87-94`),
@@ -105,9 +105,9 @@
 //! that cogmap — makes it [`AuditAuthority::Author`] for *every* finding homed there and refuses
 //! *every* audit. Provision the auditor with team membership, and cogmap reach only as `:ro`.
 //!
-//! CONFORM: the `ScopedAuthority` trait + sealed proof (`super`, `mod.rs:54-133`); the
-//! `NotFound`-dialect impls (`super::read_gates`). EXTEND: spec §7, discharged here; spec §6.5
-//! (job completion), discharged by [`AuditorJobAuthority`].
+//! CONFORM: the `ScopedAuthority` trait + sealed proof (`super::ScopedAuthority`,
+//! `super::Authorized`); the `NotFound`-dialect impls (`super::read_gates`). EXTEND: spec §7,
+//! discharged here; spec §6.5 (job completion), discharged by [`AuditorJobAuthority`].
 
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -167,7 +167,7 @@ async fn is_machine_principal(pool: &PgPool, caller: ProfileId) -> ApiResult<boo
 ///
 /// `Forbidden`, not `NotFound`: there is no subject whose existence a refusal could confirm, and a
 /// 404 on a fixed route would just be a lie. The dialect argument that makes the other two gates
-/// `NotFound` (`ScopedAuthority::denial`, `mod.rs:86-95`) does not apply where nothing is named.
+/// `NotFound` (`ScopedAuthority::denial`'s doc) does not apply where nothing is named.
 /// Takes the crate-internal [`Principal`] rather than a bare id: the db_backend seam's
 /// `principal()` routes here arm-for-arm. The probe stays even though the classification already
 /// knows a machine from a person, because it asks a narrower question: an **unrevoked** client row
@@ -188,7 +188,7 @@ pub(crate) async fn require_machine_principal(
 /// An audit write lands on a block; the authorization subject is the block's owning resource.
 /// Letting a caller pass a finding id alongside a block id would let it authorize over a finding
 /// it can read while writing onto a block of one it cannot — the transposition the sealed
-/// [`super::Authorized`] proof exists to stop (`mod.rs:95-117`). One spelling of the lookup, two
+/// [`super::Authorized`] proof exists to stop (see its doc). One spelling of the lookup, two
 /// callers: [`citation_subject`] (which the backend command builds its sealed subject from) and
 /// `citation_audit_service`'s path/block transposition check — the latter a pure lookup, never an
 /// authorization decision.
@@ -262,7 +262,7 @@ pub(crate) async fn citation_subject(
 ///
 /// One admitting arm and three denials. The denials are named arms, never an absence and never an
 /// `Err` out of `resolve` — an error short-circuits `authorize` before [`ScopedAuthority::denial`]
-/// runs, which would bypass this domain's chosen refusal dialect (`mod.rs:69-74`).
+/// runs, which would bypass this domain's chosen refusal dialect (`ScopedAuthority::is_denial`).
 ///
 /// There is deliberately **no `NotMachine` arm**: a human may audit (see the module doc's product
 /// decision and the open risk it accepts). Registration is still what the *dispatch tick* and *job
@@ -299,18 +299,19 @@ impl ScopedAuthority for AuditAuthority {
     /// or be distinguishable by, probes about a subject it may not know exists. The two authorship
     /// probes are last, and both must run for the admitting arm.
     ///
-    /// Every probe is a **call into a SQL predicate, never a restatement** of one (`mod.rs:65-66`):
+    /// Every probe is a **call into a SQL predicate, never a restatement** of one
+    /// (`ScopedAuthority::resolve`):
     ///
     /// * Readability of the cited source is [`readback::is_resource_visible`], extracted by Task 4
     ///   for exactly this reason — the standing read this gate sits beside asks the same question
-    ///   through the same function, so the two cannot drift (`readback/mod.rs:133-162`).
+    ///   through the same function, so the two cannot drift.
     ///   Readability of the **finding** is [`readback::is_resource_visible_by_membership`]: the
     ///   finding is acted on, so it is judged on membership, never on `public_within` reach.
     ///   The queue's SQL asks the same two sets.
     /// * Citation authorship is `citation_contributed_by_profile`
     ///   (`20260724000110_citation_audits.sql`) — the exact historical fact, see the module doc.
     /// * The authorship proxy is `can_modify_resource`, the same call and the same query text as
-    ///   production's write gate (`db_backend.rs:469-483`).
+    ///   production's write gate (`DbBackend::check_can_modify_next`).
     async fn resolve(
         pool: &PgPool,
         caller: Principal<'_>,
@@ -385,9 +386,9 @@ impl ScopedAuthority for AuditAuthority {
     /// The evidence **read** over this same subject is already leak-safe by returning no row: the
     /// `gated` CTE in `resource_standing_shape` yields zero rows to a principal who cannot read the
     /// finding (`20260724000120_standing_citation_components.sql:326`), which
-    /// `evidential_standing_service.rs:43` turns into `ApiError::NotFound`. Refusing the audit
-    /// **write** with `Forbidden` would confirm that a guessed finding id names a real finding —
-    /// an existence oracle standing directly beside a read built to avoid one.
+    /// `evidential_standing_service::resource_evidence` turns into `ApiError::NotFound`. Refusing
+    /// the audit **write** with `Forbidden` would confirm that a guessed finding id names a real
+    /// finding — an existence oracle standing directly beside a read built to avoid one.
     ///
     /// It matters for `Author` too, for a second reason: a `Forbidden` distinguishable from the
     /// unreadable case would tell a prober "you may see this finding but you wrote it", leaking the

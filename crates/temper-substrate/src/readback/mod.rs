@@ -49,9 +49,9 @@
 //! claim about the SQL (a set-returning function's contract, a `COALESCE`, an INNER JOIN) and is
 //! commented where it is not obvious. Getting one wrong is a real defect but not a catastrophic
 //! one: `!` expands to `row.try_get_unchecked::<T, _>(i)?`
-//! (`sqlx-macros-core-0.8.6/src/query/output.rs:147`), so a NULL arriving in a column declared
-//! non-null is a decode **error** propagated through `?` — a 500, not a crash. That is strictly
-//! better than the `row.get` it replaced, which panics on NULL (`try_get` is the fallible
+//! (`sqlx-macros-core` 0.8.6, `query::output::quote_query_as`), so a NULL arriving in a column
+//! declared non-null is a decode **error** propagated through `?` — a 500, not a crash. That is
+//! strictly better than the `row.get` it replaced, which panics on NULL (`try_get` is the fallible
 //! spelling). The override is a claim to state carefully, not a loaded gun.
 //!
 //! The SQL is UNQUALIFIED (`kb_*` / `resources_visible_to`) — there is one schema
@@ -2759,15 +2759,14 @@ pub async fn cogmap_analytics(
 /// with nothing to say this one does not, and any real divergence originates in one migration and
 /// breaks both `query!` sites at compile time rather than silently. Reuse of a cogmap-named row type
 /// on a context read is also the incumbent, not a new liberty: `anchor_region_metrics_select` hands
-/// `Vec<CogmapRegionMetricsRow>` to the context route
-/// (`crates/temper-api/src/handlers/contexts.rs:287-291`), and the context sub-client states the
-/// convention outright — "the response types are shared with the cogmap side on purpose … the
-/// `cogmap_*` naming is what M3 retires, not the shape"
-/// (`crates/temper-client/src/contexts.rs:127-132`). The honest repair for the *name* is the
-/// anchor-generic rename `AnchorShape` already models
-/// (`crates/temper-core/src/types/cognitive_maps.rs:117`) — `CogmapStaleness` → `AnchorStaleness` —
-/// and it is deliberately not taken here: it renames a shipped wire type that the TypeScript
-/// bindings and the UI import.
+/// `Vec<CogmapRegionMetricsRow>` to the context route (`region_metrics` in
+/// `temper_api::handlers::contexts`), and the context sub-client states the convention outright —
+/// "the response types are shared with the cogmap side on purpose … the `cogmap_*` naming is what
+/// M3 retires, not the shape" (`temper-client`'s context-orientation-reads note above its
+/// `impl ContextClient`). The honest repair for the *name* is the anchor-generic rename
+/// `temper_core::types::cognitive_maps::AnchorShape` already models — `CogmapStaleness` →
+/// `AnchorStaleness` — and it is deliberately not taken here: it renames a shipped wire type that
+/// the TypeScript bindings and the UI import.
 pub async fn context_analytics(
     pool: &PgPool,
     context_id: ContextId,

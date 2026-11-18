@@ -1300,8 +1300,9 @@ pub async fn rename(
 
     // The current identity pair plus the already-sigil'd owner ref, in one read. A rename leaves
     // `(owner_table, owner_id)` untouched, so the ref composed from this row is still correct after
-    // the write. The `CASE` is the incumbent both-kinds spelling (`:42-46`, `:77-80`, `:377-380`) —
-    // `team_owner_ref` is team-only and would `fetch_one`-panic on a profile-owned context.
+    // the write. The `CASE` is the incumbent both-kinds spelling (`list_visible`, `get_visible`,
+    // `create`) — `team_owner_ref` is team-only and would `fetch_one`-panic on a profile-owned
+    // context.
     //
     // `fetch_optional`, not `fetch_one`: the gate's `SystemAdmin` arm admits without consulting the
     // subject's existence (it probes the caller's governance grant), so a system admin naming a
@@ -1360,7 +1361,7 @@ pub async fn rename(
     // 3. The derived slug must be free under the (unchanged) owner.
     //
     // `AND id <> $4` is load-bearing and is the one line that must NOT be copied from `reassign`'s
-    // query (`:583-590`), which has no self-exclusion and correctly needs none — it changes the
+    // query, which has no self-exclusion and correctly needs none — it changes the
     // *owner*, so the row can never match itself. Rename keeps the owner fixed, so without this a
     // name-only rename (canonical name moved, slug did not) reaches here and 409s against its own
     // slug — breaking exactly the legacy-repair case the no-op rule above exists to enable.
@@ -1377,7 +1378,7 @@ pub async fn rename(
     if collision {
         // Naming the colliding slug is not a leak: reaching the gate at all means the caller
         // administers this context, so they own it or manage the owning team and can already
-        // enumerate that owner's contexts. Modelled on `reassign`'s message (`:591-596`).
+        // enumerate that owner's contexts. Modelled on `reassign`'s message.
         return Err(ApiError::Conflict(format!(
             "{} already owns a context with slug '{to_slug}'; pick another name",
             cur.owner_ref
@@ -1436,10 +1437,10 @@ pub async fn retire(
         .await?;
 
     // The current identity pair plus the already-sigil'd owner ref, in one read — copied verbatim
-    // from `rename` (`:867-880`). `fetch_optional`, not `fetch_one`: the gate's `SystemAdmin` arm
+    // from `rename`. `fetch_optional`, not `fetch_one`: the gate's `SystemAdmin` arm
     // admits without consulting the subject's existence, so a system admin naming a context id
     // that does not exist reaches here. That is the read refusal, not a panic. The `CASE` is the
-    // incumbent both-kinds spelling (`:42-46`, `:77-80`, `:377-380`) — `team_owner_ref` is
+    // incumbent both-kinds spelling (`list_visible`, `get_visible`, `create`) — `team_owner_ref` is
     // team-only and would `fetch_one`-panic on a profile-owned context.
     let cur = sqlx::query!(
         r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name,
@@ -1505,7 +1506,7 @@ pub async fn retire(
 ///
 /// **Fetching `cur` here is the subtle part.** The context is retired, so anything that reads
 /// through the read predicate will not find it. This copies `retire`'s own `cur` fetch
-/// verbatim (`:985-996`) — it is already `is_active`-BLIND because it reads `kb_contexts` by
+/// verbatim — it is already `is_active`-BLIND because it reads `kb_contexts` by
 /// primary key, not through `context_visible_to`.
 pub async fn restore(
     pool: &PgPool,

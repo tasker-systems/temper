@@ -383,11 +383,11 @@ pub struct RegionHit {
 pub struct RegionDisclosure {
     /// The region's id, as stored.
     ///
-    /// **Not durable, and the instability is the caller's to handle.** `assert_region`
-    /// (`temper-substrate/src/write.rs:673`) reuses this row when a region's member set is unchanged
-    /// and **mints a new id otherwise**, soft-folding the displaced row. So an id disclosed here may
-    /// name nothing by the time a caller acts on it — which a caller must render as *re-derived*,
-    /// never as an error and never as the reader's mistake.
+    /// **Not durable, and the instability is the caller's to handle.**
+    /// `temper_substrate::write::assert_region` reuses this row when a region's member set is
+    /// unchanged and **mints a new id otherwise**, soft-folding the displaced row. So an id
+    /// disclosed here may name nothing by the time a caller acts on it — which a caller must render
+    /// as *re-derived*, never as an error and never as the reader's mistake.
     pub region_id: uuid::Uuid,
     /// The blend this region matched at. See the type's own note: raw, unbounded, open ruling.
     pub region_score: f64,

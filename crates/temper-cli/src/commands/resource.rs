@@ -2474,8 +2474,9 @@ fn strip_open_meta_nulls(parsed: &serde_json::Value) -> serde_json::Value {
 /// reachable from the CLI only through `--open-meta`, which REPLACES: writing one date
 /// destroyed every date already stored, silently, with a success response. MCP's
 /// `update_resource` has carried a generic `open_meta_add` throughout
-/// (`temper-mcp/src/tools/resources.rs:275`) and the field exists end to end on the wire,
-/// so this closes a door that was missing rather than adding a capability.
+/// (`temper_mcp::tools::resources::UpdateResourceInput::open_meta_add`) and the field exists
+/// end to end on the wire, so this closes a door that was missing rather than adding a
+/// capability.
 ///
 /// One generic flag rather than a `--reinforced` list flag per convention: a per-key flag
 /// solves one key and leaves the next additive convention to have this conversation again.

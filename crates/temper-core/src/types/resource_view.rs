@@ -90,13 +90,10 @@ pub struct ResourceView {
     pub title: String,
     /// Original source URL or file reference.
     ///
-    /// There is deliberately no `kb_uri` beside this. `ExactHit`/`WideHit` carried one
-    /// whose doc comment promised a "canonical `kb://` URI ... from `kb_resource_uri`",
-    /// but `kb_resource_uri` does not exist in `migrations/` and the assembly wrote
-    /// `kb_uri: self.origin_uri.clone()` (`substrate_read.rs:898,912`) — the same value
-    /// under a second name and a false description. It joins `origin` (the constant
-    /// `"unified"`) and `slug` (always `String::new()`) as a field this arc dropped for
-    /// never having carried what it claimed.
+    /// There is deliberately no `kb_uri` beside this. No function in `migrations/` mints a
+    /// canonical `kb://` URI, so such a field could only repeat this value under a second
+    /// name and a false description. There is no `origin` or `slug` field either, for the
+    /// same reason: neither could carry what its name claims.
     pub origin_uri: String,
 
     // ---- home: `context_*` for a context home, `cogmap_*` for a cognitive map -----
@@ -352,17 +349,11 @@ impl ResourceView {
 
 /// One addable or removable part of a [`ResourceView`].
 ///
-/// Replaces `--meta-only`, which conflated two axes because the two commands differ in
-/// what they otherwise return: on `show` it means *drop the body*
-/// (`temper-cli/src/cli.rs:571-575` — "Show everything except the body"), on `list` it
-/// means *add both meta tiers* (`:537-542` — "each row carries both the managed and open
-/// meta tiers ... on top of the usual row fields"). Once both commands answer in one
-/// shape, that flag has two meanings and no coherent one.
-///
-/// Naming the parts lets a caller add or remove each independently — including
-/// `show --with edges --without body`, which is **unreachable today**: `meta_only`
-/// carries `conflicts_with = "edges"` (`temper-cli/src/cli.rs:574`), so the present
-/// design needs a rule to forbid a combination that is merely useful.
+/// `show` and `list` answer in one shape, so one flag cannot mean *drop the body* on one
+/// and *add the meta tiers* on the other. Naming the parts instead lets a caller add or
+/// remove each independently, with `--with` and `--without` — including
+/// `show --with edges --without body`
+/// (`cli::section_flag_tests::show_with_edges_without_body_parses`).
 ///
 /// The managed tier is deliberately **not** a section: [`ResourceView::managed_meta`] is
 /// always present, which is what makes dropping the hoisted workflow fields lossless.
@@ -533,8 +524,9 @@ impl FromStr for ResourceSection {
     ///
     /// The error is [`TemperError::BadRequest`], not the [`TemperError::Project`] that
     /// [`crate::refs::parse_ref`] returns for the same class of failure:
-    /// `Project` maps to `ApiError::Internal` (`temper-services/src/error.rs:242`),
-    /// and a mistyped section name is the caller's `400`, never the server's `500`.
+    /// `Project` maps to `ApiError::Internal` (`temper-services`'s
+    /// `impl From<TemperError> for ApiError`), and a mistyped section name is the caller's
+    /// `400`, never the server's `500`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse_accepting(s, &Self::ALL)
     }
@@ -659,7 +651,7 @@ mod tests {
 
     /// The anchor is `id`, never `resource_id`.
     ///
-    /// `managed_meta.rs:102-105` records why: with two different anchor names the
+    /// The retired `ResourceMetaResponse` recorded why: with two different anchor names the
     /// subset relation between the meta projection and the full read is
     /// unachievable. `ResourceView` is what makes that relation an identity
     /// instead, so the anchor name is load-bearing for the whole convergence.
@@ -775,7 +767,7 @@ mod tests {
     ///
     /// Beyond the plan's four conjuncts: `with_derived_refs` is new logic introduced
     /// by this task (`ref` and `context_ref` are not columns — they were injected
-    /// render-time at `temper-cli/src/commands/resource.rs:68-108` before this), so it
+    /// render-time by `temper-cli`'s `commands::resource::inject_ref` before this), so it
     /// carries its own witness.
     #[test]
     fn derived_refs_are_computed_from_the_columns_beside_them() {

@@ -88,9 +88,9 @@ impl ScopedAuthority for TeamReadAuthority {
     }
 
     /// `NotFound`, not `Forbidden` — *"to avoid leaking team existence to non-members: team slugs
-    /// are globally unique and used in share flows"* (`team_service.rs:277`). A `Forbidden` here
-    /// would confirm that a guessed slug names a real team, which is exactly what the refusal is
-    /// withholding.
+    /// are globally unique and used in share flows"* (`team_service::team_detail`). A `Forbidden`
+    /// here would confirm that a guessed slug names a real team, which is exactly what the refusal
+    /// is withholding.
     ///
     /// The message says "or not readable" for the same reason, and cannot say more: `denial` is
     /// static and argument-free, so it has no access to the slug it is refusing. The ambiguity is

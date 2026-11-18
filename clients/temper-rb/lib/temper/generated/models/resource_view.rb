@@ -80,7 +80,7 @@ module Temper::Generated
 
     attr_accessor :open_meta
 
-    # Original source URL or file reference.  There is deliberately no `kb_uri` beside this. `ExactHit`/`WideHit` carried one whose doc comment promised a \"canonical `kb://` URI ... from `kb_resource_uri`\", but `kb_resource_uri` does not exist in `migrations/` and the assembly wrote `kb_uri: self.origin_uri.clone()` (`substrate_read.rs:898,912`) — the same value under a second name and a false description. It joins `origin` (the constant `\"unified\"`) and `slug` (always `String::new()`) as a field this arc dropped for never having carried what it claimed.
+    # Original source URL or file reference.  There is deliberately no `kb_uri` beside this. No function in `migrations/` mints a canonical `kb://` URI, so such a field could only repeat this value under a second name and a false description. There is no `origin` or `slug` field either, for the same reason: neither could carry what its name claims.
     attr_accessor :origin_uri
 
     # A `kb_profiles.id` value.

@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # The bounded connections envelope — the `/connections` read's response body, the additive sibling of the `/edges` listing (spec D-F4: the bound lives at the read, with declared disclosure; the incumbent array endpoint is untouched).  The envelope carries its own paging state, so a caller can tell a whole set from a bounded page without knowing what it asked for — the same property `ResourceListResponse` gives the resource list (`crates/temper-workflow/src/types/resource.rs:209`), built the same way: through [`ResourceConnections::new`], which derives `returned` and `truncated` from the page rather than trusting a caller to keep them consistent with `rows`.  `total` is the FILTERED count — every incident edge the visibility gate admits, before `limit`. It rides the same `edges_visible_to` join the rows do; the service constructs the count from the listing's own predicate (see `edge_service::list_resource_connections`), so a row hidden from the listing is hidden from the denominator too.
+  # The bounded connections envelope — the `/connections` read's response body, the additive sibling of the `/edges` listing (spec D-F4: the bound lives at the read, with declared disclosure; the incumbent array endpoint is untouched).  The envelope carries its own paging state, so a caller can tell a whole set from a bounded page without knowing what it asked for — the same property `ResourceListResponse` gives the resource list, built the same way: through [`ResourceConnections::new`], which derives `returned` and `truncated` from the page rather than trusting a caller to keep them consistent with `rows`.  `total` is the FILTERED count — every incident edge the visibility gate admits, before `limit`. It rides the same `edges_visible_to` join the rows do; the service constructs the count from the listing's own predicate (see `edge_service::list_resource_connections`), so a row hidden from the listing is hidden from the denominator too.
   class ResourceConnections < ApiModelBase
     # The effective limit the server applied after clamping. An echo of what ran, not of what was asked.
     attr_accessor :limit
@@ -28,7 +28,7 @@ module Temper::Generated
     # Every incident edge the caller can see — the filtered match count, before `limit`.
     attr_accessor :total
 
-    # Are there matching edges beyond this page? Derived as the resource-list read derives its own: `offset + returned < total` (`resource.rs:254`, echoed in the SeedAxis doc at `bound.ts:38-44`). This read pages from the top — there is no offset parameter — so the derivation collapses to `returned < total` here; it is still computed from the page in the constructor, never trusted to a caller, and still deliberately not spelled `total > returned`, which is the form that lies on the last page of any walk that ever grows an offset.
+    # Are there matching edges beyond this page? Derived as the resource-list read derives its own: `offset + returned < total` (`ResourceListResponse::new`, echoed in the `SeedAxis` doc in `bound.ts`). This read pages from the top — there is no offset parameter — so the derivation collapses to `returned < total` here; it is still computed from the page in the constructor, never trusted to a caller, and still deliberately not spelled `total > returned`, which is the form that lies on the last page of any walk that ever grows an offset.
     attr_accessor :truncated
 
     # Attribute mapping from ruby-style variable name to JSON key.

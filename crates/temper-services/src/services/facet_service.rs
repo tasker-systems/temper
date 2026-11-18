@@ -1,14 +1,14 @@
 //! The resource facet read — the confirming read for a consequential write.
 //!
-//! A facet asserted on a resource steers region formation
-//! (`temper-substrate/src/substrate.rs:110-122` → `expand_facets` → clustering) and Atlas grouping
-//! (`context_graph_service.rs:105`). Until this read existed, the principal that asserted one could
-//! not see it back faithfully through any door.
+//! A facet asserted on a resource steers region formation (`temper_substrate::substrate::load` →
+//! `expand_facets` → clustering) and Atlas grouping (`context_graph_service::available_group_keys`).
+//! Until this read existed, the principal that asserted one could not see it back faithfully
+//! through any door.
 //!
 //! **"Could not see it back *faithfully*" — not "could not see it".** The distinction matters for
 //! anyone reading this module to work out why it exists. `get_meta` collapses every non-folded
 //! `kb_properties` row into a map keyed by `property_key`
-//! (`temper-substrate/src/readback/mod.rs:264-300`), so a facet has always surfaced inside
+//! (`temper_substrate::readback::meta`), so a facet has always surfaced inside
 //! `open_meta` — as one object, newest-wins, with the weight discarded and any sibling row hidden.
 //! That is worse than silence: it reads as complete. Production carries 30 resources with 2 or 3 live
 //! facet rows, of which `open_meta` discloses one, and 128 rows with a non-default weight, of which

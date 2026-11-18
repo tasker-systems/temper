@@ -69,6 +69,12 @@ jobs:
       - name: Check every temper-client request goes through the endpoint registry
         run: bash .github/scripts/check-client-op-registry.sh
 
+      # A `foo.rs:123` citation in a comment goes stale when the file grows, so none may land:
+      # zero under crates/*/src (test modules there included), and a per-file ratchet elsewhere
+      # under crates/ (line-citation-ratchet.tsv). internal/agents/code-quality.md states the rule.
+      - name: Check no comment cites a source location by line number
+        run: bash .github/scripts/check-no-line-citations.sh
+
       # Security tripwires (internal/development/security-audit-playbook.md). Pure static enumerators:
       # each pins a security-relevant set (grant write-sites, unauthenticated routes, handler-side
       # authz) against a reviewed baseline and fails when the set grows silently. They prove nothing
@@ -295,6 +301,9 @@ jobs:
 
       - name: Guard test — check-client-op-registry
         run: bash .github/scripts/test-check-client-op-registry.sh
+
+      - name: Guard test — check-no-line-citations
+        run: bash .github/scripts/test-check-no-line-citations.sh
 
       - name: Guard test — sqlx-test-template
         run: bash .github/scripts/test-sqlx-test-template.sh

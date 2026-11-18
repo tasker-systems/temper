@@ -283,7 +283,7 @@ impl RevokeWarrant<'_> {
 /// that has no live caller to change it for.
 ///
 /// It has no live caller because every surface *injects* the table as a literal
-/// (`handlers/resources.rs:430` and `:466`, `handlers/cognitive_maps.rs:365` and `:400`, and the
+/// (`handlers::resources::{grant, revoke}`, `handlers::cognitive_maps::{grant, revoke}`, and the
 /// MCP equivalents) and a DB CHECK bounds the column to those same four values
 /// (`migrations/20260714000020_connection_reach_grants.sql:44`). The `String` on the wire type is a
 /// stringly-typed spelling of a set the callers already know statically; this function is the one

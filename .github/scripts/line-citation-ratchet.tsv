@@ -1,0 +1,38 @@
+# Line-number citations in comments outside crates/*/src and tests/*/src, pinned per file.
+# Written by: UPDATE_BASELINE=1 .github/scripts/check-no-line-citations.sh
+# A count may fall, never rise. Replace a citation with the symbol it names.
+crates/temper-api/tests/block_read_handler_test.rs	1
+crates/temper-api/tests/citation_audit_handler_test.rs	1
+crates/temper-api/tests/citation_audit_trail_test.rs	1
+crates/temper-api/tests/context_orientation_test.rs	5
+crates/temper-api/tests/evidence_handler_test.rs	1
+crates/temper-api/tests/resource_facet_read_test.rs	2
+crates/temper-api/tests/telemetry_flush_test.rs	1
+crates/temper-core/tests/act_door_coverage_reachability.rs	3
+crates/temper-principal/tests/matrix.rs	1
+crates/temper-substrate/tests/anchor_shape_envelope.rs	5
+crates/temper-substrate/tests/block_read.rs	1
+crates/temper-substrate/tests/citation_audits.rs	8
+crates/temper-substrate/tests/common/mod.rs	1
+crates/temper-substrate/tests/content_mutation.rs	5
+crates/temper-substrate/tests/context_rename_replay.rs	1
+crates/temper-substrate/tests/context_telos_salience.rs	1
+crates/temper-substrate/tests/evidential_standing.rs	8
+crates/temper-substrate/tests/property_elements.rs	1
+crates/temper-substrate/tests/query_plan_compile.rs	1
+crates/temper-substrate/tests/replay_roundtrip.rs	3
+crates/temper-substrate/tests/resource_erasure_act.rs	1
+crates/temper-substrate/tests/search_exact_and_wide.rs	1
+crates/temper-substrate/tests/search_graph_expand.rs	1
+crates/temper-telemetry/tests/flush_budget.rs	1
+crates/temper-telemetry/tests/panicking_request_still_flushes.rs	1
+tests/e2e/tests/access_gate_test.rs	1
+tests/e2e/tests/cognitive_maps_contexts_attribution_witness_test.rs	1
+tests/e2e/tests/context_retire_e2e.rs	1
+tests/e2e/tests/ledger_graph_attribution_witness_test.rs	2
+tests/e2e/tests/ledger_graph_parity_test.rs	43
+tests/e2e/tests/legacy_profile_emitter_e2e.rs	1
+tests/e2e/tests/meta_test.rs	1
+tests/e2e/tests/resource_evidence_test.rs	6
+tests/e2e/tests/show_cache_e2e_test.rs	1
+tests/e2e/tests/slack_link_test.rs	1

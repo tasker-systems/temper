@@ -594,7 +594,7 @@ fn verify_archive_against_manifest(
 /// A manifest that merely arrived beside an attested archive is not attested:
 /// the archive's provenance says nothing about the bytes of a sibling object,
 /// which is exactly why `version.rs`'s `--online` path keys on the manifest's
-/// own digest too (`version.rs:38-53`). `build-cli-binaries.yml`'s
+/// own digest too (`version::verify_manifest_attestation`). `build-cli-binaries.yml`'s
 /// `attest-build-provenance` step lists the manifest as its own `subject-path`
 /// entry alongside the archive, so `/attestations/sha256:{manifest_digest}`
 /// resolves independently.

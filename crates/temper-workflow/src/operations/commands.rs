@@ -234,8 +234,8 @@ pub struct CommitDataArtifact {
 /// block's owning finding — is derived server-side from `block`. Letting a caller name a finding
 /// alongside the block would let it authorize over a finding it may read while writing onto a
 /// block of one it may not; the sealed authority proof exists to stop exactly that transposition
-/// (`temper-services/src/authz/audit_gate.rs:65-77`, which also states that this command and the
-/// HTTP surface share one spelling of the lookup).
+/// (`temper_services::authz::audit_gate::finding_of_block`, whose doc also states that this command
+/// and the HTTP surface share one spelling of the lookup).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordCitationAudit {
     /// The audited citation's block (`kb_content_blocks.id`).
@@ -255,7 +255,8 @@ pub struct RecordCitationAudit {
     /// Per-act correlation + authorship — stamps the authored `citation_audited` act. Empty by
     /// default; correlation never authorizes the write. The auditor's own confidence rides here
     /// (→ `kb_events.metadata`) and never the payload: only the signed `value` moves standing
-    /// (spec §4.2's self-grading prohibition, `temper-substrate/src/writes.rs:538-541`).
+    /// (spec §4.2's self-grading prohibition,
+    /// `temper_substrate::writes::record_citation_audit_with`).
     #[serde(default, skip_serializing_if = "ActContext::is_empty")]
     pub act: ActContext,
     pub origin: Surface,

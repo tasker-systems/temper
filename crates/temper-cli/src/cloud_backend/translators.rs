@@ -42,8 +42,7 @@ fn resolve_create_body(
 /// payload suitable for `POST /api/ingest`.
 ///
 /// **Body resolution:** If `cmd.body` is present and non-empty, use it.
-/// Otherwise synthesize `# {title}\n` (matches existing cloud_mode_create
-/// behavior in `commands/resource.rs:214`).
+/// Otherwise synthesize `# {title}\n` (see `resolve_create_body`).
 ///
 /// **Body-trio computation:** If `cmd.body` already carries pre-computed
 /// `content_hash` and `chunks_packed`, they are forwarded directly. Otherwise

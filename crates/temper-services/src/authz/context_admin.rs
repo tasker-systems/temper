@@ -14,7 +14,7 @@
 //! consistent" pass has to answer before collapsing the two arms into one refusal.
 //!
 //! Every arm **calls** its incumbent predicate; none restates one, per `super`'s module doc
-//! (`authz/mod.rs:12-16`). Design:
+//! (*What this is, and what it is not*). Design:
 //! `temper-artifacts:specs/2026-07-30-context-rename-design.md` §"`ContextAdminAuthority`".
 
 use async_trait::async_trait;
@@ -58,7 +58,7 @@ impl ScopedAuthority for ContextAdminAuthority {
     /// Probe in the spec's order. **Both orderings are load-bearing.**
     ///
     /// Admin sits at **2, not 1**, following the reasoning `TeamReadAuthority` already records
-    /// (`read_gates.rs:45-46`): the common caller is the administrator, and probing
+    /// (in `TeamReadAuthority::resolve`): the common caller is the administrator, and probing
     /// `is_system_admin` first charges every one of them an extra round-trip.
     ///
     /// Admin must sit **above 3**, and this is load-bearing. `context_visible_to` →

@@ -553,10 +553,10 @@ pub(super) fn validate_shape_indexed(
 /// that cannot see the composition is the stronger shape**: it cannot accidentally let a sibling
 /// stage's field satisfy this one's requirement, which is the defect the move exists to prevent.
 fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>) {
-    // `ActName` is open (`act.rs:45-46`), so an unrecognized act name deserializes into
-    // `Other` rather than failing serde. That makes this caller-reachable — a KNOWN variant with
-    // no declaration would be an internal inconsistency, not a caller error, and the capability
-    // pass owns that case.
+    // `ActName` is open (its `#[serde(untagged)] Other` variant), so an unrecognized act name
+    // deserializes into `Other` rather than failing serde. That makes this caller-reachable — a
+    // KNOWN variant with no declaration would be an internal inconsistency, not a caller error,
+    // and the capability pass owns that case.
     //
     // Shape rather than capability, and NOT because the check reads no declaration — that test is
     // the one this file's header names as insufficient. It is shape because catching a MISSPELLED
@@ -686,14 +686,14 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         //
         // **The impossibility argument was tried first and is FALSE**, recorded so it is not
         // re-derived. It ran: an anchor has no `'{}'`/`NULL` pair, so no fragment change makes an
-        // empty anchor mean something. But `disposition.rs:74-77` says that about TODAY's
-        // `(anchor_table, anchor_id)`, not about all fragment futures — and the very widening cited
-        // to retire the many arm falsifies it, since an `anchor_ids uuid[]` would give an empty
-        // anchor exactly the `'{}'` = bounded-to-nothing meaning `IdKind::Resource` already carries
-        // (`query_plan.rs` binds a caller resource array unrefused at any length, zero included).
-        // Under that widening BOTH arms retire. So this arm, like `UnknownAct` above, can in
-        // principle fire against a widened server; what keeps it here is that its wrong-firing
-        // costs an empty answer, where the many arm's costs a real one.
+        // empty anchor mean something. But `RefusalReason::AnchorTakesOneId` says that about
+        // TODAY's `(anchor_table, anchor_id)`, not about all fragment futures — and the very
+        // widening cited to retire the many arm falsifies it, since an `anchor_ids uuid[]` would
+        // give an empty anchor exactly the `'{}'` = bounded-to-nothing meaning `IdKind::Resource`
+        // already carries (`query_plan.rs` binds a caller resource array unrefused at any length,
+        // zero included). Under that widening BOTH arms retire. So this arm, like `UnknownAct`
+        // above, can in principle fire against a widened server; what keeps it here is that its
+        // wrong-firing costs an empty answer, where the many arm's costs a real one.
         //
         // Supplying SEVERAL is refused only because today's fragments take the pair, which is a
         // parameter shape — so that arm is capability, and lives in [`super::capability`] beside
@@ -717,11 +717,11 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
     // narrowing this door has yet to build.
     //
     // `[corrected — 2026-08-12]` This said "counts rows", and so did the refusal it raises. That is
-    // true of two of the three terms and false of the third: `scalars.rs:47` declares
-    // `BoundTerm::Regions` a FUNNEL WIDTH, `survey`'s only term and one with no rows to count —
+    // true of two of the three terms and false of the third: `BoundTerm::Regions`'s doc declares
+    // it a FUNNEL WIDTH, `survey`'s only term and one with no rows to count —
     // which is precisely what `survey_declines_limit_because_its_bound_is_a_funnel_width` is built
     // on. What is true of all three is that each is a non-negative count of something
-    // (`scalars.rs:30-31`: rows, rows skipped, regions), so that is what the detail now says.
+    // (`BoundTerm`'s doc: rows, rows skipped, regions), so that is what the detail now says.
     //
     // `[added — 2026-08-09]` The membership check was the only one, and `applied_terms` clamps only
     // DOWNWARD against a ceiling, so a negative value passed straight through to the statement:
@@ -842,10 +842,10 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
     // `[corrected — 2026-08-12]` This said the server "does not embed on the caller's behalf",
     // which is false in the other direction: the server DOES embed, which is why
     // `RefusalReason::EmbeddingUnavailable` exists for its failed attempt
-    // (`disposition.rs:94-96`: *"It does not fire for a missing embedding — the server computes
-    // one, because API callers structurally cannot"*) and why the `[widened — 2026-08-09]` note
-    // further down this same block describes `compile` reading a `None` as "the server tried and
-    // failed". What it will not supply is the question itself.
+    // (`RefusalReason::MissingIntention`: *"It does not fire for a missing embedding — the server
+    // computes one, because API callers structurally cannot"*) and why the
+    // `[widened — 2026-08-09]` note further down this same block describes `compile` reading a
+    // `None` as "the server tried and failed". What it will not supply is the question itself.
     //
     // `[widened at beat D — 2026-08-08]` `FindExact` was missing here, which was invisible while
     // the find acts were `NotSeparablyReachable` and became a real defect the moment the compiler

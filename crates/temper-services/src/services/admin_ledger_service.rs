@@ -225,9 +225,9 @@ async fn readable_event_types(
     //   `principal_standing_apply` emits through `COALESCE(p_actor, p_profile)`'s entity
     //   (20260720000030), so a self-service `request`/`withdraw`/`request_review` — the three acts
     //   that carry `actor: Some(self)` and `ActorAuthority::SelfPrincipal`
-    //   (access_service.rs:866, :957, :1019) — is emitted by the SUBJECT and comes back from
-    //   `list_by_actor(caller = actor = self)`, while an admin's act upon them is emitted by the
-    //   ADMIN and does not. Same shape as `slack_principal_disconnected`, for the same reason.
+    //   (`access_service::{create_join_request, withdraw_request, create_review_request}`) — is
+    //   emitted by the SUBJECT and comes back from `list_by_actor(caller = actor = self)`, while an
+    //   admin's act upon them is emitted by the ADMIN and does not. Same shape as `slack_principal_disconnected`, for the same reason.
     //
     //   THE NON-APPROVED PRINCIPAL IS EXCLUDED DELIBERATELY, decided 2026-08-24. `list_by_actor`
     //   gates on `has_system_access`, which since Task 7's repoint answers `standing = approved`, so

@@ -9,7 +9,7 @@
 //! single-flight on `(cogmap_id, persona, dispatch_type)`
 //! (`migrations/20260705000001_workflow_jobs.sql:43-45`, *"the single-flight guarantee"*). Enqueuing
 //! one job per swept row would therefore create the first job and have
-//! `workflow_job_enqueue`'s `ON CONFLICT DO NOTHING` (`:59-62`) **silently discard the other N−1** —
+//! `workflow_job_enqueue`'s `ON CONFLICT DO NOTHING` **silently discard the other N−1** —
 //! no error, no log, N findings collapsed into 1. So the tick groups the sweep by cogmap and
 //! enqueues ONE job whose payload carries the work list ([`AuditJobPayload`]), and the claimed job
 //! hands that list back ([`ClaimedAuditJob::citations`]) for the session to iterate.
@@ -54,9 +54,10 @@ pub struct AuditSweepRow {
 ///
 /// The finding rides along because it is not derivable from the pair at the point of use — the
 /// session addresses its write as `POST /api/resources/{finding}/citation-audits`, and the
-/// authorization subject is resolved server-side from `block_id` (`audit_gate.rs:65-77`), which
-/// then refuses if the two disagree. Carrying it is what lets the session address the finding it
-/// was actually given rather than one it inferred.
+/// authorization subject is resolved server-side from `block_id`
+/// (`temper_services::authz::audit_gate::finding_of_block`), which then refuses if the two
+/// disagree. Carrying it is what lets the session address the finding it was actually given
+/// rather than one it inferred.
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditCitation {

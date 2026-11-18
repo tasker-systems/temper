@@ -37,7 +37,7 @@ module Temper::Generated
 
     attr_accessor :value
 
-    # `kb_properties.weight`. **Load-bearing, and precisely what the frontmatter collapse drops**: the region producer clusters on it (`temper-substrate/src/substrate.rs:110-122` → `expand_facets`), and 128 production rows carry a non-default value.
+    # `kb_properties.weight`. **Load-bearing, and precisely what the frontmatter collapse drops**: the region producer clusters on it (`temper_substrate::substrate::load` → `expand_facets`), and 128 production rows carry a non-default value.
     attr_accessor :weight
 
     # Attribute mapping from ruby-style variable name to JSON key.

@@ -6,7 +6,7 @@
 //! event, always (goal C2); the delivery rows are *outcomes of processing* that event. They are
 //! written in Rust inside the intake transaction, which CONFORMS to the precedent the goal itself
 //! cites: `region_materialized` writes its N member rows in the event's own transaction
-//! (`temper-substrate/src/write.rs:196-204`) while its `_project_*` half only stamps a watermark.
+//! (`temper_substrate::write::materialize`) while its `_project_*` half only stamps a watermark.
 //! A payload-first projection half is unavailable here — the halves read only the payload
 //! (`canonical_schema.sql:473`) and chunk B's payload is the remote's verbatim body, which does
 //! not carry the matched set.

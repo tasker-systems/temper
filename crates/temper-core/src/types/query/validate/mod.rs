@@ -4678,9 +4678,9 @@ mod tests {
 
     #[test]
     fn an_unknown_act_name_is_refused_from_the_type_rather_than_from_the_registry() {
-        // `ActName` is open (`act.rs:45-46`), so `"act": "made-up"` deserializes into `Other`
-        // instead of failing serde — this is a caller-reachable refusal, and it is answerable
-        // without the registry, which is what lets it sit in the shape pass.
+        // `ActName` is open (its `#[serde(untagged)] Other` variant), so `"act": "made-up"`
+        // deserializes into `Other` instead of failing serde — this is a caller-reachable refusal,
+        // and it is answerable without the registry, which is what lets it sit in the shape pass.
         //
         // Pinned because the check was REWRITTEN when the passes split: it used to be
         // `declaration(&inv.act)` returning `None`, and it is now `matches!(inv.act,

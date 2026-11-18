@@ -10,7 +10,7 @@
 //! (`migrations/20260715000010_context_reassign_fns.sql:77-93`) re-implements the same policy in
 //! plpgsql — admin bypass, a target that is neither the root nor the gating team, owner/maintainer on it, administers-the-context —
 //! because it is the *atomic* enforcement behind [`crate::services::context_service::reassign`]'s
-//! pre-check (`context_service.rs:629` explains the pairing). That copy is deliberate and out of
+//! pre-check (`reassign`'s doc explains the pairing). That copy is deliberate and out of
 //! this module's reach. Anyone tempted to describe this as "the one place the policy lives" should
 //! read spec §6.2 first.
 

@@ -215,9 +215,9 @@ mod embed_impl {
         // Set 5's citation audit is trait-complete here but not yet CLI-dispatched. The command is
         // BLOCK-addressed by design — the finding may not be caller-named, because a caller that
         // could name one while writing onto a block of another is the transposition the sealed
-        // authority proof exists to stop (`temper-services/src/authz/audit_gate.rs:65-77`) — and
-        // for a while the only write route was finding-addressed, with no resolver read, which
-        // made dispatch structurally impossible. That ceased to hold when the block-addressed
+        // authority proof exists to stop (`temper_services::authz::audit_gate::finding_of_block`)
+        // — and for a while the only write route was finding-addressed, with no resolver read,
+        // which made dispatch structurally impossible. That ceased to hold when the block-addressed
         // route landed (`POST /api/citation-audits`,
         // `TemperClient::resources().record_citation_audit_for_block`): the caller still never
         // names a finding, so the invariant is intact and the CLI can dispatch through it. Wiring

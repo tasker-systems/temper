@@ -5,7 +5,7 @@
 //! It was, until the exporter needed the span to be *finished* at a moment we control.
 //!
 //! `TraceLayer` clones its span into the response body — `ResponseBody { …, span: Span }`
-//! (`tower-http-0.7.0/src/trace/body.rs:25`) — so the root span stays open until the body is
+//! (`tower-http` 0.7.0, `trace::ResponseBody`) — so the root span stays open until the body is
 //! dropped, which happens after every middleware in the chain has returned. That is the right
 //! design for `TraceLayer`'s purpose: it wants `on_body_chunk` and `on_eos` to run inside the
 //! span, and a streaming response is not "done" when the headers are.

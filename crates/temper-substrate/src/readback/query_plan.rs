@@ -137,10 +137,11 @@ pub const EMIT_LIST_RESOURCES_WITH: &str = "__temper_ungated_list_resources_with
 ///
 /// `[amended — 2026-08-17]` The ruling stands; the inventory beside it did not. This said
 /// `accepts_bound_terms` *"stays `[Limit]`"*, and `20260817000020` added `Offset` to it
-/// (`registry.rs:383`). That is the ruling holding rather than bending: a page boundary says
-/// nothing about what the act MEANS, only about which part of its answer you are looking at, so
-/// `offset` joined `limit`'s category exactly as the ruling sorts them. Depth did not move, and the
-/// list is no longer restated here — a copy of it is what went stale.
+/// (`follow-from`'s declaration in `registry::search_family`). That is the ruling holding rather
+/// than bending: a page boundary says nothing about what the act MEANS, only about which part of
+/// its answer you are looking at, so `offset` joined `limit`'s category exactly as the ruling sorts
+/// them. Depth did not move, and the list is no longer restated here — a copy of it is what went
+/// stale.
 ///
 /// It lives HERE, at the one place a walk is emitted, rather than as a fragment default, so there is
 /// exactly one answer to "how deep is a neighbourhood" and it is in the compiler that decides it.

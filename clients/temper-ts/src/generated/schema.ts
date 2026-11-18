@@ -4833,9 +4833,10 @@ export interface components {
          *
          *     The finding rides along because it is not derivable from the pair at the point of use — the
          *     session addresses its write as `POST /api/resources/{finding}/citation-audits`, and the
-         *     authorization subject is resolved server-side from `block_id` (`audit_gate.rs:65-77`), which
-         *     then refuses if the two disagree. Carrying it is what lets the session address the finding it
-         *     was actually given rather than one it inferred.
+         *     authorization subject is resolved server-side from `block_id`
+         *     (`temper_services::authz::audit_gate::finding_of_block`), which then refuses if the two
+         *     disagree. Carrying it is what lets the session address the finding it was actually given
+         *     rather than one it inferred.
          */
         AuditCitation: {
             /**
@@ -9843,11 +9844,11 @@ export interface components {
              * Format: uuid
              * @description The region's id, as stored.
              *
-             *     **Not durable, and the instability is the caller's to handle.** `assert_region`
-             *     (`temper-substrate/src/write.rs:673`) reuses this row when a region's member set is unchanged
-             *     and **mints a new id otherwise**, soft-folding the displaced row. So an id disclosed here may
-             *     name nothing by the time a caller acts on it — which a caller must render as *re-derived*,
-             *     never as an error and never as the reader's mistake.
+             *     **Not durable, and the instability is the caller's to handle.**
+             *     `temper_substrate::write::assert_region` reuses this row when a region's member set is
+             *     unchanged and **mints a new id otherwise**, soft-folding the displaced row. So an id
+             *     disclosed here may name nothing by the time a caller acts on it — which a caller must render
+             *     as *re-derived*, never as an error and never as the reader's mistake.
              */
             region_id: string;
             /**
@@ -10181,9 +10182,9 @@ export interface components {
          *
          *     The envelope carries its own paging state, so a caller can tell a whole set from a bounded
          *     page without knowing what it asked for — the same property `ResourceListResponse` gives the
-         *     resource list (`crates/temper-workflow/src/types/resource.rs:209`), built the same way: through
-         *     [`ResourceConnections::new`], which derives `returned` and `truncated` from the page rather
-         *     than trusting a caller to keep them consistent with `rows`.
+         *     resource list, built the same way: through [`ResourceConnections::new`], which derives
+         *     `returned` and `truncated` from the page rather than trusting a caller to keep them consistent
+         *     with `rows`.
          *
          *     `total` is the FILTERED count — every incident edge the visibility gate admits, before
          *     `limit`. It rides the same `edges_visible_to` join the rows do; the service constructs the
@@ -10215,10 +10216,10 @@ export interface components {
             total: number;
             /**
              * @description Are there matching edges beyond this page? Derived as the resource-list read derives
-             *     its own: `offset + returned < total` (`resource.rs:254`, echoed in the SeedAxis doc
-             *     at `bound.ts:38-44`). This read pages from the top — there is no offset parameter —
-             *     so the derivation collapses to `returned < total` here; it is still computed from
-             *     the page in the constructor, never trusted to a caller, and still deliberately not
+             *     its own: `offset + returned < total` (`ResourceListResponse::new`, echoed in the
+             *     `SeedAxis` doc in `bound.ts`). This read pages from the top — there is no offset
+             *     parameter — so the derivation collapses to `returned < total` here; it is still computed
+             *     from the page in the constructor, never trusted to a caller, and still deliberately not
              *     spelled `total > returned`, which is the form that lies on the last page of any walk
              *     that ever grows an offset.
              */
@@ -10460,7 +10461,7 @@ export interface components {
             /**
              * Format: double
              * @description `kb_properties.weight`. **Load-bearing, and precisely what the frontmatter collapse drops**:
-             *     the region producer clusters on it (`temper-substrate/src/substrate.rs:110-122` →
+             *     the region producer clusters on it (`temper_substrate::substrate::load` →
              *     `expand_facets`), and 128 production rows carry a non-default value.
              */
             weight: number;
@@ -10719,17 +10720,11 @@ export interface components {
         /**
          * @description One addable or removable part of a [`ResourceView`].
          *
-         *     Replaces `--meta-only`, which conflated two axes because the two commands differ in
-         *     what they otherwise return: on `show` it means *drop the body*
-         *     (`temper-cli/src/cli.rs:571-575` — "Show everything except the body"), on `list` it
-         *     means *add both meta tiers* (`:537-542` — "each row carries both the managed and open
-         *     meta tiers ... on top of the usual row fields"). Once both commands answer in one
-         *     shape, that flag has two meanings and no coherent one.
-         *
-         *     Naming the parts lets a caller add or remove each independently — including
-         *     `show --with edges --without body`, which is **unreachable today**: `meta_only`
-         *     carries `conflicts_with = "edges"` (`temper-cli/src/cli.rs:574`), so the present
-         *     design needs a rule to forbid a combination that is merely useful.
+         *     `show` and `list` answer in one shape, so one flag cannot mean *drop the body* on one
+         *     and *add the meta tiers* on the other. Naming the parts instead lets a caller add or
+         *     remove each independently, with `--with` and `--without` — including
+         *     `show --with edges --without body`
+         *     (`cli::section_flag_tests::show_with_edges_without_body_parses`).
          *
          *     The managed tier is deliberately **not** a section: [`ResourceView::managed_meta`] is
          *     always present, which is what makes dropping the hoisted workflow fields lossless.
@@ -11034,13 +11029,10 @@ export interface components {
             /**
              * @description Original source URL or file reference.
              *
-             *     There is deliberately no `kb_uri` beside this. `ExactHit`/`WideHit` carried one
-             *     whose doc comment promised a "canonical `kb://` URI ... from `kb_resource_uri`",
-             *     but `kb_resource_uri` does not exist in `migrations/` and the assembly wrote
-             *     `kb_uri: self.origin_uri.clone()` (`substrate_read.rs:898,912`) — the same value
-             *     under a second name and a false description. It joins `origin` (the constant
-             *     `"unified"`) and `slug` (always `String::new()`) as a field this arc dropped for
-             *     never having carried what it claimed.
+             *     There is deliberately no `kb_uri` beside this. No function in `migrations/` mints a
+             *     canonical `kb://` URI, so such a field could only repeat this value under a second
+             *     name and a false description. There is no `origin` or `slug` field either, for the
+             *     same reason: neither could carry what its name claims.
              */
             origin_uri: string;
             originator_profile_id: components["schemas"]["ProfileId"];

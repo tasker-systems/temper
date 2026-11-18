@@ -6,11 +6,8 @@ use crate::{refusal::Refusal, standing::Standing};
 /// constructor, no `Default`, and no `From`, so a value of this type cannot exist without a
 /// standing of `Approved` having been read and parsed.
 ///
-/// This is a genuine enforcement, and it is new. The design doc describes it as "preserving the
-/// type-state guarantee `SystemAuthorized` has today" — but `SystemAuthorized` is
-/// `pub struct SystemAuthorized(pub AuthenticatedProfile)` with a public field and no `impl`
-/// block (temper-services/src/auth/mod.rs:263), so any crate can build one by struct literal.
-/// That gap is filed separately; it is not inherited here.
+/// The same type-state guarantee as `temper_services::auth::SystemAuthorized`, whose field is
+/// private too: neither proof can be built by struct literal outside its own module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdmittedPrincipal {
     /// Private. This is the whole point of the type.

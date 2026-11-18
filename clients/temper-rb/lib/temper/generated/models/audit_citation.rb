@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # One unit of the auditor's work: a `(block, source)` citation, and the finding it belongs to.  The finding rides along because it is not derivable from the pair at the point of use — the session addresses its write as `POST /api/resources/{finding}/citation-audits`, and the authorization subject is resolved server-side from `block_id` (`audit_gate.rs:65-77`), which then refuses if the two disagree. Carrying it is what lets the session address the finding it was actually given rather than one it inferred.
+  # One unit of the auditor's work: a `(block, source)` citation, and the finding it belongs to.  The finding rides along because it is not derivable from the pair at the point of use — the session addresses its write as `POST /api/resources/{finding}/citation-audits`, and the authorization subject is resolved server-side from `block_id` (`temper_services::authz::audit_gate::finding_of_block`), which then refuses if the two disagree. Carrying it is what lets the session address the finding it was actually given rather than one it inferred.
   class AuditCitation < ApiModelBase
     # The citing block.
     attr_accessor :block_id

@@ -6,15 +6,16 @@
 //! to it. The claim is written by the migration, inside its own transaction. The outcome cannot be:
 //!
 //! `[observed — 2026-07-31]` sqlx wraps a migration's body and its `_sqlx_migrations` bookkeeping in
-//! **one transaction** (`sqlx-postgres-0.8.6/src/migrate.rs:222-224`). So a `pending` row written
-//! from inside a migration is rolled back by the very failure it exists to record — probed
-//! directly, zero rows survive. **`failed` is unrecordable from inside a migration.**
+//! **one transaction** (`sqlx-postgres` 0.8.6, `<PgConnection as Migrate>::apply`). So a
+//! `pending` row written from inside a migration is rolled back by the very failure it exists to
+//! record — probed directly, zero rows survive. **`failed` is unrecordable from inside a
+//! migration.**
 //!
 //! And sqlx will not tell us either. `_sqlx_migrations.success` is written in exactly one place,
-//! hardcoded `TRUE` (`migrate.rs:288`); nothing ever writes `false`. So [`Migrate::dirty_version`],
-//! whose only job is `SELECT version … WHERE success = false`, **can never return a row on
-//! Postgres** — even though the trait's own comment promises "insert new row on completion (success
-//! or failure)".
+//! hardcoded `TRUE` (the `INSERT` in `sqlx-postgres`'s `execute_migration`); nothing ever writes
+//! `false`. So [`Migrate::dirty_version`], whose only job is
+//! `SELECT version … WHERE success = false`, **can never return a row on Postgres** — even though
+//! the trait's own comment promises "insert new row on completion (success or failure)".
 //!
 //! # What this borrows rather than rebuilds
 //!
@@ -272,7 +273,7 @@ pub async fn run_with_ledger(
 //
 // The declaration rule is SET-shaped, not per-file: `20260731000020` declares 148 other versions,
 // because those shipped before the mechanism existed and a shipped migration cannot be edited
-// (sqlx checksum-verifies at `sqlx-core/src/migrate/migrator.rs:175`). So the map is built over
+// (sqlx checksum-verifies in `sqlx-core` 0.8.6 `Migrator::run_direct`). So the map is built over
 // every embedded migration, latest claim winning — which is also what makes `reclassify_migration`
 // route correctly rather than being ignored.
 //
@@ -552,7 +553,7 @@ pub fn declared_classes(migrator: &Migrator) -> BTreeMap<i64, String> {
 ///
 /// # Why the plan is a PREFIX and not a filtered subset
 ///
-/// `run_direct` calls `validate_applied_migrations` (`sqlx-core-0.8.6/src/migrate/migrator.rs:161`),
+/// `run_direct` calls `validate_applied_migrations` (`sqlx-core` 0.8.6, `migrate::migrator`),
 /// which errors `VersionMissing` for any migration recorded in `_sqlx_migrations` that is absent
 /// from the list it is given. So handing it "just the additive ones" fails on every database that
 /// has ever migrated. Truncating at the halt keeps history intact — and every already-applied
@@ -560,7 +561,7 @@ pub fn declared_classes(migrator: &Migrator) -> BTreeMap<i64, String> {
 /// with a version above the halt.
 ///
 /// Retained-but-applied migrations are not re-run: `run_direct`'s loop checksum-validates them and
-/// moves on (`migrator.rs:173-178`).
+/// moves on (the `VersionMismatch` check in `Migrator::run_direct`).
 pub fn plan_additive_run(migrator: &Migrator, applied: &HashSet<i64>) -> AdditivePlan {
     let classes = declared_classes(migrator);
 
@@ -612,9 +613,10 @@ pub fn plan_additive_run(migrator: &Migrator, applied: &HashSet<i64>) -> Additiv
 /// reported it as *"an apply that FAILED"* and sent the operator to
 /// `SELECT * FROM migration_current WHERE state <> 'success'`. **That query returns nothing here.**
 /// Both variants below are raised by `run_direct` *before or instead of* applying anything
-/// (`sqlx-core-0.8.6/src/migrate/migrator.rs:161` and `:176`), so no apply was attempted, no
-/// `pending` row was written, and there is no unsuccessful outcome to find. The advice was correct
-/// for the failure it was written for and pointed at an empty result for the one that happened.
+/// (`sqlx-core` 0.8.6 `Migrator::run_direct`: its `validate_applied_migrations` call and its
+/// `VersionMismatch` check), so no apply was attempted, no `pending` row was written, and there is
+/// no unsuccessful outcome to find. The advice was correct for the failure it was written for and
+/// pointed at an empty result for the one that happened.
 ///
 /// The two variants are one class because the operator does one thing about both: the database has
 /// applied something this binary's `migrations/` no longer matches. In practice that is a shipped
