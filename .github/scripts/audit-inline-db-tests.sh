@@ -65,7 +65,6 @@ services/as_reap_service.rs
 services/auditor_service.rs
 services/blob_reap_service.rs
 services/context_service.rs
-services/delivery_service.rs
 services/embed_service.rs
 services/erasure_fence_service.rs
 services/erasure_service.rs
@@ -76,12 +75,8 @@ services/profile_service.rs
 services/reassign_service.rs
 services/resource_erasure_service.rs
 services/shape_service.rs
-services/slack_disconnect_service.rs
-services/slack_grant_vault_service.rs
-services/slack_link_service.rs
 services/standing_service.rs
 services/steward_service.rs
-services/subscription_service.rs
 services/team_service.rs
 services/workflow_job_service.rs
 EOF

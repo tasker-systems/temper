@@ -165,6 +165,10 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 # moved, unedited, with their test modules into `<module>/tests.rs`. Each is still compiled only
 # under `#[cfg(all(test, feature = "test-db"))]`, now on the `mod tests;` declaration.
 # `machine_registration_service.rs` keeps its one production site.
+# REVIEWED 2026-11-18 (R24, slack and delivery batch) — no write-site added, removed or changed.
+# The TEST-ONLY `grant_write` insert reviewed above for `services/subscription_service.rs` moved,
+# unedited, with its test module into `services/subscription_service/tests.rs`, still compiled only
+# under `#[cfg(all(test, feature = "test-db"))]`, now on the `mod tests;` declaration.
 read -r -d '' BASELINE <<'EOF' || true
 3 crates/temper-services/src/authz/audit_gate/tests.rs
 1 crates/temper-services/src/authz/context_admin/tests.rs
@@ -179,7 +183,7 @@ read -r -d '' BASELINE <<'EOF' || true
 1 crates/temper-services/src/services/machine_registration_service/tests.rs
 2 crates/temper-services/src/services/materialize_service.rs
 1 crates/temper-services/src/services/steward_service.rs
-1 crates/temper-services/src/services/subscription_service.rs
+1 crates/temper-services/src/services/subscription_service/tests.rs
 1 crates/temper-substrate/src/scenario/access/loader.rs
 EOF
 
