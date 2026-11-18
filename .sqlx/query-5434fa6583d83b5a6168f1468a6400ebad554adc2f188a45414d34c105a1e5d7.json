@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT h.anchor_table, h.anchor_id\n             FROM kb_resource_homes h\n             JOIN kb_resources r ON r.id = h.resource_id\n            WHERE h.resource_id = $1 AND r.is_active",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "anchor_table",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "anchor_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "5434fa6583d83b5a6168f1468a6400ebad554adc2f188a45414d34c105a1e5d7"
+}
