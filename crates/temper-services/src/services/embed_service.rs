@@ -3,7 +3,7 @@
 //! (`temper_substrate::embed::embed_resource_chunks`), and marks the clean ones done. A failed embed
 //! is left `in_progress` for the reaper's retry→dead path — errors are off the create request path.
 //!
-//! SERVICE-DIRECT (not a `Backend` trait command): embedding is a **system** backfill with no profile
+//! SERVICE-DIRECT (not a `DbBackend` command): embedding is a **system** backfill with no profile
 //! scoping — unlike the steward dispatch, which sweeps profile-visible maps. The `/api/embed/dispatch`
 //! endpoint (CRON_SECRET-gated) is the only caller; there is no per-resource authz because the queue
 //! is fed only by the trusted server-side write path.

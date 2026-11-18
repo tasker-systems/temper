@@ -1,7 +1,7 @@
 //! Substrate read dispatcher — the service-direct read paths (list / show / get_content / get_meta /
 //! search) over the one schema.
 //!
-//! These reads bypass the `Backend` trait by design (the trait projections are lossy and don't cover
+//! These reads bypass `DbBackend` by design (the trait projections are lossy and don't cover
 //! meta/body/content); they resolve against `temper_substrate::readback`. The resource read paths
 //! answer in [`ResourceView`] — the one shape a resource has — assembled from the batched
 //! `readback::hit_identities` and then given whatever [`SectionSet`] the caller asked for by
@@ -1734,7 +1734,7 @@ fn arm_reason(hits: usize) -> SearchReason {
 }
 
 /// `anchor_shape` — the surface-tier read of an anchor's materialized regions, for a context OR a
-/// cogmap (spec §3.7, T8). Service-direct (reads bypass the Backend trait). The access gate lives in
+/// cogmap (spec §3.7, T8). Service-direct (reads bypass `DbBackend`). The access gate lives in
 /// the SQL function: a principal who cannot read the anchor gets an empty envelope, never an error —
 /// and for a context that gate is `context_readable_by_profile`, so a context read-grant grants this
 /// read by construction rather than by a second hand-rolled check. Maps the substrate rows to the
@@ -1874,7 +1874,7 @@ pub async fn context_analytics_select(
 /// `cogmap_charter_select` (T1 Sequence C) — the telos/charter-block read: composes `cogmap_telos`
 /// (resolve the map to its charter resource) with the generic `resource_blocks` projection, unfiltered
 /// by role, so a caller gets the statement + questions + framing in seq order. Service-direct (reads
-/// bypass the Backend trait); the access gate lives IN the SQL (`resources_readable_by('profile', …)`
+/// bypass `DbBackend`); the access gate lives IN the SQL (`resources_readable_by('profile', …)`
 /// composes `resources_visible_to`) — a principal who cannot read the charter resource gets an empty
 /// vec, never an error. `role`/`body_text`/`seq` are forced non-null (`role!`/`body!`/`seq!`): a
 /// non-folded charter block always carries exactly one `block_role` and an assembled body (design
@@ -1900,7 +1900,7 @@ pub async fn cogmap_charter_select(
 }
 
 /// The block-addressed three-state read (the defined-dangling-state design). Service-direct
-/// (reads bypass the Backend trait). The home-resource gate runs first inside the substrate
+/// (reads bypass `DbBackend`). The home-resource gate runs first inside the substrate
 /// readback (`ensure_visible` — the canonical `resources_visible_to` predicate, the same one
 /// `resources_readable_by('profile', …)` delegates to): not-visible renders as `Err(NotFound)`,
 /// denying existence, never 403. All three arms return as DATA (MCP renders the envelope
@@ -1929,7 +1929,7 @@ pub async fn block_read_select(
 }
 
 /// `resource_block_provenance` — the itemized per-block provenance read for one resource. Service-direct
-/// (reads bypass the Backend trait). The access gate lives IN the SQL function
+/// (reads bypass `DbBackend`). The access gate lives IN the SQL function
 /// (`resources_readable_by('profile', …)` composes `resources_visible_to`): a principal who cannot read
 /// the resource gets an empty vec, never an error. Rows arrive ordered by `(block_seq, accretion_seq)`.
 /// The function's `RETURNS TABLE` declares every column nullable, but each maps a `NOT NULL` table
@@ -1960,7 +1960,7 @@ pub async fn resource_block_provenance_select(
 }
 
 /// `invocation_show` — the show projection of one invocation envelope plus its acts. Service-direct
-/// (reads bypass the Backend trait). The access gate lives in the readback SQL: a principal who cannot
+/// (reads bypass `DbBackend`). The access gate lives in the readback SQL: a principal who cannot
 /// read the originating cogmap gets `None`, never an error. Maps the substrate-local row to the wire
 /// type.
 pub async fn invocation_show_select(

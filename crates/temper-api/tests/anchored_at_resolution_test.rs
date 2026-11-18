@@ -30,7 +30,7 @@ use temper_core::types::provenance::{BlockFoldDisposition, ProvenanceSource};
 use temper_services::backend::DbBackend;
 use temper_services::services::edge_service::list_edge_facets;
 use temper_workflow::operations::{
-    AssertRelationship, Backend, BodyUpdate, CreateResource, SetFacet, Surface, UpdateResource,
+    AssertRelationship, BodyUpdate, CreateResource, SetFacet, Surface, UpdateResource,
 };
 use temper_workflow::types::managed_meta::ManagedMeta;
 

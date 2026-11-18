@@ -22,7 +22,7 @@ use temper_core::types::ids::{ContextId, CorrelationId, ProfileId, ResourceId};
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::Surface;
-use temper_workflow::operations::{Backend, CreateResource, UpdateResource};
+use temper_workflow::operations::{CreateResource, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Seed a substrate profile + a profile-owned `temper` context (the minimum the write path's

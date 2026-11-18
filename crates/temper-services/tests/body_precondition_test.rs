@@ -22,7 +22,7 @@ use temper_core::types::resource_view::{ResourceSection, SectionSet};
 use temper_services::backend::{substrate_read, DbBackend};
 use temper_services::test_support;
 use temper_workflow::operations::{
-    Backend, BodyUpdate, CreateResource, ShowResource, Surface, UpdateResource,
+    BodyUpdate, CreateResource, ShowResource, Surface, UpdateResource,
 };
 use temper_workflow::types::managed_meta::ManagedMeta;
 use uuid::Uuid;

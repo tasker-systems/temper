@@ -9,7 +9,7 @@
 //! unauthorized caller gets the gate's own refusal — never a 404 that would act as an
 //! existence oracle.
 //!
-//! Backend-level, like the write leg's sibling file (`anchored_at_write_test.rs`): every
+//! `DbBackend`-level, like the write leg's sibling file (`anchored_at_write_test.rs`): every
 //! surface dispatches through `DbBackend`, so the shared dispatch is the layer that bites.
 
 mod common;
@@ -25,7 +25,7 @@ use temper_core::types::ids::{ContextId, EdgeId, ProfileId, PropertyId, Resource
 use temper_core::types::property_owner::PropertyOwner;
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{
-    AssertRelationship, Backend, CreateResource, RetractFacet, SetFacet, Surface,
+    AssertRelationship, CreateResource, RetractFacet, SetFacet, Surface,
 };
 use temper_workflow::types::managed_meta::ManagedMeta;
 

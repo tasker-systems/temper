@@ -14,7 +14,7 @@ use temper_core::types::ids::{CogmapId, ProfileId, ResourceId};
 use temper_core::types::ingest::IngestCreateResponse;
 use temper_core::types::ingest::IngestPayload;
 use temper_core::types::resource_view::ResourceView;
-use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, UpdateResource};
+use temper_workflow::operations::{BodyUpdate, CreateResource, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Begin a segmented ingest

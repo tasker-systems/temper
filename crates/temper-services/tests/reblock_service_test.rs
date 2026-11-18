@@ -22,7 +22,7 @@ use temper_substrate::content::{prepare_block_from_chunks, IncomingChunk};
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{EntityId, ProfileId as SubstrateProfileId};
 use temper_substrate::payloads::AnchorRef;
-use temper_workflow::operations::{Backend, ReblockResources, Surface};
+use temper_workflow::operations::{ReblockResources, Surface};
 use uuid::Uuid;
 
 const SECTION_A: &str = "# Alpha\n\nAlpha body paragraph.\n";

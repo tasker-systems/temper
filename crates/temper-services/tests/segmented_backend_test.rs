@@ -13,7 +13,7 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_core::types::ingest::{pack_chunks, AppendBlockPayload, FinalizePayload, PackedChunk};
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{Backend, CreateResource, Surface};
+use temper_workflow::operations::{CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Seed a substrate profile + a profile-owned `temper` context (the minimum the write path's
@@ -291,7 +291,7 @@ async fn begin_segmented_ingest_lands_block_zero_and_records_the_source(pool: Pg
     assert_eq!(source_hash.as_deref(), Some("sha256:abc"));
 }
 
-// Every other Backend write threads `cmd.origin`; append/finalize hardcoded Surface::ApiHttp.
+// Every other `DbBackend` write threads `cmd.origin`; append/finalize hardcoded Surface::ApiHttp.
 // Harmless while the API was the only caller — wrong the moment MCP appends a block, which would
 // then be attributed to the `web` emitter. The surface marker lives in `kb_entities.name` as
 // `<handle>@<surface>` (see `writes::resolve_emitter`), not in a column of its own.

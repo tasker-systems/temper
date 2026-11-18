@@ -22,7 +22,7 @@ use temper_services::services::field_scrub_service::{
     execute_field_scrub, list_field_scrub_families, FieldScrubOutcome, FieldScrubRequest,
 };
 use temper_services::test_support;
-use temper_workflow::operations::{Backend, CreateResource, ShowResource, Surface, UpdateResource};
+use temper_workflow::operations::{CreateResource, ShowResource, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 use uuid::Uuid;
 

@@ -1,5 +1,5 @@
 //! Resource ownership reassignment over `kb_resource_homes`, event-sourced via
-//! `writes::reassign_resource_with`. Service-direct (no Backend-trait command),
+//! `writes::reassign_resource_with`. Service-direct (no `DbBackend` command),
 //! same precedent as `invitation_service` / `team_service`. Authorization
 //! precedes every write.
 //!

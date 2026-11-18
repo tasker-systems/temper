@@ -32,7 +32,7 @@ use temper_services::backend::substrate_read::resource_block_provenance_select;
 use temper_services::backend::DbBackend;
 use temper_services::services::edge_service::list_edge_facets;
 use temper_workflow::operations::{
-    AssertRelationship, Backend, BodyUpdate, CreateResource, FoldRelationship, SetFacet, Surface,
+    AssertRelationship, BodyUpdate, CreateResource, FoldRelationship, SetFacet, Surface,
 };
 use temper_workflow::types::managed_meta::ManagedMeta;
 

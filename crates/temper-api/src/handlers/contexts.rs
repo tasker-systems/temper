@@ -23,7 +23,7 @@ use temper_services::services::context_service::{
 };
 use temper_services::services::materialize_service;
 use temper_services::state::AppState;
-use temper_workflow::operations::{Backend, MaterializeOnThreshold};
+use temper_workflow::operations::MaterializeOnThreshold;
 
 /// List contexts you can see
 #[utoipa::path(

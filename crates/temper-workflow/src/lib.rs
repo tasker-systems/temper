@@ -3,8 +3,8 @@
 //!
 //! This crate owns the doctype-aware vocabulary: resource rows, managed
 //! metadata, the frontmatter model (incl. `DocType`), schema validation,
-//! the vault projection, doc-type defaults, the operations command layer
-//! (`Backend` trait), the managed-metadata hash, and the `DocType`-dependent
+//! the vault projection, doc-type defaults, the operations command vocabulary
+//! (which the server's `DbBackend` runs), the managed-metadata hash, and the `DocType`-dependent
 //! half of the knowledge graph. It depends only on the neutral `temper-core`
 //! leaf.
 

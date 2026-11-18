@@ -339,7 +339,7 @@ pub struct CogmapDetail {
 //
 // Binding a cognitive map to a team writes a `kb_team_cogmaps` row — it widens
 // the map's least-privilege producer-intersection reach (access §4). The surface
-// is SERVICE-DIRECT and admin-gated (mirrors team membership, not a Backend
+// is SERVICE-DIRECT and admin-gated (mirrors team membership, not a `DbBackend`
 // command). Full derive stack mirrors `team::AddMemberRequest`.
 // ---------------------------------------------------------------------------
 

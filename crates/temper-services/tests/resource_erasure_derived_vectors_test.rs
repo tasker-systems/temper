@@ -41,7 +41,7 @@ use temper_substrate::ids::{ContextId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
 use temper_substrate::writes::{self, CreateParams};
 use temper_substrate::{substrate, write};
-use temper_workflow::operations::{Backend, MaterializeOnThreshold, Surface};
+use temper_workflow::operations::{MaterializeOnThreshold, Surface};
 
 /// Distances below this are "the same vector" (pgvector stores float4).
 const SAME: f64 = 1e-5;

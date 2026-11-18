@@ -4229,7 +4229,7 @@ mod reblock_tests {
                                 // The Rust op AND the SQL entry wrapper carrying the same fold
                                 // semantics — either called from outside the substrate's own
                                 // write/fire plumbing is a bypass. Each half excludes the
-                                // command-family symbol that shares its name: the Backend
+                                // command-family symbol that shares its name: the `DbBackend`
                                 // command `reblock_resources` embeds the op's singular symbol,
                                 // and the MCP tool fn `resource_reblock` shares the SQL
                                 // function's — neither is an op caller, so a bare substring
@@ -4254,7 +4254,7 @@ mod reblock_tests {
 
     /// The op's two call forms — `reblock_resource` (the Rust op) and `resource_reblock(` (its
     /// SQL entry wrapper) — matched precisely enough to NOT match the same-named
-    /// command-family symbols the rename introduced: the Backend command `reblock_resources`
+    /// command-family symbols the rename introduced: the `DbBackend` command `reblock_resources`
     /// (its plural embeds the op's singular symbol) and the MCP tool fn `resource_reblock`
     /// (a Rust `fn ` definition or a `::`-qualified call, never how SQL reaches the function).
     /// The substring forms alone cannot separate them; these two shape rules do, so the fence

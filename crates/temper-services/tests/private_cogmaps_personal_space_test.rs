@@ -19,7 +19,7 @@ use temper_services::backend::DbBackend;
 use temper_services::error::ApiError;
 use temper_services::services::{access_service, cogmap_service, context_service};
 use temper_services::test_support;
-use temper_workflow::operations::{Backend, CreateCognitiveMap, Surface};
+use temper_workflow::operations::{CreateCognitiveMap, Surface};
 use uuid::Uuid;
 
 async fn person(pool: &PgPool, handle: &str) -> Uuid {

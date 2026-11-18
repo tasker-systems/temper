@@ -15,9 +15,7 @@ use temper_services::services::shape_service;
 use temper_services::services::shape_service::DeclareShapeServiceParams;
 use temper_substrate::payloads::{AnchorRef, ArtifactIntent, EnforcementMode};
 use temper_substrate::writes::{self, CommitDataArtifactParams};
-use temper_workflow::operations::{
-    Backend, BodyUpdate, CreateResource, MoveSpec, Surface, UpdateResource,
-};
+use temper_workflow::operations::{BodyUpdate, CreateResource, MoveSpec, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 async fn seed_profile(pool: &PgPool, email: &str) -> uuid::Uuid {

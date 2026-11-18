@@ -2,7 +2,7 @@
 //!
 //! Service-direct (the read-path convention): the surface passes a resolved anchor + optional
 //! threshold; this gates on `anchor_readable_by_profile` and returns the [`MaterializeDelta`]. The
-//! write side (running the materialize when over threshold) routes through the `Backend` trait /
+//! write side (running the materialize when over threshold) routes through `DbBackend` /
 //! `DbBackend`, not here.
 //!
 //! The delta reuses the SAME drift signal as the "is a recorded fingerprint stale?" gate — a cheap
@@ -106,7 +106,7 @@ mod tests {
     use crate::backend::DbBackend;
     use sqlx::PgPool;
     use temper_core::error::TemperError;
-    use temper_workflow::operations::{Backend, MaterializeOnThreshold, Surface};
+    use temper_workflow::operations::{MaterializeOnThreshold, Surface};
 
     /// A minimal cogmap graph: a member profile (in the team joined to the cogmap), an outsider (no
     /// access), the cogmap, and an emitter entity for synthesizing map-anchored events.

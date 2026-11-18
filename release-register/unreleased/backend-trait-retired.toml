@@ -1,0 +1,14 @@
+title    = "The server's write commands are DbBackend's own methods; the shared Backend trait is gone"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+What changed: `temper_workflow::operations::Backend`, a trait with one implementation, is deleted,
+and `DbBackend`'s 27 write commands are inherent methods. temper-api's handlers and tests change
+only their imports, which is why this PR touches the wire paths.
+
+No door moves: no route, request or response shape, status code, refusal text, MCP tool, CLI
+output or schema description changes. Nobody outside the codebase observes it. Release relevance:
+signal-only.
+'''

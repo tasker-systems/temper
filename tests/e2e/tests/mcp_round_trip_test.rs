@@ -4,7 +4,7 @@ mod common;
 
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_services::backend::{substrate_read, DbBackend};
-use temper_workflow::operations::{Backend, BodyUpdate, Surface, UpdateResource};
+use temper_workflow::operations::{BodyUpdate, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Helper: SHA256 hex digest of content.

@@ -1,12 +1,12 @@
 //! `/api/invocations` — the agent-invocation envelope surface (accountability grain).
 //!
-//! Writes (`open`/`close`) dispatch ONE operations command through the `Backend` trait — never calling
+//! Writes (`open`/`close`) dispatch ONE operations command through `DbBackend` — never calling
 //! services or `sqlx::query!` directly. Auth-before-write lives INSIDE the backend
 //! (`open_invocation` gates on `check_cogmap_authorable` — every open, delegated or not;
 //! `close_invocation` gates on readability inside its own lookup), so the handlers do NOT add a
 //! handler-level auth gate; they just dispatch and let the backend return `Forbidden`/404.
 //!
-//! Reads (`show`/`list`) are service-direct via the `substrate_read` wrappers (the Backend-trait
+//! Reads (`show`/`list`) are service-direct via the `substrate_read` wrappers (the `DbBackend`
 //! projections are lossy; reads are passthroughs). The readback's deny→`None` contract makes deny and
 //! absent indistinguishable — both surface as 404 (leak-safe).
 
@@ -27,7 +27,7 @@ use temper_core::types::invocation_requests::{
     CloseInvocationRequest, InvocationAck, OpenInvocationRequest,
 };
 use temper_core::types::query_params::InvocationListQuery as ListQuery;
-use temper_workflow::operations::{Backend, CloseInvocation, OpenInvocation};
+use temper_workflow::operations::{CloseInvocation, OpenInvocation};
 
 /// Open an invocation
 #[utoipa::path(

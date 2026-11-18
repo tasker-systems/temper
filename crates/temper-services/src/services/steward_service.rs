@@ -2,7 +2,7 @@
 //!
 //! Service-direct (the read-path convention): the surface passes a resolved cogmap id + optional
 //! threshold; this gates on `anchor_readable_by_profile` and returns the [`IngestDelta`]. The write
-//! side (advancing the watermark) routes through the `Backend` trait / `DbBackend`, not here.
+//! side (advancing the watermark) routes through `DbBackend`, not here.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -143,7 +143,7 @@ mod tests {
     use crate::backend::DbBackend;
     use sqlx::PgPool;
     use temper_core::error::TemperError;
-    use temper_workflow::operations::{AdvanceStewardWatermark, Backend, Surface};
+    use temper_workflow::operations::{AdvanceStewardWatermark, Surface};
 
     /// A minimal team-self-cognition graph: a member profile (in the team joined to the cogmap), an
     /// outsider (no access), the cogmap, the team-owned context (the ingest source), and an unrelated

@@ -2,7 +2,7 @@
 //!
 //! `delta` (GET) is a service-direct read: the access gate (`anchor_readable_by_profile`) lives in
 //! `steward_service::ingest_delta`, whose deny→NotFound surfaces as a uniform 404. `advance` (POST)
-//! dispatches ONE operations command through the `Backend` trait; auth-before-write
+//! dispatches ONE operations command through `DbBackend`; auth-before-write
 //! (`cogmap_authorable_by_profile`) lives inside `DbBackend::advance_steward_watermark`, so the
 //! handler just dispatches and lets the backend return 403/404.
 
@@ -24,7 +24,7 @@ use temper_core::types::steward::{
     AdvanceWatermarkAck, AdvanceWatermarkRequest, DispatchTickRequest, DispatchTickResponse,
     DriftSweepRow, IngestDelta,
 };
-use temper_workflow::operations::{AdvanceStewardWatermark, Backend, StewardDispatchTick};
+use temper_workflow::operations::{AdvanceStewardWatermark, StewardDispatchTick};
 
 /// Read a map's ingest delta
 #[utoipa::path(

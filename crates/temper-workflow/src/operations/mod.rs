@@ -1,13 +1,12 @@
-//! Operations layer — commands, actions, events, and the Backend trait.
+//! Operations layer — commands, actions and events.
 //!
 //! This module is the canonical home for command/action/event vocabulary
 //! shared across all surfaces (CLI-local-vault, CLI-cloud, MCP, API-HTTP)
-//! and the server's `DbBackend` (in temper-services), the one `Backend` implementation.
+//! and the server's `DbBackend` (in temper-services), which runs the commands.
 //!
 //! See `temper-artifacts:specs/2026-05-01-shared-core-execution-paths-design.md`.
 
 mod actions;
-mod backend;
 mod commands;
 mod events;
 mod inputs;
@@ -21,7 +20,6 @@ pub use actions::{
     validate_doctype, validate_managed_meta, validate_open_meta_keys, validate_slug,
     validate_update, ActionError, FrontmatterIdentity, ValidateManagedMetaParams,
 };
-pub use backend::Backend;
 pub use commands::{
     AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
     CloseInvocation, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap, CreateResource,

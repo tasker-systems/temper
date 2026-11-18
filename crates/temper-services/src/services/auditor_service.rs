@@ -5,7 +5,7 @@
 //! Service-direct (the read-path convention, mirroring [`crate::services::steward_service`]): the
 //! surface passes a resolved principal + optional cap; [`drift_sweep`] gates through
 //! `audit_drift_sweep`, which is itself principal-scoped in SQL. The write side (enqueue + claim)
-//! routes through the `Backend` trait / `DbBackend`, not here.
+//! routes through `DbBackend`, not here.
 //!
 //! [`group_by_cogmap`] is the one piece of real logic in this module, and it is deliberately a
 //! **pure function** with no pool: it is the fix for the grain mismatch between a finding-grained
@@ -316,7 +316,7 @@ mod tests {
     use super::*;
     use crate::services::workflow_job_service;
     use temper_core::types::workflow_job::{DispatchType, Persona};
-    use temper_workflow::operations::{AuditorDispatchTick, Backend, Surface};
+    use temper_workflow::operations::{AuditorDispatchTick, Surface};
 
     use crate::backend::DbBackend;
 

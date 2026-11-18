@@ -68,7 +68,7 @@ use temper_core::error::TemperError;
 use temper_core::types::citation_audit::CitationAuditRow;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_substrate::readback;
-use temper_workflow::operations::{Backend, RecordCitationAudit};
+use temper_workflow::operations::RecordCitationAudit;
 
 /// Resolve `cmd.block`'s owning finding, refuse a mismatch against `path_finding`, then dispatch
 /// the command through `DbBackend` — which re-derives the same finding and independently

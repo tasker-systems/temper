@@ -1,6 +1,6 @@
 //! Team lifecycle service over the substrate.
 //!
-//! Service-direct, NO Backend-trait command — teams are provisioning/infrastructure, not
+//! Service-direct, NO `DbBackend` command — teams are provisioning/infrastructure, not
 //! knowledge-graph content (org-provisioning spec §2.6, the same precedent as `context_service`).
 //! No cognition events. Membership acts are the exception that proves the rule: `add_member`,
 //! `change_role` and `remove_member` are authority acts, decided by the rank rule in

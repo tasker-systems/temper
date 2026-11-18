@@ -17,9 +17,7 @@ use temper_core::types::ids::{BlockId, ContextId, ProfileId};
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use temper_core::types::provenance::ProvenanceSource;
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{
-    Backend, BodyUpdate, CreateResource, RecordCitationAudit, Surface,
-};
+use temper_workflow::operations::{BodyUpdate, CreateResource, RecordCitationAudit, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Seed a substrate profile plus its three surface emitter entities — the minimum any principal

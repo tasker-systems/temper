@@ -49,7 +49,7 @@ use temper_substrate::events::EventContext;
 use temper_substrate::ids::{ContextId, EntityId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
 use temper_substrate::writes::{self, CreateParams};
-use temper_workflow::operations::{AssertRelationship, Backend, RecordCitationAudit, Surface};
+use temper_workflow::operations::{AssertRelationship, RecordCitationAudit, Surface};
 
 // =================================================================================================
 // Fixture helpers

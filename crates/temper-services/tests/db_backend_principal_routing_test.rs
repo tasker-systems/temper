@@ -32,7 +32,7 @@ use temper_services::backend::DbBackend;
 use temper_substrate::payloads::{AnchorRef, Incorporation};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{self, AppendParams, CreateMode, CreateParams, FinalizeParams};
-use temper_workflow::operations::{Backend, RecordCitationAudit, Surface};
+use temper_workflow::operations::{RecordCitationAudit, Surface};
 use uuid::Uuid;
 
 const SECTION_A: &str = "# Alpha\n\nAlpha body paragraph.\n";
