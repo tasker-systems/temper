@@ -46,7 +46,7 @@ module Temper::Generated
     # New body markdown. Required iff `content_hash` and `chunks_packed` are also `Some` (all-or-nothing trio).
     attr_accessor :content
 
-    # Which content block the body revise + `sources` target. `None` → the resource's sole non-folded body block (today's default); `Some(id)` addresses that block explicitly (must belong to the resource and be non-folded). Also the escape hatch for a multi-block resource.  `ts(skip)`-ped for the same reason as `sources`/`act`: per-block addressing is a CLI/agent write path the SvelteKit UI never exercises, so the generated TS omits it.
+    # Which content block the body revise + `sources` target. `None` → the resource's sole non-folded body block (today's default); `Some(id)` addresses that block explicitly (must belong to the resource and be non-folded). Also the escape hatch for a multi-block resource. Sent without `content`, it is refused with 400, as `sources` is: there is no body revise to address.  `ts(skip)`-ped for the same reason as `sources`/`act`: per-block addressing is a CLI/agent write path the SvelteKit UI never exercises, so the generated TS omits it.
     attr_accessor :content_block
 
     # SHA-256 hash of `content`. Required iff `content` is `Some`.
@@ -68,7 +68,7 @@ module Temper::Generated
 
     attr_accessor :open_meta_add
 
-    # Block-provenance sources this body was distilled from — recorded against the resource's body block, position → accretion `seq`. Resource refs only in T7b; URL/`remote` sources are T7c.  `ts(skip)`-ped: `ProvenanceSource` is a `{kind,value}`-tagged enum with no ts-rs `export_to`, and the SvelteKit UI never sends provenance (this is a CLI/agent write path, exactly like `act` below). Skipping keeps the generated TS honest — the UI cannot set provenance — and avoids emitting a dangling `ProvenanceSource` import. (Precedent: the `act` field below, likewise `ts(skip)`-ped.)
+    # Block-provenance sources this body was distilled from — recorded against the resource's body block, position → accretion `seq`. Sent without `content`, they are refused with 400: there is no body revise to attribute.  `ts(skip)`-ped: `ProvenanceSource` is a `{kind,value}`-tagged enum with no ts-rs `export_to`, and the SvelteKit UI never sends provenance (this is a CLI/agent write path, exactly like `act` below). Skipping keeps the generated TS honest — the UI cannot set provenance — and avoids emitting a dangling `ProvenanceSource` import. (Precedent: the `act` field below, likewise `ts(skip)`-ped.)
     attr_accessor :sources
 
     attr_accessor :title

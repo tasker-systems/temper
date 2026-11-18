@@ -23015,7 +23015,7 @@
                   "null"
                 ],
                 "format": "uuid",
-                "description": "When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`)\nand `context_ref` is ignored. Resolved client-side (cogmap refs are trailing-UUID-only)."
+                "description": "When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`), and\n`context_ref` must be empty: a payload naming both homes is refused with 400. Resolved\nclient-side (cogmap refs are trailing-UUID-only)."
               },
               "idempotency_key": {
                 "type": [
@@ -23051,7 +23051,7 @@
                 "items": {
                   "$ref": "#/components/schemas/ProvenanceSource"
                 },
-                "description": "Block-provenance sources this body was distilled from — recorded against the\ncreated resource's body block, position → accretion `seq`. Resource refs only\nin T7b; URL/`remote` sources are T7c."
+                "description": "Block-provenance sources this body was distilled from — recorded against the\ncreated resource's body block, position → accretion `seq`. Sent with an empty `content`,\nthey are refused with 400: an empty body is no body, so there is no block to attribute."
               },
               "title": {
                 "type": "string"
@@ -28088,7 +28088,7 @@
                   "null"
                 ],
                 "format": "uuid",
-                "description": "Which content block the body revise + `sources` target. `None` → the resource's sole\nnon-folded body block (today's default); `Some(id)` addresses that block explicitly (must\nbelong to the resource and be non-folded). Also the escape hatch for a multi-block resource.\n\n`ts(skip)`-ped for the same reason as `sources`/`act`: per-block addressing is a CLI/agent\nwrite path the SvelteKit UI never exercises, so the generated TS omits it."
+                "description": "Which content block the body revise + `sources` target. `None` → the resource's sole\nnon-folded body block (today's default); `Some(id)` addresses that block explicitly (must\nbelong to the resource and be non-folded). Also the escape hatch for a multi-block resource.\nSent without `content`, it is refused with 400, as `sources` is: there is no body revise to\naddress.\n\n`ts(skip)`-ped for the same reason as `sources`/`act`: per-block addressing is a CLI/agent\nwrite path the SvelteKit UI never exercises, so the generated TS omits it."
               },
               "content_hash": {
                 "type": [
@@ -28145,7 +28145,7 @@
                 "items": {
                   "$ref": "#/components/schemas/ProvenanceSource"
                 },
-                "description": "Block-provenance sources this body was distilled from — recorded against the\nresource's body block, position → accretion `seq`. Resource refs only in T7b;\nURL/`remote` sources are T7c.\n\n`ts(skip)`-ped: `ProvenanceSource` is a `{kind,value}`-tagged enum with no ts-rs\n`export_to`, and the SvelteKit UI never sends provenance (this is a CLI/agent\nwrite path, exactly like `act` below). Skipping keeps the generated TS honest —\nthe UI cannot set provenance — and avoids emitting a dangling `ProvenanceSource`\nimport. (Precedent: the `act` field below, likewise `ts(skip)`-ped.)"
+                "description": "Block-provenance sources this body was distilled from — recorded against the\nresource's body block, position → accretion `seq`. Sent without `content`, they are\nrefused with 400: there is no body revise to attribute.\n\n`ts(skip)`-ped: `ProvenanceSource` is a `{kind,value}`-tagged enum with no ts-rs\n`export_to`, and the SvelteKit UI never sends provenance (this is a CLI/agent\nwrite path, exactly like `act` below). Skipping keeps the generated TS honest —\nthe UI cannot set provenance — and avoids emitting a dangling `ProvenanceSource`\nimport. (Precedent: the `act` field below, likewise `ts(skip)`-ped.)"
               },
               "title": {
                 "type": [

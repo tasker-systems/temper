@@ -54,7 +54,7 @@ module Temper::Generated
     # First-class goal link: the resolved `ResourceId` (as UUID) of the goal this resource advances. The CLI/MCP resolve the caller's `--goal <ref>` client-side (trailing-UUID-only); the ingest handler projects it to a live `advances`→goal edge (`EdgeKind::LeadsTo`, `label=\"advances\"`) after create. `None` = no goal.
     attr_accessor :goal
 
-    # When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`) and `context_ref` is ignored. Resolved client-side (cogmap refs are trailing-UUID-only).
+    # When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`), and `context_ref` must be empty: a payload naming both homes is refused with 400. Resolved client-side (cogmap refs are trailing-UUID-only).
     attr_accessor :home_cogmap_id
 
     # Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by convention): a retried create carrying the same key converges on the already-committed resource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary, non-idempotent create. The server mints the resource id; the key never supplies one.
@@ -71,7 +71,7 @@ module Temper::Generated
     # When set, this create is the **begin** of a segmented (multi-block) ingest: `content` carries only segment 0's text, and the ingest handler returns a [`SegmentedBeginResponse`] instead of the one-shot `ResourceView`. `None` (the default) is the unchanged one-shot path — every existing small-body caller is unaffected.
     attr_accessor :segmented
 
-    # Block-provenance sources this body was distilled from — recorded against the created resource's body block, position → accretion `seq`. Resource refs only in T7b; URL/`remote` sources are T7c.
+    # Block-provenance sources this body was distilled from — recorded against the created resource's body block, position → accretion `seq`. Sent with an empty `content`, they are refused with 400: an empty body is no body, so there is no block to attribute.
     attr_accessor :sources
 
     attr_accessor :title
