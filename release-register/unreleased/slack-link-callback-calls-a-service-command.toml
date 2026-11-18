@@ -1,0 +1,14 @@
+title    = "The Slack link callback's transaction moves into a temper-services command"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+What changed: `GET /api/auth/slack/callback` no longer opens a transaction itself. The identity
+row, the superseded-grant revoke and the vaulted grant are written by
+`slack_link_complete_service::complete_link`, in the same order and the same single transaction.
+The handler renders the command's outcome.
+
+No door moves: every page and sentence the callback renders is unchanged, for every outcome.
+Release relevance: signal-only.
+'''
