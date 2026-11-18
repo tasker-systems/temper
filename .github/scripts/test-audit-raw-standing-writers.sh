@@ -251,6 +251,43 @@ async fn seed(pool: &PgPool, id: Uuid) {
 RS
 run_case "(j) an integration test under crates/*/tests stays green" "$FJ" 0 "$OK"
 
+# ── (k) an out-of-line test module (R24's sibling file) and its children are not production ───
+FK="$WORK/fk"; make_fixture "$FK"
+mkdir -p "$FK/crates/temper-services/src/services/moved_service/tests"
+cat > "$FK/crates/temper-services/src/services/moved_service.rs" <<'RS'
+pub fn production() {}
+
+#[cfg(all(test, feature = "test-db"))]
+mod tests;
+RS
+cat > "$FK/crates/temper-services/src/services/moved_service/tests.rs" <<'RS'
+mod fixtures;
+async fn seed(pool: &PgPool, id: Uuid) {
+    sqlx::query("SELECT principal_standing_apply($1,'approve','approved',NULL,NULL)").bind(id);
+}
+RS
+cat > "$FK/crates/temper-services/src/services/moved_service/tests/fixtures.rs" <<'RS'
+async fn seed(pool: &PgPool, id: Uuid) {
+    sqlx::query("SELECT principal_standing_apply($1,'approve','approved',NULL,NULL)").bind(id);
+}
+RS
+run_case "(k) a raw call in an out-of-line test module file, or its child, stays green" "$FK" 0 "$OK"
+
+# ── (l) an out-of-line module under a gate that reaches production is still scanned ───────────
+FL="$WORK/fl"; make_fixture "$FL"
+mkdir -p "$FL/crates/temper-services/src/services/harness_service"
+cat > "$FL/crates/temper-services/src/services/harness_service.rs" <<'RS'
+#[cfg(any(test, feature = "test-harness"))]
+mod harness;
+RS
+cat > "$FL/crates/temper-services/src/services/harness_service/harness.rs" <<'RS'
+async fn seed(pool: &PgPool, id: Uuid) {
+    sqlx::query("SELECT principal_standing_apply($1,'approve','approved',NULL,NULL)").bind(id);
+}
+RS
+run_case "(l) an out-of-line module under any(test, …) reds, naming it" \
+    "$FL" 1 "$CHANGED" "harness_service/harness.rs"
+
 echo
 echo "  $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

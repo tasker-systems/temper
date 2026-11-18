@@ -28,6 +28,8 @@
 #     up to its first test-gated MODULE (`#[cfg(test)]` / `#[cfg(all(test …))]` directly above a
 #     `mod`), so an in-file test module that seeds standing raw is not a production writer, while
 #     an item-level `#[cfg(test)] use …` does not end the scan. Comment lines are dropped.
+#     A file that is wholly test code, declared by a test-gated `mod NAME;` (R24's sibling test
+#     files) or declared by such a file, is skipped whole (`out-of-line-test-modules.sh`).
 #   * SQL under migrations/templates/ — operator-run templates execute against a live database.
 #     Migrations themselves are not scanned: the committer's own definition lives there, and a
 #     shipped migration is history, not a caller anyone can add to.
@@ -39,6 +41,7 @@
 #   UPDATE_BASELINE=1 .github/scripts/audit-raw-standing-writers.sh   # print a baseline after review
 
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${REPO_ROOT_OVERRIDE:-$(git rev-parse --show-toplevel)}"
 
 SEAM='crates/temper-services/src/services/standing_service.rs'
@@ -62,12 +65,18 @@ EOF
 
 PATTERN='principal_standing_apply[[:space:]]*\('
 
+# shellcheck source=out-of-line-test-modules.sh
+source "$SCRIPT_DIR/out-of-line-test-modules.sh"
+
 current() {
   {
     # Rust: production region only (everything before the first test-gated line), comments dropped.
+    local skipped
+    skipped="$(out_of_line_test_files crates)"
     find crates -path '*/src/*' -name '*.rs' -not -path "$SEAM" -print 2>/dev/null \
     | sort \
     | while IFS= read -r f; do
+        if grep -qxF -- "$f" <<<"$skipped"; then continue; fi
         # The pattern rides ENVIRON, not `-v`: `-v` escape-processes its value, so gawk turns
         # `\(` into a bare `(` (an invalid regex) where mawk keeps it.
         SCAN_PAT="$PATTERN" awk -v f="$f" '

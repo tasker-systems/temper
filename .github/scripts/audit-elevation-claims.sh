@@ -202,6 +202,14 @@ current_gates() {
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
 #
+# REVIEWED 2026-11-18 (R24, machine and connection batch) — claim counts only, no gate and no
+# surface claim changed: `connection_service.rs` 14 -> 8, `machine_authz.rs` 11 -> 8,
+# `machine_client_service.rs` 9 -> 6, `machine_registration_service.rs` 10 -> 5. The difference is
+# doc comments on test fns in each file's inline `#[cfg(all(test, feature = "test-db"))]` module,
+# which moved unedited to `<module>/tests.rs`. `claim_files` globs `services/*.rs`, so test prose
+# now falls outside it, which is right: a test's doc comment is not a surface claim. The
+# production claims and their bindings are unchanged.
+#
 # REVIEWED 2026-11-18 (R24, authz batch) — `audit_gate` d25214a0b269 -> 1fbda4416657, `context_admin`
 # b07eeb1d5289 -> 50b450d98cd5, `machine` 1547fc936497 -> 7069748d6812. No gate code changed: each
 # gate file lost only its inline `#[cfg(all(test, feature = "test-db"))]` test module, which moved
@@ -607,15 +615,15 @@ claim crates/temper-mcp/src/tools/teams.rs 7 -
 claim crates/temper-services/src/services/access_service.rs 11 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 4 two_sided
-claim crates/temper-services/src/services/connection_service.rs 14 connection
+claim crates/temper-services/src/services/connection_service.rs 8 connection
 claim crates/temper-services/src/services/context_service.rs 22 context_admin
 claim crates/temper-services/src/services/embed_service.rs 1 -
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/invitation_service.rs 7 team_membership
-claim crates/temper-services/src/services/machine_authz.rs 11 machine,team_membership
-claim crates/temper-services/src/services/machine_client_service.rs 9 machine
-claim crates/temper-services/src/services/machine_registration_service.rs 10 machine
+claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_membership
+claim crates/temper-services/src/services/machine_client_service.rs 6 machine
+claim crates/temper-services/src/services/machine_registration_service.rs 5 machine
 claim crates/temper-services/src/services/resource_erasure_service.rs 3 is_system_admin
 claim crates/temper-services/src/services/saml_mapping_service.rs 1 -
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership

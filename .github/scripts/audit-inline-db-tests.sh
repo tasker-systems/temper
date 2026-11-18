@@ -64,7 +64,6 @@ services/admin_directory_service.rs
 services/as_reap_service.rs
 services/auditor_service.rs
 services/blob_reap_service.rs
-services/connection_service.rs
 services/context_service.rs
 services/delivery_service.rs
 services/embed_service.rs
@@ -72,9 +71,6 @@ services/erasure_fence_service.rs
 services/erasure_service.rs
 services/intake_service.rs
 services/invitation_service.rs
-services/machine_authz.rs
-services/machine_client_service.rs
-services/machine_registration_service.rs
 services/materialize_service.rs
 services/profile_service.rs
 services/reassign_service.rs
