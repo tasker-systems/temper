@@ -61,12 +61,8 @@ fi
 read -r -d '' BASELINE <<'EOF' || true
 backend/db_backend.rs
 services/auditor_service.rs
-services/context_service.rs
-services/embed_service.rs
-services/intake_service.rs
 services/materialize_service.rs
 services/reassign_service.rs
-services/shape_service.rs
 services/standing_service.rs
 services/steward_service.rs
 services/workflow_job_service.rs

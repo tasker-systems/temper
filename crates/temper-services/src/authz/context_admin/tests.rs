@@ -1,7 +1,7 @@
 use super::*;
 use temper_core::types::ids::ProfileId;
 
-use crate::test_support::{profile, team};
+use crate::test_support::{context, profile, team};
 
 /// A bare profile. No `<handle>@web` emitter entity, unlike `context_service`'s `mk_profile_ent`:
 /// resolving an authority fires no event, so nothing here reaches `resolve_emitter`.
@@ -51,15 +51,7 @@ async fn add_member(pool: &PgPool, team_id: Uuid, p: ProfileId, role: &str) {
 // test-fixture writes.
 
 async fn mk_personal_context(pool: &PgPool, slug: &str, owner: ProfileId) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (slug, name, owner_table, owner_id) \
-         VALUES ($1, $1, 'kb_profiles', $2) RETURNING id",
-    )
-    .bind(slug)
-    .bind(*owner)
-    .fetch_one(pool)
-    .await
-    .unwrap()
+    context::insert_personal(pool, *owner, slug, slug).await
 }
 
 async fn mk_team_context(pool: &PgPool, slug: &str, team: Uuid) -> Uuid {

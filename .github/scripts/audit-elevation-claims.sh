@@ -202,6 +202,10 @@ current_gates() {
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
 #
+# REVIEWED 2026-11-18 (R24, content batch) — claim count only, no gate and no surface claim
+# changed: `context_service.rs` 22 -> 16. The 6 claim lines that left are test-fn doc comments, now
+# in `context_service/tests.rs` (counted there, word for word), outside the `services/*.rs` glob.
+#
 # REVIEWED 2026-11-18 (R24, teams and identity batch) — claim counts only, no gate and no surface
 # claim changed: `invitation_service.rs` 7 -> 3, `team_service.rs` 53 -> 43. The 4 and 10 claim
 # lines that left are test-fn doc comments, now in `invitation_service/tests.rs` and
@@ -630,7 +634,7 @@ claim crates/temper-services/src/services/access_service.rs 11 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 4 two_sided
 claim crates/temper-services/src/services/connection_service.rs 8 connection
-claim crates/temper-services/src/services/context_service.rs 22 context_admin
+claim crates/temper-services/src/services/context_service.rs 16 context_admin
 claim crates/temper-services/src/services/embed_service.rs 1 -
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
