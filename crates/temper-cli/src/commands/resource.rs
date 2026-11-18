@@ -533,8 +533,8 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 
     // Home resolution — exactly one of --context / --cogmap. The home choice is
     // a `HomeAnchor` enum (never a placeholder id plus a flag): a context home
-    // carries a placeholder id (the real ref is threaded via the cloud backend's
-    // `context_ref`), a cogmap home carries the resolved `CogmapId`.
+    // carries a placeholder id (the real ref travels as the create's `context_ref`),
+    // a cogmap home carries the resolved `CogmapId`.
     let (home, ctx) = match (context, cogmap) {
         (Some(_), Some(_)) => {
             return Err(TemperError::BadRequest(
@@ -607,12 +607,12 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         validate_open_meta_send_side(om)?;
     }
 
-    // Build the CreateResource cmd. Body-None when no body input; CloudBackend
-    // synthesizes `# {title}\n` in its translator for the empty-body case.
+    // Build the CreateResource cmd. Body-None when no body input; the create shaper
+    // (`actions::resource_write::shaping`) synthesizes `# {title}\n` for the empty-body case.
     // For a context home, `home` carries a placeholder id and the actual context
-    // ref (`ctx`) is threaded through `CloudBackend.context_ref` to
+    // ref (`ctx`) is passed to `resource_write::create`, which hands it to
     // `cmd_to_ingest_payload`; for a cogmap home, `home` carries the resolved
-    // `CogmapId` and the translator sends `home_cogmap_id` with an empty
+    // `CogmapId` and the shaper sends `home_cogmap_id` with an empty
     // `context_ref`.
     // Resolve --sources refs → provenance records for the body block. A ref that fails to
     // parse is a hard error (escalate, never silently drop); sources without a body have
@@ -626,8 +626,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     }
 
     // `resolved_sources` is moved into `cmd.body` below; `--sources-as-edges` needs its
-    // own copy to select edge targets after the create (build_backend/create_resource
-    // consume `cmd`, so we can't reach back into it post-create).
+    // own copy to select edge targets after the create.
     let sources_for_edges = resolved_sources.clone();
 
     // The preserve hook's act (authorship + correlation) — `act` itself is consumed by the
@@ -684,23 +683,22 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 
     // Surface-side pre-flight validation — mirrors the hoist of
     // `validate_update_args` for update. Without this, cloud-mode create would
-    // skip `validate_create` entirely (CloudBackend has no equivalent), and
+    // skip `validate_create` entirely (the create shaper has no equivalent), and
     // bad inputs (e.g., --mode plan-or-build whitelist violations) would ship
     // a doomed request to the server. Hoisting here lets the CLI fail-fast
     // before any network call in both modes.
     temper_workflow::operations::validate_create(&cmd)
         .map_err(|e| TemperError::BadRequest(e.to_string()))?;
 
-    // Acquire the cloud backend + client and dispatch the create. A body over
-    // `SEGMENT_BUDGET_BYTES` streams through the segmented ingest endpoints (Beat 3,
-    // `actions::ingest::run_segmented_create`); everything at or under the budget takes the
-    // existing one-shot `create_resource` path, unchanged (`actions::ingest::ingest_mode` is
-    // the seam that decides). Segmented dispatch is embed-gated exactly like the one-shot
-    // path's own body-trio computation (`compute_body_chunks`) already is — a no-embed build
-    // falls straight through to `backend.create_resource`, which already returns the
+    // Acquire the client and dispatch the create. A body over `SEGMENT_BUDGET_BYTES` streams
+    // through the segmented ingest endpoints (`actions::ingest::run_segmented_create`);
+    // everything at or under the budget takes the one-shot `resource_write::create`
+    // (`actions::ingest::ingest_mode` is the seam that decides). Segmented dispatch is
+    // embed-gated like the one-shot path's body-trio computation (`compute_body_chunks`) — a
+    // no-embed build falls through to `resource_write::create`, which returns the
     // "cloud mode requires --features embed" error for any body, so no separate fallback
     // message is needed there.
-    let (runtime, backend, client) = crate::backend_select::build_backend(config, &ctx)?;
+    let (runtime, client) = crate::actions::resource_write::connect()?;
 
     #[cfg(feature = "embed")]
     let created_resource = {
@@ -718,12 +716,12 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             };
             runtime.block_on(crate::actions::ingest::run_segmented_create(params))?
         } else {
-            runtime.block_on(backend.create_resource(cmd))?.value
+            runtime.block_on(crate::actions::resource_write::create(&client, &cmd, &ctx))?
         }
     };
     #[cfg(not(feature = "embed"))]
     let created_resource: temper_core::types::resource_view::ResourceView =
-        runtime.block_on(backend.create_resource(cmd))?.value;
+        runtime.block_on(crate::actions::resource_write::create(&client, &cmd, &ctx))?;
 
     // Projection refresh: write the new resource to its canonical
     // projection path so the local copy reflects server state at once.
@@ -1685,8 +1683,8 @@ pub fn delete(
 
     let id = temper_workflow::operations::parse_ref(r#ref)?;
 
-    // Context-free read: fetch the row by id to learn its context (for the
-    // write backend), doctype + slug (for projection removal + result shape).
+    // Context-free read: fetch the row by id to learn its doctype + slug (for
+    // projection removal + result shape).
     // Only the row is needed here — `get` returns both meta tiers, which delete ignores.
     let row = crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
@@ -1706,11 +1704,8 @@ pub fn delete(
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
-    let (runtime, backend, _client) = crate::backend_select::build_backend(
-        config,
-        row.context_name.as_deref().unwrap_or_default(),
-    )?;
-    let output = runtime.block_on(backend.delete_resource(cmd))?;
+    let (runtime, client) = crate::actions::resource_write::connect()?;
+    runtime.block_on(crate::actions::resource_write::delete(&client, &cmd))?;
 
     // Projection refresh: remove the resource's projection file. Best-effort
     // — a removal failure must not fail the (already-committed) delete.
@@ -1722,9 +1717,8 @@ pub fn delete(
         output::warning(format!("could not remove projection file: {e}"));
     }
 
-    // `delete_resource` returns `CommandOutput<()>` — no row in scope.
-    // Emit slug + doc_type from the fetched row (Task 9 flat result shape).
-    let _ = output;
+    // The delete answers no row. Emit slug + doc_type from the fetched row (Task 9 flat
+    // result shape).
     let result = DeleteActionResult {
         status: "ok",
         slug: crate::actions::ingest::slug_from_title(&row.title),
@@ -2564,7 +2558,7 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
 /// Context moves (`--context-to`) do NOT produce a `MoveSpec` here: the CLI
 /// can't resolve a context ref to a `ContextId` without DB access. Instead,
 /// the raw ref string travels via `UpdateResource.context_ref` and is
-/// forwarded verbatim by the cloud-backend translator as `context_to` in the
+/// forwarded verbatim by the update shaper as `context_to` in the
 /// HTTP wire payload, where the API handler resolves it server-side.
 fn build_move_spec_from_args(
     params: &UpdateParams<'_>,
@@ -2636,7 +2630,7 @@ fn resolve_update_target(
 ///    rejects bad enum values (e.g. `--stage frobnicate`) with a
 ///    user-targeted message before the operations layer ever sees them.
 /// 3. `--body` flag resolution (stdin/file → `Option<String>`).
-/// 4. Build an `UpdateResource` command and dispatch through `build_backend`.
+/// 4. Build an `UpdateResource` command and dispatch through `resource_write::update`.
 /// 5. Render output: JSON `{"temper-slug": ..., "content_hash": ...}` to
 ///    stdout — the agent show-edit-cat workflow contract (per CLAUDE.md).
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
@@ -2715,13 +2709,9 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
-    // 5. Acquire the cloud backend + client and dispatch the update.
-    let (runtime, backend, client) = crate::backend_select::build_backend(
-        config,
-        row.context_name.as_deref().unwrap_or_default(),
-    )?;
-    let output = runtime.block_on(backend.update_resource(cmd))?;
-    let updated_row: temper_core::types::resource_view::ResourceView = output.value;
+    // 5. Acquire the client and dispatch the update.
+    let (runtime, client) = crate::actions::resource_write::connect()?;
+    let updated_row = runtime.block_on(crate::actions::resource_write::update(&client, &cmd))?;
 
     // 6. Projection refresh: rewrite the affected projection file from
     //    the returned server row. Best-effort — a projection write
@@ -2906,9 +2896,10 @@ pub struct AnnotateParams<'a> {
 pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
     use temper_workflow::operations::AnnotateResource;
 
-    // Resolve the ref to an id + fetch the current row (for its home context — build_backend needs it).
+    // Resolve the ref to an id and read the row first: the read is the existence check, so an
+    // erased or unreadable resource answers here (and drops its projection) before any write.
     let id = temper_workflow::operations::parse_ref(params.r#ref)?;
-    let row = crate::actions::runtime::with_client(|client| {
+    crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
             client
                 .resources()
@@ -2931,18 +2922,15 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
-    let (runtime, backend, _client) = crate::backend_select::build_backend(
-        config,
-        row.context_name.as_deref().unwrap_or_default(),
-    )?;
-    let output = runtime.block_on(backend.annotate_resource(cmd))?;
+    let (runtime, client) = crate::actions::resource_write::connect()?;
+    let annotated = runtime.block_on(crate::actions::resource_write::annotate(&client, &cmd))?;
 
     // The resource body is unchanged, so there is no projection file to rewrite — emit the same flat
     // action result `update` does (status + resource row), so the two write verbs read identically.
     // Transitional narrowing — see the note in `create`.
     let result = UpdateActionResult {
         status: "ok",
-        resource: output.value,
+        resource: annotated,
     };
     let rendered = render_action_result_with_ref(&result, params.format)?;
     crate::output::plain(rendered);

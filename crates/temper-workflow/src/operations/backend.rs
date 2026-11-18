@@ -1,10 +1,9 @@
-//! Backend trait — the contract every operations backend implements.
+//! Backend trait — the server's write-command contract.
 //!
-//! Two impls are planned:
-//! - `DbBackend` in `temper-api` (Postgres persistence + chunking + embedding)
-//! - `CloudBackend` in `temper-cli` (cloud-mode dispatch via `temper-client`)
+//! Its one implementation is `DbBackend` in `temper-services` (Postgres persistence, chunking,
+//! embedding). The CLI does not implement it: its writes go through `temper-client`.
 //!
-//! Both produce `CommandOutput<T>` per command — typed value + events emitted.
+//! Each command produces a `CommandOutput<T>` — typed value + events emitted.
 //!
 //! The trait is intentionally minimal in Phase 1: each method takes a command
 //! and returns a `CommandOutput<T>`. Backend-specific operations (manifest
@@ -32,8 +31,8 @@ use super::commands::{
 use super::output::CommandOutput;
 use super::surface::Surface;
 
-/// The shared contract for both DbBackend (in temper-api) and CloudBackend
-/// (in temper-cli). Each command method takes a command struct, executes it
+/// The write-command contract `DbBackend` (in temper-services) implements. Each command method
+/// takes a command struct, executes it
 /// against the backend's persistence, and returns a `CommandOutput<T>` with
 /// the typed value plus emitted events.
 // `#[async_trait]` stamps a bare `#[must_use]` on each method whose return it boxes into a
@@ -83,14 +82,10 @@ pub trait Backend: Send + Sync {
         cmd: CommitDataArtifact,
     ) -> Result<CommandOutput<ArtifactCommitResponse>, TemperError>;
 
-    // There is deliberately **no `list_resources` and no `search_resources` here.** Both were
-    // vestigial surface from before the reads-stay-service-direct decision: neither had a single
-    // call site anywhere in the workspace, and `CloudBackend`'s bodies for both said so out loud
-    // ("not implemented — reads stay surface-direct"). Read paths (list, show, get_meta, search)
-    // are service-direct on every surface by design — the trait's projections are lossy and reads
-    // are passthroughs — so converting them to `ResourceView` would have minted a shape nobody
-    // consumes. Deleting them is what retired `ResourceSummary` and its bare `score: f32`
-    // `SearchHit`, the quantity name the two-arm search exists to stop.
+    // There is deliberately **no `list_resources` and no `search_resources` here.** Read paths
+    // (list, show, get_meta, search) are service-direct on every surface by design — the trait's
+    // projections are lossy and reads are passthroughs — so a `ResourceView` list or search here
+    // would be a shape nobody consumes.
 
     // ── relationship/edge writes (WS6 4c) ──
     // Brought under the trait so surfaces dispatch them through `select_backend` to the selected

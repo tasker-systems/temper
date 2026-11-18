@@ -48,7 +48,7 @@ CQ-14 Testing: a removed/weakened assertion; a missing test-db/test-embed gate o
 const DEFAULT_UNITS = [
   { key: 'cli-actions', paths: ['crates/temper-cli/src/actions/'] },
   { key: 'cli-commands', paths: ['crates/temper-cli/src/commands/'] },
-  { key: 'cli-rest', paths: ['crates/temper-cli/src/cloud_backend/', 'crates/temper-cli/src/output/', 'crates/temper-cli/src/saml/'], topLevel: 'crates/temper-cli/src/' },
+  { key: 'cli-rest', paths: ['crates/temper-cli/src/output/', 'crates/temper-cli/src/saml/'], topLevel: 'crates/temper-cli/src/' },
   { key: 'substrate-core', paths: [], topLevel: 'crates/temper-substrate/src/' },
   { key: 'substrate-readback', paths: ['crates/temper-substrate/src/readback/'] },
   { key: 'substrate-scenario', paths: ['crates/temper-substrate/src/scenario/'] },
