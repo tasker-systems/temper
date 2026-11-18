@@ -49,16 +49,7 @@ async fn person(pool: &PgPool, handle: &str) -> Uuid {
 
 /// Put `who` on `team` at `role`, overwriting any row (the creator's `owner` row included).
 async fn join(pool: &PgPool, team: Uuid, who: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role) \
-         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(team)
-    .bind(who)
-    .bind(role)
-    .execute(pool)
-    .await
-    .expect("seed member");
+    temper_services::test_support::team::set_member(pool, team, who, role).await;
 }
 
 async fn create(

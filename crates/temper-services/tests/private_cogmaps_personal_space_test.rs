@@ -31,19 +31,8 @@ async fn person(pool: &PgPool, handle: &str) -> Uuid {
 }
 
 async fn team_owned_by(pool: &PgPool, slug: &str, owner: Uuid) -> Uuid {
-    let team: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_teams (id, slug, name) VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("seed team");
-    sqlx::query("INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner')")
-        .bind(team)
-        .bind(owner)
-        .execute(pool)
-        .await
-        .unwrap();
+    let team = temper_services::test_support::team::insert(pool, slug).await;
+    temper_services::test_support::team::add_member(pool, team, owner, "owner").await;
     team
 }
 

@@ -54,16 +54,10 @@ async fn system_actor(pool: &PgPool) -> (ProfileId, EntityId) {
 }
 
 async fn make_home(pool: &PgPool, owner: ProfileId, slug: &str) -> AnchorRef {
-    let ctx: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-         VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
-    )
-    .bind(owner.uuid())
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    AnchorRef::context(temper_core::types::ids::ContextId::from(ctx))
+    let context =
+        temper_services::test_support::context::insert_personal(pool, owner.uuid(), slug, slug)
+            .await;
+    AnchorRef::context(temper_core::types::ids::ContextId::from(context))
 }
 
 /// A two-block resource through the segmented trio (the whole_body_replace.rs fixture shape),

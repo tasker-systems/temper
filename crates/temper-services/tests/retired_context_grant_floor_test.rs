@@ -30,25 +30,11 @@ async fn profile_with_emitters(pool: &PgPool, handle: &str) -> Uuid {
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_teams (id, slug, name) VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("seed team")
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 async fn team_context(pool: &PgPool, team_id: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES (uuid_generate_v7(), 'kb_teams', $1, $2, $2) RETURNING id",
-    )
-    .bind(team_id)
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("seed context")
+    temper_services::test_support::context::insert_team(pool, team_id, slug, slug).await
 }
 
 fn grant_req(context: Uuid, team: Uuid) -> GrantCapabilityRequest {

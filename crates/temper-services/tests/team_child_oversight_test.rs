@@ -34,28 +34,11 @@ async fn person(pool: &PgPool, handle: &str) -> Uuid {
 }
 
 async fn join(pool: &PgPool, team_id: Uuid, who: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role) \
-         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(team_id)
-    .bind(who)
-    .bind(role)
-    .execute(pool)
-    .await
-    .unwrap();
+    temper_services::test_support::team::set_member(pool, team_id, who, role).await;
 }
 
 async fn team_context(pool: &PgPool, owner_team: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES (uuid_generate_v7(), 'kb_teams', $1, $2, $2) RETURNING id",
-    )
-    .bind(owner_team)
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .unwrap()
+    temper_services::test_support::context::insert_team(pool, owner_team, slug, slug).await
 }
 
 async fn reads_context(pool: &PgPool, who: Uuid, context: Uuid) -> bool {

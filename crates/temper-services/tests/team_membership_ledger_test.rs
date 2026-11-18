@@ -25,23 +25,11 @@ async fn person(pool: &PgPool, handle: &str) -> Uuid {
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
-        .bind(slug)
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 async fn seat(pool: &PgPool, team: Uuid, profile: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role)",
-    )
-    .bind(team)
-    .bind(profile)
-    .bind(role)
-    .execute(pool)
-    .await
-    .unwrap();
+    temper_services::test_support::team::add_member(pool, team, profile, role).await;
 }
 
 fn team_subject(id: Uuid) -> RefTarget {

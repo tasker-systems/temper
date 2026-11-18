@@ -29,11 +29,7 @@ async fn mk_entity(pool: &PgPool, profile: Uuid, handle: &str) -> Uuid {
 }
 
 async fn mk_team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
-        .bind(slug)
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 async fn add_row(pool: &PgPool, team: Uuid, profile: Uuid, role: &str, source: &str) {

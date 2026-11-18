@@ -51,16 +51,7 @@ async fn team(pool: &PgPool, slug: &str) -> Uuid {
 }
 
 async fn join(pool: &PgPool, team: Uuid, profile: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::text::team_role) \
-         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(team)
-    .bind(profile)
-    .bind(role)
-    .execute(pool)
-    .await
-    .expect("seed membership");
+    temper_services::test_support::team::set_member(pool, team, profile, role).await;
 }
 
 async fn drop_member(pool: &PgPool, team: Uuid, profile: Uuid) {

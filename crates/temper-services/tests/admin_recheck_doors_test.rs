@@ -52,11 +52,7 @@ async fn admin(pool: &PgPool) -> Uuid {
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
-        .bind(slug)
-        .fetch_one(pool)
-        .await
-        .expect("team")
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 async fn link(pool: &PgPool, parent: Uuid, child: Uuid) {
@@ -571,16 +567,7 @@ async fn a_revoke_of_the_reviewer_and_the_decision_never_deadlock(pool: PgPool) 
 // ── The fallbacks and the manager re-checks ───────────────────────────────────────────────────────
 
 async fn join(pool: &PgPool, team: Uuid, who: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role) \
-         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(team)
-    .bind(who)
-    .bind(role)
-    .execute(pool)
-    .await
-    .expect("seed member");
+    temper_services::test_support::team::set_member(pool, team, who, role).await;
 }
 
 /// A membership change in a transaction left open, under the team's row lock (the lock every

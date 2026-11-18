@@ -31,3 +31,18 @@ pub async fn set_member(pool: &PgPool, team: Uuid, profile: Uuid, role: &str) {
     .await
     .expect("set team member");
 }
+
+/// Seat `profile` on `team` with `role` (`owner`, `member` or `watcher`) as a plain insert: unlike
+/// [`set_member`], a second seat for the same pair is an error, for a test that relies on the
+/// profile not already being a member.
+pub async fn add_member(pool: &PgPool, team: Uuid, profile: Uuid, role: &str) {
+    sqlx::query!(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::text::team_role)",
+        team,
+        profile,
+        role,
+    )
+    .execute(pool)
+    .await
+    .expect("add team member");
+}

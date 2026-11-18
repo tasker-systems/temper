@@ -93,13 +93,7 @@ struct AdminFixture {
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_teams (id, slug, name) VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("seed team")
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 /// A profile **with its per-surface emitter entities**, which is the whole point.

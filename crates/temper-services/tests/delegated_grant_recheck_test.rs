@@ -33,23 +33,11 @@ async fn profile(pool: &PgPool, handle: &str) -> Uuid {
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
-        .bind(slug)
-        .fetch_one(pool)
-        .await
-        .expect("team")
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 async fn member(pool: &PgPool, team: Uuid, who: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role)",
-    )
-    .bind(team)
-    .bind(who)
-    .bind(role)
-    .execute(pool)
-    .await
-    .expect("member");
+    temper_services::test_support::team::add_member(pool, team, who, role).await;
 }
 
 /// The cast of every race: a context owned by a team the granter has nothing to do with; a team

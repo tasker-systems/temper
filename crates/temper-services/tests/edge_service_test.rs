@@ -27,15 +27,7 @@ async fn profile(pool: &PgPool, handle: &str) -> Uuid {
 }
 
 async fn personal_context(pool: &PgPool, owner: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES (uuid_generate_v7(), 'kb_profiles', $1, $2, $2) RETURNING id",
-    )
-    .bind(owner)
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .unwrap()
+    temper_services::test_support::context::insert_personal(pool, owner, slug, slug).await
 }
 
 /// A resource homed in `ctx`, owned by `owner` — visible to `owner` via the

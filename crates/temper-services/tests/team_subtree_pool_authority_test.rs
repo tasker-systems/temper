@@ -39,15 +39,7 @@ async fn person(pool: &PgPool, handle: &str) -> Uuid {
 }
 
 async fn own(pool: &PgPool, team: Uuid, who: Uuid) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner') \
-         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(team)
-    .bind(who)
-    .execute(pool)
-    .await
-    .expect("seed owner");
+    temper_services::test_support::team::set_member(pool, team, who, "owner").await;
 }
 
 async fn create(

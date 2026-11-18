@@ -139,12 +139,7 @@ async fn connection_agent(pool: &PgPool, handle: &str, registered_by: Uuid, home
 }
 
 async fn team(pool: &PgPool, slug: &str, parents: &[Uuid]) -> Uuid {
-    let id: Uuid =
-        sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
-            .bind(slug)
-            .fetch_one(pool)
-            .await
-            .expect("team");
+    let id = temper_services::test_support::team::insert(pool, slug).await;
     for p in parents {
         link(pool, *p, id).await;
     }
@@ -170,15 +165,7 @@ async fn unlink(pool: &PgPool, parent: Uuid, child: Uuid) {
 }
 
 async fn join(pool: &PgPool, team: Uuid, who: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role)",
-    )
-    .bind(team)
-    .bind(who)
-    .bind(role)
-    .execute(pool)
-    .await
-    .expect("join");
+    temper_services::test_support::team::add_member(pool, team, who, role).await;
 }
 
 async fn set_team_live(pool: &PgPool, team: Uuid, live: bool) {
@@ -200,15 +187,7 @@ async fn forbid(pool: &PgPool, team: Uuid, forbidden: bool) {
 }
 
 async fn context(pool: &PgPool, owner_team: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-         VALUES ('kb_teams', $1, $2, $2) RETURNING id",
-    )
-    .bind(owner_team)
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("context")
+    temper_services::test_support::context::insert_team(pool, owner_team, slug, slug).await
 }
 
 async fn emitter_of(pool: &PgPool, profile: Uuid) -> Uuid {

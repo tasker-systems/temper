@@ -44,15 +44,7 @@ async fn team(pool: &PgPool, slug: &str) -> Uuid {
 }
 
 async fn join(pool: &PgPool, team_id: Uuid, who: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role)",
-    )
-    .bind(team_id)
-    .bind(who)
-    .bind(role)
-    .execute(pool)
-    .await
-    .unwrap();
+    temper_services::test_support::team::add_member(pool, team_id, who, role).await;
 }
 
 async fn can_modify(pool: &PgPool, who: Uuid, resource: Uuid) -> bool {

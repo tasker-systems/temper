@@ -29,15 +29,7 @@ async fn insert_resource(pool: &sqlx::PgPool, title: &str) -> Uuid {
 }
 
 async fn insert_context(pool: &sqlx::PgPool, owner: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-         VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
-    )
-    .bind(owner)
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .unwrap()
+    temper_services::test_support::context::insert_personal(pool, owner, slug, slug).await
 }
 
 /// The capability bits of one grant row. `false` by default so a call site states only the bits

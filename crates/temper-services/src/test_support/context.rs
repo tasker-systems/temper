@@ -17,3 +17,17 @@ pub async fn insert_personal(pool: &PgPool, owner: Uuid, slug: &str, name: &str)
     .await
     .expect("insert personal context")
 }
+
+/// A context owned by `team`, with the given slug and display name.
+pub async fn insert_team(pool: &PgPool, team: Uuid, slug: &str, name: &str) -> Uuid {
+    sqlx::query_scalar!(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_teams', $1, $2, $3) RETURNING id",
+        team,
+        slug,
+        name,
+    )
+    .fetch_one(pool)
+    .await
+    .expect("insert team context")
+}

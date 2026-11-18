@@ -89,11 +89,7 @@ async fn governs(pool: &PgPool, p: Uuid) -> bool {
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
-        .bind(slug)
-        .fetch_one(pool)
-        .await
-        .expect("team")
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 // ── The two races ─────────────────────────────────────────────────────────────────────────────────

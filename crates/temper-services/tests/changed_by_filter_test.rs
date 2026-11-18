@@ -62,18 +62,7 @@ async fn seed_profile(pool: &PgPool, local: &str) -> Uuid {
 
 /// A context owned by `profile`.
 async fn seed_own_context(pool: &PgPool, profile: Uuid, slug: &str) -> Uuid {
-    let id = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES ($1,'kb_profiles',$2,$3,$3)",
-    )
-    .bind(id)
-    .bind(profile)
-    .bind(slug)
-    .execute(pool)
-    .await
-    .expect("seed context");
-    id
+    temper_services::test_support::context::insert_personal(pool, profile, slug, slug).await
 }
 
 /// A team with `members`, and a context it owns that every member can read and author.

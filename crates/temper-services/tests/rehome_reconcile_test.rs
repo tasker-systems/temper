@@ -32,18 +32,7 @@ async fn seed_profile(pool: &PgPool, email: &str) -> uuid::Uuid {
 }
 
 async fn seed_context(pool: &PgPool, owner: uuid::Uuid, slug: &str) -> uuid::Uuid {
-    let context_id = uuid::Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES ($1,'kb_profiles',$2,$3,$3)",
-    )
-    .bind(context_id)
-    .bind(owner)
-    .bind(slug)
-    .execute(pool)
-    .await
-    .expect("seed context");
-    context_id
+    temper_services::test_support::context::insert_personal(pool, owner, slug, slug).await
 }
 
 fn create_cmd(home: HomeAnchor, slug: &str) -> CreateResource {

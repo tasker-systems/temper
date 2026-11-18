@@ -481,34 +481,13 @@ async fn profile(pool: &PgPool, handle: &str) -> Uuid {
 }
 
 async fn team(pool: &PgPool, slug: &str, member: Uuid) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_teams (id, slug, name) VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("team");
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
-    )
-    .bind(id)
-    .bind(member)
-    .execute(pool)
-    .await
-    .expect("membership");
+    let id = temper_services::test_support::team::insert(pool, slug).await;
+    temper_services::test_support::team::add_member(pool, id, member, "member").await;
     id
 }
 
 async fn context(pool: &PgPool, team: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES (uuid_generate_v7(), 'kb_teams', $1, $2, $2) RETURNING id",
-    )
-    .bind(team)
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("context")
+    temper_services::test_support::context::insert_team(pool, team, slug, slug).await
 }
 
 async fn resource(pool: &PgPool, ctx: Uuid, owner: Uuid, title: &str) -> Uuid {

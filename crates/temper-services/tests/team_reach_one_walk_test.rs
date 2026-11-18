@@ -171,14 +171,7 @@ async fn link_past_the_cycle_trigger(pool: &PgPool, child: Uuid, parent: Uuid) {
 }
 
 async fn join(pool: &PgPool, team_id: Uuid, who: Uuid) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
-    )
-    .bind(team_id)
-    .bind(who)
-    .execute(pool)
-    .await
-    .expect("seed membership");
+    temper_services::test_support::team::add_member(pool, team_id, who, "member").await;
 }
 
 async fn reach(pool: &PgPool, who: Uuid) -> Vec<Uuid> {

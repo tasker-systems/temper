@@ -62,16 +62,10 @@ async fn principal(pool: &PgPool) -> (ProfileId, EntityId) {
 }
 
 async fn context(pool: &PgPool, owner: ProfileId, slug: &str) -> ContextId {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-         VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
+    ContextId::from(
+        temper_services::test_support::context::insert_personal(pool, owner.uuid(), slug, slug)
+            .await,
     )
-    .bind(owner.uuid())
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("seed context");
-    ContextId::from(id)
 }
 
 /// A unit 768-dim vector along axis `d`.

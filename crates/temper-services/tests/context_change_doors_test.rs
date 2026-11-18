@@ -54,15 +54,7 @@ async fn reader(pool: &PgPool, local: &str) -> Reader {
 }
 
 async fn own_context(pool: &PgPool, owner: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-         VALUES ('kb_profiles',$1,$2,$2) RETURNING id",
-    )
-    .bind(owner)
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("seed context")
+    temper_services::test_support::context::insert_personal(pool, owner, slug, slug).await
 }
 
 /// One committed domain change in `context`, as a fixture: a `property_set` naming a resource.
