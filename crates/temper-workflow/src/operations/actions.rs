@@ -1,4 +1,5 @@
-//! Pure shared actions — used by both DbBackend and CloudBackend before persisting.
+//! Pure shared actions — validators, defaults and frontmatter assembly, used by the server's
+//! `DbBackend` and by the CLI before it shapes a write.
 //!
 //! Each action is a pure function: takes inputs, returns transformed outputs.
 //! No I/O, no DB, no file system. Side effects (persistence, network, file
@@ -360,7 +361,7 @@ pub fn validate_update(_cmd: &UpdateResource) -> Result<(), ActionError> {
 /// from MCP / API clients that bypass the CLI's `Frontmatter::try_from`
 /// alias normalization. The CLI's strict `Frontmatter` pipeline already
 /// rejects unknown keys client-side, so well-formed CLI payloads pass
-/// this check unchanged. Used by both DbBackend's update path and CloudBackend.
+/// this check unchanged. Used by DbBackend's update path.
 pub fn validate_open_meta_keys(open_meta: &serde_json::Value) -> Result<(), String> {
     let Some(obj) = open_meta.as_object() else {
         return Ok(());

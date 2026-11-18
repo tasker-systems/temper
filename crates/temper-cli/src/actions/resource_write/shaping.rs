@@ -1,9 +1,9 @@
-//! Pure cmd → wire translation functions for `CloudBackend`.
+//! Command → wire shaping for the CLI's resource writes.
 //!
-//! Each function takes a `temper-core::operations` command struct and
-//! produces the wire payload that `temper-client` accepts. Translators
-//! are pure — they don't perform I/O or async work. The async dispatch
-//! lives in `cloud_backend.rs::impl Backend`.
+//! Each function takes a `temper_workflow::operations` command and produces the wire payload a
+//! `temper-client` operation accepts. They do no network IO; the create and update shapers embed
+//! a body locally when the command does not carry its chunks. The dispatch lives in the parent
+//! module.
 
 #[cfg(feature = "embed")]
 use crate::error::{Result, TemperError};

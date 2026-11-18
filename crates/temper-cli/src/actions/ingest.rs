@@ -58,7 +58,7 @@ pub struct BodyChunks {
 /// Compute (content_hash, chunks_packed) from raw markdown without
 /// vault/manifest side effects. Single source of truth for chunk + hash
 /// extraction; used by `cmd_to_ingest_payload` (cloud create) and the
-/// cloud-mode update path in `cloud_backend/translators.rs`.
+/// update path in `actions/resource_write/shaping.rs`.
 #[cfg(feature = "embed")]
 pub fn compute_body_chunks(content: &str) -> Result<BodyChunks> {
     use temper_core::types::ingest::pack_chunks;
@@ -248,7 +248,7 @@ impl StageTiming {
 /// Parameters for [`run_segmented_create`], bundled per the >5-domain-params rule. Everything
 /// the segmented orchestration needs beyond the CLI's already-built `CreateResource` command:
 /// the client to dispatch through, the vault root for the resume manifest, the resolved
-/// context ref (mirrors `CloudBackend.context_ref`; forwarded verbatim to the translator,
+/// context ref (the one `resource_write::create` takes; forwarded verbatim to the shaper,
 /// which empties it for a cogmap home exactly like the one-shot path), and the segment
 /// budget.
 #[cfg(feature = "embed")]
@@ -307,7 +307,7 @@ async fn begin_segmented_attempt(
         block_budget: p.budget as u32,
         source_hash: Some(p.source_hash.to_string()),
     };
-    let mut payload = crate::cloud_backend::translators::cmd_to_segmented_begin_payload(
+    let mut payload = crate::actions::resource_write::shaping::cmd_to_segmented_begin_payload(
         p.cmd,
         p.context_ref,
         p.seg0_text,

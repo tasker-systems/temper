@@ -9,6 +9,7 @@ pub mod ingest_manifest;
 pub mod invocation;
 pub mod query;
 pub mod reconcile;
+pub mod resource_write;
 pub mod runtime;
 pub mod search;
 pub mod show_cache;
