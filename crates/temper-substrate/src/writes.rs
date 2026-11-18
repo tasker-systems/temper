@@ -671,7 +671,9 @@ async fn resolve_target_block(
 /// only another write of R (and the erasure act's `FOR UPDATE`, which already waits on the floor)
 /// waits on it. Taken by [`update_resource_in_tx`], [`reblock_resource_in_tx`],
 /// [`append_block_in_tx`], [`finalize_ingest_in_tx`] and [`set_charter_in_tx`] (on the telos),
-/// every entry point whose events write R's row; re-entrant within one transaction. Witnesses: tests/update_lock_order.rs.
+/// every entry point whose events write R's row; and by [`reassign_resource_in_tx`], whose event
+/// reads R's home and so must not interleave with a move of R. Re-entrant within one transaction.
+/// Witnesses: tests/update_lock_order.rs, and temper-services' `reassign_move_race_test.rs`.
 pub async fn lock_resource_for_write(
     conn: &mut sqlx::PgConnection,
     resource: ResourceId,
@@ -2396,6 +2398,14 @@ pub async fn reassign_resource_with(
 
 /// In-transaction variant — fires on a caller-supplied connection (no begin/commit),
 /// so the bulk path can reassign N resources atomically.
+///
+/// Takes R's writer lock ([`lock_resource_for_write`]) before the event fires, so it serializes
+/// with a move of R (`resource_rehome` takes the same lock): `resource_reassign` reads R's home
+/// after any move that held the lock has committed, and anchors `resource_reassigned` on the home R
+/// has when the event is written — never on one a move has just left, which would tell that home's
+/// readers R is still live there after its `resource_departed`. A caller that decided its
+/// authority against the home takes the lock itself, ahead of re-deciding it under the lock
+/// (`reassign_service`); the second take here is re-entrant.
 pub async fn reassign_resource_in_tx(
     conn: &mut sqlx::PgConnection,
     resource: ResourceId,
@@ -2404,6 +2414,7 @@ pub async fn reassign_resource_in_tx(
     emitter: EntityId,
     ctx: EventContext,
 ) -> Result<()> {
+    lock_resource_for_write(conn, resource).await?;
     fire_with(
         conn,
         SeedAction::ResourceReassign {

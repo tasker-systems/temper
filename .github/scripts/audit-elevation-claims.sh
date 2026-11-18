@@ -202,6 +202,12 @@ current_gates() {
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
 #
+# REVIEWED 2026-11-18 (R24, authz batch) — `audit_gate` d25214a0b269 -> 1fbda4416657, `context_admin`
+# b07eeb1d5289 -> 50b450d98cd5, `machine` 1547fc936497 -> 7069748d6812. No gate code changed: each
+# gate file lost only its inline `#[cfg(all(test, feature = "test-db"))]` test module, which moved
+# unedited to a sibling file, and gained the one `mod …;` line that declares it. The fingerprint is
+# a whole-file hash, so it moved; every bound claim reads against the same gate code as before.
+#
 # REVIEWED 2026-10-03 (resource erasure 2e) — handlers/block_history_scrub.rs bound to
 # `is_system_admin`: both doors mint `&SystemAdmin` through `require_erasure_operator`
 # (`require_system_admin`) before any lookup, a declined caller gets 404 and no ledger record —
@@ -618,11 +624,11 @@ claim crates/temper-services/src/services/standing_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 11 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 53 require_manage_on_team,can_manage,team_membership,is_system_admin
-gate audit_gate d25214a0b269
+gate audit_gate 1fbda4416657
 gate connection 66c36643c716
-gate context_admin b07eeb1d5289
+gate context_admin 50b450d98cd5
 gate grant bccea040b6cf
-gate machine 1547fc936497
+gate machine 7069748d6812
 gate read_gates 6a6ce4847fbc
 gate ledger_subject b13d3929eb94
 gate subscription f45d76e9be69

@@ -50,7 +50,7 @@ run_audit() {
     set -e
 }
 
-# A fixture crates tree reproducing the reviewed Rust baseline: the three write files, and the one
+# A fixture crates tree reproducing the reviewed Rust baseline: the four write files, and the one
 # writer caller. Paths mirror the real ones, because the baseline names real paths.
 baseline_crates() {
     local d="$1"
@@ -69,6 +69,12 @@ fn seed() {
 EOF
     cat > "$d/crates/temper-substrate/src/scenario/access/loader.rs" <<'EOF'
 fn load() { let q = "insert into kb_team_members (team_id) values ($1)"; }
+EOF
+    mkdir -p "$d/crates/temper-services/src/test_support"
+    cat > "$d/crates/temper-services/src/test_support/team.rs" <<'EOF'
+pub async fn set_member() {
+    sqlx::query!("INSERT INTO kb_team_members (team_id, profile_id, role, source) VALUES ($1, $2, $3, 'native')");
+}
 EOF
     cat > "$d/crates/temper-services/src/services/team_service.rs" <<'EOF'
 pub(crate) struct GenesisToken {
@@ -229,6 +235,37 @@ pub(crate) mod db_tests {
 }
 EOF
 expect_green "a sink inside a test module (and an all(test, …) one behind another attribute): ignored" "$R"
+
+# --- PIN: an out-of-line test module (R24's sibling file) and its children are ignored ---
+R="$(fresh out-of-line)"
+mkdir -p "$R/crates/temper-services/src/services/moved_service/tests"
+cat > "$R/crates/temper-services/src/services/moved_service.rs" <<'EOF'
+pub fn production() {}
+
+#[cfg(all(test, feature = "test-db"))]
+#[expect(clippy::unwrap_used, reason = "test")]
+mod tests;
+EOF
+cat > "$R/crates/temper-services/src/services/moved_service/tests.rs" <<'EOF'
+mod fixtures;
+fn seed() { sqlx::query!("INSERT INTO kb_team_members (team_id) VALUES ($1)"); }
+EOF
+cat > "$R/crates/temper-services/src/services/moved_service/tests/fixtures.rs" <<'EOF'
+fn seed() { sqlx::query!("DELETE FROM kb_team_members"); }
+EOF
+expect_green "an out-of-line test module file, and a module it declares: ignored" "$R"
+
+# --- BITE: an out-of-line module under a gate that reaches production is still counted ---
+R="$(fresh out-of-line-any)"
+mkdir -p "$R/crates/temper-services/src/services/harness_service"
+cat > "$R/crates/temper-services/src/services/harness_service.rs" <<'EOF'
+#[cfg(any(test, feature = "test-harness"))]
+mod harness;
+EOF
+cat > "$R/crates/temper-services/src/services/harness_service/harness.rs" <<'EOF'
+fn seed() { sqlx::query!("INSERT INTO kb_team_members (team_id) VALUES ($1)"); }
+EOF
+expect_red "an out-of-line module under any(test, …): still counted" "$R" "harness_service/harness.rs"
 
 # --- BITE: a production item AFTER a test module is still counted ---
 R="$(fresh after-mod)"

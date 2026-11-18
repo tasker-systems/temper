@@ -11,7 +11,7 @@
 //! reassignable — a cogmap interior is team-resource-derived, not personally
 //! owned, and is refused here (and by the `resource_reassign` SQL backstop).
 
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::auth::HumanPrincipal;
@@ -27,14 +27,14 @@ struct HomeRow {
     anchor_table: String,
 }
 
-async fn home_of(pool: &PgPool, resource: Uuid) -> ApiResult<Option<HomeRow>> {
+async fn home_of(conn: &mut PgConnection, resource: Uuid) -> ApiResult<Option<HomeRow>> {
     Ok(sqlx::query_as!(
         HomeRow,
         "SELECT owner_profile_id AS owner, anchor_table \
            FROM kb_resource_homes WHERE resource_id = $1",
         resource,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?)
 }
 
@@ -55,7 +55,7 @@ async fn home_of(pool: &PgPool, resource: Uuid) -> ApiResult<Option<HomeRow>> {
 /// managers already govern the container. Membership is no bar on its own — a manager can add
 /// anyone to T — so it is kept as an extra check, not as the authority.
 async fn admin_reach(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     caller: ProfileId,
     resource: Uuid,
     to: Uuid,
@@ -93,7 +93,7 @@ async fn admin_reach(
         *caller,
         to,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?)
 }
 
@@ -117,6 +117,37 @@ async fn is_or_was_member(pool: &PgPool, team_id: Uuid, profile_id: Uuid) -> Api
     .await?)
 }
 
+/// The single reassign's authority, decided against `resource`'s home as `conn` reads it now:
+/// the caller owns it, or has [`admin_reach`] over it and `to`; and it is context-homed. Answers
+/// the home the decision was made against. An id with no home is refused as a resource the caller
+/// has no authority over (`403`, the same body).
+async fn authorize_single(
+    conn: &mut PgConnection,
+    caller: ProfileId,
+    resource_id: Uuid,
+    to_profile_id: Uuid,
+) -> ApiResult<HomeRow> {
+    let Some(home) = home_of(conn, resource_id).await? else {
+        return Err(ApiError::Forbidden);
+    };
+    let authorized =
+        home.owner == *caller || admin_reach(conn, caller, resource_id, to_profile_id).await?;
+    if !authorized {
+        return Err(ApiError::Forbidden);
+    }
+    // Only context-homed resources are reassignable. The owner path would otherwise
+    // let a cogmap-node owner flip it — guard here for BOTH paths (the admin path's
+    // reach query already excludes non-context homes structurally, so only an owner
+    // reaches this refusal).
+    if home.anchor_table != "kb_contexts" {
+        return Err(ApiError::BadRequest(
+            "cannot reassign a cogmap-homed resource; map interiors are not personally owned"
+                .to_string(),
+        ));
+    }
+    Ok(home)
+}
+
 /// Reassign a resource's owner to `to_profile_id`. Auth: current owner (any target)
 /// OR team-admin over a team the resource is scoped to, to a member of that team.
 /// Reassigning to the current owner is an idempotent no-op. Cogmap-homed resources
@@ -133,26 +164,13 @@ pub async fn reassign_resource(
     to_profile_id: Uuid,
 ) -> ApiResult<()> {
     let caller = caller.profile_id();
-    // Auth before writes: current owner, or an admin with reach over the resource+target. An
-    // unknown id has no owner and no reach, so it is refused like any other resource.
-    let Some(home) = home_of(pool, resource_id).await? else {
-        return Err(ApiError::Forbidden);
-    };
-    let authorized =
-        home.owner == *caller || admin_reach(pool, caller, resource_id, to_profile_id).await?;
-    if !authorized {
-        return Err(ApiError::Forbidden);
-    }
-
-    // Only context-homed resources are reassignable. The owner path would otherwise
-    // let a cogmap-node owner flip it — guard here for BOTH paths (the admin path's
-    // reach query already excludes non-context homes structurally, so only an owner
-    // reaches this refusal).
-    if home.anchor_table != "kb_contexts" {
-        return Err(ApiError::BadRequest(
-            "cannot reassign a cogmap-homed resource; map interiors are not personally owned"
-                .to_string(),
-        ));
+    let resource = temper_substrate::ids::ResourceId::from(resource_id);
+    // Auth before writes, unlocked: current owner, or an admin with reach over the
+    // resource+target. A caller refused here never takes a row lock (the write floor's "a refused
+    // caller takes no lock"). It binds nothing; the decision under the lock below does.
+    {
+        let mut conn = pool.acquire().await?;
+        authorize_single(&mut conn, caller, resource_id, to_profile_id).await?;
     }
 
     // The liveness floor (resource erasure spec D13; plan 2c, controller ruling 5), at the head of
@@ -162,15 +180,21 @@ pub async fn reassign_resource(
     // is: 410 `RESOURCE_ERASED` to a holder of an erased husk, 403 otherwise (a tombstone always
     // 403). It runs ahead of the no-op return so a husk is never answered `200`.
     let mut tx = pool.begin().await?;
-    if let Err(refusal) = write_floor::liveness_floor_in_tx(
-        &mut tx,
-        caller,
-        temper_substrate::ids::ResourceId::from(resource_id),
-    )
-    .await
-    {
+    if let Err(refusal) = write_floor::liveness_floor_in_tx(&mut tx, caller, resource).await {
         return Err(write_floor::rollback_with(tx, ApiError::from(refusal)).await);
     }
+    // R's writer lock, the one a move takes, after the floor (a move's order: floor, then this),
+    // then the authority again under it. A move of R that was in flight has committed by now, so
+    // the home read here is the one the event will anchor on, and the authority is decided
+    // against it: an admin whose reach came through the home R just left has none over the one it
+    // is in. Witnesses: `reassign_move_race_test.rs`.
+    if let Err(e) = temper_substrate::writes::lock_resource_for_write(&mut tx, resource).await {
+        return Err(write_floor::rollback_with(tx, ApiError::from_write(e)).await);
+    }
+    let home = match authorize_single(&mut tx, caller, resource_id, to_profile_id).await {
+        Ok(home) => home,
+        Err(refusal) => return Err(write_floor::rollback_with(tx, refusal).await),
+    };
     if home.owner == to_profile_id {
         return Ok(()); // idempotent no-op
     }
@@ -198,7 +222,7 @@ pub async fn reassign_resource(
         .map_err(ApiError::from_write)?;
     temper_substrate::writes::reassign_resource_in_tx(
         &mut tx,
-        temper_substrate::ids::ResourceId::from(resource_id),
+        resource,
         home.owner.into(),
         to_profile_id.into(),
         emitter,
@@ -275,11 +299,40 @@ pub async fn team_scoped_owned(
         .collect())
 }
 
+/// Is `resource` still in [`team_scoped_owned`]'s scope for `team_id` and `profile_id`: live,
+/// owned by `profile_id`, and homed in a live context owned by `team_id`? The bulk handoff asks it
+/// per resource under R's writer lock, so the scope it read on the pool is re-decided against the
+/// home the event will anchor on.
+async fn still_in_team_scope(
+    conn: &mut PgConnection,
+    team_id: Uuid,
+    profile_id: Uuid,
+    resource: Uuid,
+) -> ApiResult<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+             SELECT 1
+               FROM kb_resource_homes h
+               JOIN kb_resources r ON r.id = h.resource_id AND r.is_active
+               JOIN kb_contexts c
+                 ON h.anchor_table = 'kb_contexts' AND c.id = h.anchor_id AND c.is_active
+                AND c.owner_table = 'kb_teams' AND c.owner_id = $1
+              WHERE h.resource_id = $3 AND h.owner_profile_id = $2
+           ) AS "e!: bool""#,
+        team_id,
+        profile_id,
+        resource,
+    )
+    .fetch_one(&mut *conn)
+    .await?)
+}
+
 /// Bulk-reassign, from `from_profile_id` to `to_profile_id`, every LIVE resource owned by
 /// `from` and homed in a context owned by `team_id`. Auth: caller manages the team (never the root
 /// or the gating team), `to` is a member of it, and `from` is or was a member of it. One transaction; returns the reassigned resource ids. A tombstoned or
 /// erased resource is outside the scope; one tombstoned or erased after the scope read fails the
-/// liveness floor, is skipped, and is not among them.
+/// liveness floor, and one moved out of the scope after it fails `still_in_team_scope`: either is
+/// skipped and is not among them.
 pub async fn reassign_team_resources(
     pool: &PgPool,
     caller: &HumanPrincipal,
@@ -354,6 +407,16 @@ pub async fn reassign_team_resources(
             Ok(()) => {}
             Err(TemperError::Forbidden | TemperError::ResourceErased(_)) => continue,
             Err(e) => return Err(e.into()),
+        }
+        // R's writer lock, the one a move takes, then the scope again under it: a resource moved
+        // out of the team's contexts, or reassigned away from `from`, after the scope read is
+        // skipped like one the floor refuses. Without it the run would hand off a resource in a
+        // context the team does not own, and anchor its event on the home the move left.
+        temper_substrate::writes::lock_resource_for_write(&mut tx, resource)
+            .await
+            .map_err(ApiError::from_write)?;
+        if !still_in_team_scope(&mut tx, team_id, from_profile_id, rid).await? {
+            continue;
         }
         temper_substrate::writes::reassign_resource_in_tx(
             &mut tx,

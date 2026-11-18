@@ -181,6 +181,12 @@ jobs:
       - name: Coverage tripwire — the set of #[ignore]d tests
         run: bash .github/scripts/audit-ignored-tests.sh
 
+      # Ruling R24: a DB test module lives in its module's sibling file, never inline in a
+      # temper-services production file. The baseline holds the incumbents still to move and only
+      # shrinks: a moved file that keeps its line fails, so no file stays exempt by accident.
+      - name: Structure tripwire — no inline DB test module in temper-services
+        run: bash .github/scripts/audit-inline-db-tests.sh
+
       # Not a security tripwire — a CONTRACT one, and it exists to keep an argument honest.
       # Not a baseline tripwire either: it reads build-cli-binaries.yml directly. Deleting the
       # `.manifest.json` line from the attestation's `subject-path` is a silent one-line edit —
@@ -783,6 +789,9 @@ jobs:
       # UPDATE_BASELINE it instead of writing down why.
       - name: Guard test — audit-ignored-tests
         run: bash .github/scripts/test-audit-ignored-tests.sh
+
+      - name: Guard test — audit-inline-db-tests
+        run: bash .github/scripts/test-audit-inline-db-tests.sh
 
   # The tasker-systems conventions baseline, as this repository is pinned to it
   # (.conventions/consumer.toml; doctrine in .conventions/baseline/doctrine/consuming.md).
