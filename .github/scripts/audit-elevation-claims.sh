@@ -202,6 +202,11 @@ current_gates() {
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
 #
+# REVIEWED 2026-11-18 (R24, slack and delivery batch) — claim counts only, no gate and no surface
+# claim changed: `slack_disconnect_service.rs` 3 -> 2, `subscription_service.rs` 11 -> 5. The
+# difference is test-fn doc comments that moved, unedited, with each file's inline test module to
+# `<module>/tests.rs`, outside `claim_files`' `services/*.rs` glob (as in the batch below).
+#
 # REVIEWED 2026-11-18 (R24, machine and connection batch) — claim counts only, no gate and no
 # surface claim changed: `connection_service.rs` 14 -> 8, `machine_authz.rs` 11 -> 8,
 # `machine_client_service.rs` 9 -> 6, `machine_registration_service.rs` 10 -> 5. The difference is
@@ -627,9 +632,9 @@ claim crates/temper-services/src/services/machine_registration_service.rs 5 mach
 claim crates/temper-services/src/services/resource_erasure_service.rs 3 is_system_admin
 claim crates/temper-services/src/services/saml_mapping_service.rs 1 -
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
-claim crates/temper-services/src/services/slack_disconnect_service.rs 3 -
+claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/standing_service.rs 2 -
-claim crates/temper-services/src/services/subscription_service.rs 11 subscription
+claim crates/temper-services/src/services/subscription_service.rs 5 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 53 require_manage_on_team,can_manage,team_membership,is_system_admin
 gate audit_gate 1fbda4416657
