@@ -202,6 +202,10 @@ current_gates() {
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
 #
+# REVIEWED 2026-11-18 (R24, erasure and reaping batch) — claim count only, no gate and no surface
+# claim changed: `resource_erasure_service.rs` 3 -> 2. The difference is one test-fn doc comment
+# that moved, unedited, with the inline test module to `resource_erasure_service/tests.rs`.
+#
 # REVIEWED 2026-11-18 (R24, slack and delivery batch) — claim counts only, no gate and no surface
 # claim changed: `slack_disconnect_service.rs` 3 -> 2, `subscription_service.rs` 11 -> 5. The
 # difference is test-fn doc comments that moved, unedited, with each file's inline test module to
@@ -629,7 +633,7 @@ claim crates/temper-services/src/services/invitation_service.rs 7 team_membershi
 claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_membership
 claim crates/temper-services/src/services/machine_client_service.rs 6 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 5 machine
-claim crates/temper-services/src/services/resource_erasure_service.rs 3 is_system_admin
+claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
 claim crates/temper-services/src/services/saml_mapping_service.rs 1 -
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
