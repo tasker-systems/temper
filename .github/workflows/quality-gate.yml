@@ -182,8 +182,8 @@ jobs:
         run: bash .github/scripts/audit-ignored-tests.sh
 
       # Ruling R24: a DB test module lives in its module's sibling file, never inline in a
-      # temper-services production file. The baseline holds the incumbents still to move and only
-      # shrinks: a moved file that keeps its line fails, so no file stays exempt by accident.
+      # temper-services production file. Every incumbent has moved, so its baseline is empty and
+      # any inline DB test module, or a `#[sqlx::test]` outside a test-module file, fails here.
       - name: Structure tripwire — no inline DB test module in temper-services
         run: bash .github/scripts/audit-inline-db-tests.sh
 

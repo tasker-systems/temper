@@ -57,10 +57,10 @@ if [[ ! -d "$SCAN_ROOT" ]]; then
   exit 1
 fi
 
-# Paths relative to crates/temper-services/src. Delete a line in the PR that moves its file.
+# Paths relative to crates/temper-services/src. Empty since the last incumbent moved: every
+# temper-services DB test module now lives in its module's sibling file, and nothing may be added
+# here. A file that needs an exception is a ruling to re-open, not a line to append.
 read -r -d '' BASELINE <<'EOF' || true
-backend/db_backend.rs
-services/reassign_service.rs
 EOF
 if [[ -n "${INLINE_DB_BASELINE_FILE:-}" ]]; then
   BASELINE="$(cat "$INLINE_DB_BASELINE_FILE")"
