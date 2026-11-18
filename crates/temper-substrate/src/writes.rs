@@ -24,6 +24,7 @@ use crate::ids::{
 };
 use crate::payloads::{self, AnchorRef, EdgePolarity, Incorporation, ProvenanceSource};
 use crate::text::slugify;
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::property_owner::PropertyOwner;
 use temper_ingest::section::slice_sections;
 
@@ -684,12 +685,22 @@ pub async fn lock_resource_for_write(
     Ok(())
 }
 
+/// What an update did that its caller cannot know from its own inputs. Returned by the write
+/// itself, so no caller reads it back from the events the write appended.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UpdateOutcome {
+    /// The home a move left: `Some` exactly when the update wrote a `resource_departed`, which is
+    /// when it moved a live resource out of a home it had into a different one. `None` when the
+    /// update moved nothing, or moved the resource to the home it was already in.
+    pub left_home: Option<HomeAnchor>,
+}
+
 pub async fn update_resource_in_tx(
     conn: &mut sqlx::PgConnection,
     mut p: UpdateParams<'_>,
     ctx: EventContext,
     defer: bool,
-) -> Result<()> {
+) -> Result<UpdateOutcome> {
     let prepared = prepare_update_body(&mut p, defer)?;
     update_resource_in_tx_prepared(conn, p, prepared, ctx).await
 }
@@ -742,8 +753,9 @@ pub async fn update_resource_in_tx_prepared(
     mut p: UpdateParams<'_>,
     mut prepared_body: Option<PreparedBlock>,
     ctx: EventContext,
-) -> Result<()> {
+) -> Result<UpdateOutcome> {
     lock_resource_for_write(conn, p.resource).await?;
+    let mut outcome = UpdateOutcome::default();
 
     // A move fires FIRST, before any edit the same update carries. Every edit event anchors on the
     // resource's home at the time it is written, so once the resource is re-homed the edits land in
@@ -752,6 +764,7 @@ pub async fn update_resource_in_tx_prepared(
     // readers the resource was moved and still exists (owner ruling 2026-11-06; migration
     // 20261117000040). The edits are the destination's to see, because the resource now lives there.
     if let Some(dest) = p.rehome_to.take() {
+        outcome.left_home = home_a_move_leaves(&mut *conn, p.resource, dest).await?;
         fire_with(
             &mut *conn,
             SeedAction::ResourceRehome {
@@ -878,7 +891,8 @@ pub async fn update_resource_in_tx_prepared(
                 .await?
                 .reblocked_event()?;
             }
-            return finish_update(conn, p, ctx).await;
+            finish_update(conn, p, ctx).await?;
+            return Ok(outcome);
         }
         let mut prepared = prepared_body
             .take()
@@ -919,7 +933,34 @@ pub async fn update_resource_in_tx_prepared(
                 .await?;
         }
     }
-    finish_update(conn, p, ctx).await
+    finish_update(conn, p, ctx).await?;
+    Ok(outcome)
+}
+
+/// The home a move of `resource` to context `dest` leaves, read before the move fires and under
+/// the row lock [`lock_resource_for_write`] already holds, so no concurrent move can re-point it
+/// between this read and the departure. The same rule `_resource_departure_append`
+/// (migration 20261116000020) applies when it decides whether to write a `resource_departed`: a
+/// live resource with a home, moving to a different one. `None` otherwise.
+async fn home_a_move_leaves(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+    dest: ContextId,
+) -> Result<Option<HomeAnchor>> {
+    let row = sqlx::query!(
+        r#"SELECT h.anchor_table, h.anchor_id
+             FROM kb_resource_homes h
+             JOIN kb_resources r ON r.id = h.resource_id
+            WHERE h.resource_id = $1 AND r.is_active"#,
+        resource.uuid()
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    // `anchor_table` is CHECK-constrained to the two tables `HomeAnchor` names, so `from_parts`
+    // cannot miss on a stored row.
+    Ok(row
+        .and_then(|r| HomeAnchor::from_parts(&r.anchor_table, r.anchor_id))
+        .filter(|home| *home != HomeAnchor::Context(dest)))
 }
 
 /// The tail of [`update_resource_in_tx`]: everything after the body write. Split so the

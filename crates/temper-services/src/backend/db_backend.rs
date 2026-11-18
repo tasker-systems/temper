@@ -3333,30 +3333,16 @@ impl Backend for DbBackend {
             }
         }
         let wrote_body = params.body.is_some();
-        writes::update_resource_in_tx_prepared(&mut tx, params, prepared, act_ctx.clone())
-            .await
-            .map_err(write_err)?;
-        // The home a move left, read from the departure this transaction just wrote: written under
-        // the resource's row lock, so a concurrent move cannot make it name the wrong home. Its
-        // regions still count the resource as a member, so it is settled after the commit as a
-        // deletion's home is (below). None when the update moved nothing, or moved the resource to
-        // the home it was already in.
-        let left_home = match rehome_to {
-            Some(_) => sqlx::query!(
-                r#"SELECT e.producing_anchor_table AS "anchor_table!", e.producing_anchor_id AS "anchor_id!"
-                     FROM kb_events e
-                     JOIN kb_event_types et ON et.id = e.event_type_id
-                    WHERE et.name = 'resource_departed'
-                      AND e.xact_id = pg_current_xact_id()
-                      AND e.payload->>'resource_id' = $1::uuid::text"#,
-                new_id,
-            )
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(tx_err)?
-            .and_then(|r| HomeAnchor::from_parts(&r.anchor_table, r.anchor_id)),
-            None => None,
-        };
+        // The home a move left, as the write reports it: read under the resource's row lock before
+        // the move fires, so a concurrent move cannot make it name the wrong home. Its regions
+        // still count the resource as a member, so it is settled after the commit as a deletion's
+        // home is (below). None when the update moved nothing, or moved the resource to the home
+        // it was already in.
+        let left_home =
+            writes::update_resource_in_tx_prepared(&mut tx, params, prepared, act_ctx.clone())
+                .await
+                .map_err(write_err)?
+                .left_home;
 
         // Project the goal-edge patch (issue 019f3d55). `Set` folds any existing `advances`→goal
         // edge and asserts the new one (replace-in-place); `Clear` folds without re-asserting;
