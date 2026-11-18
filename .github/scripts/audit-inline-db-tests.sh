@@ -60,12 +60,7 @@ fi
 # Paths relative to crates/temper-services/src. Delete a line in the PR that moves its file.
 read -r -d '' BASELINE <<'EOF' || true
 backend/db_backend.rs
-services/auditor_service.rs
-services/materialize_service.rs
 services/reassign_service.rs
-services/standing_service.rs
-services/steward_service.rs
-services/workflow_job_service.rs
 EOF
 if [[ -n "${INLINE_DB_BASELINE_FILE:-}" ]]; then
   BASELINE="$(cat "$INLINE_DB_BASELINE_FILE")"
