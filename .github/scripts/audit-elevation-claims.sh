@@ -202,6 +202,19 @@ current_gates() {
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
 #
+# REVIEWED 2026-11-18 (R24, content batch) — claim count only, no gate and no surface claim
+# changed: `context_service.rs` 22 -> 16. The 6 claim lines that left are test-fn doc comments, now
+# in `context_service/tests.rs` (counted there, word for word), outside the `services/*.rs` glob.
+#
+# REVIEWED 2026-11-18 (R24, teams and identity batch) — claim counts only, no gate and no surface
+# claim changed: `invitation_service.rs` 7 -> 3, `team_service.rs` 53 -> 43. The 4 and 10 claim
+# lines that left are test-fn doc comments, now in `invitation_service/tests.rs` and
+# `team_service/lifecycle_tests.rs` (counted there, word for word), outside the `services/*.rs` glob.
+#
+# REVIEWED 2026-11-18 (R24, erasure and reaping batch) — claim count only, no gate and no surface
+# claim changed: `resource_erasure_service.rs` 3 -> 2. The difference is one test-fn doc comment
+# that moved, unedited, with the inline test module to `resource_erasure_service/tests.rs`.
+#
 # REVIEWED 2026-11-18 (R24, slack and delivery batch) — claim counts only, no gate and no surface
 # claim changed: `slack_disconnect_service.rs` 3 -> 2, `subscription_service.rs` 11 -> 5. The
 # difference is test-fn doc comments that moved, unedited, with each file's inline test module to
@@ -621,22 +634,22 @@ claim crates/temper-services/src/services/access_service.rs 11 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 4 two_sided
 claim crates/temper-services/src/services/connection_service.rs 8 connection
-claim crates/temper-services/src/services/context_service.rs 22 context_admin
+claim crates/temper-services/src/services/context_service.rs 16 context_admin
 claim crates/temper-services/src/services/embed_service.rs 1 -
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
-claim crates/temper-services/src/services/invitation_service.rs 7 team_membership
+claim crates/temper-services/src/services/invitation_service.rs 3 team_membership
 claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_membership
 claim crates/temper-services/src/services/machine_client_service.rs 6 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 5 machine
-claim crates/temper-services/src/services/resource_erasure_service.rs 3 is_system_admin
+claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
 claim crates/temper-services/src/services/saml_mapping_service.rs 1 -
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/standing_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 5 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
-claim crates/temper-services/src/services/team_service.rs 53 require_manage_on_team,can_manage,team_membership,is_system_admin
+claim crates/temper-services/src/services/team_service.rs 43 require_manage_on_team,can_manage,team_membership,is_system_admin
 gate audit_gate 1fbda4416657
 gate connection 66c36643c716
 gate context_admin 50b450d98cd5
