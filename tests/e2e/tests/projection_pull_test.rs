@@ -627,6 +627,13 @@ async fn pull_writes_to_the_vault_the_flag_names(pool: sqlx::PgPool) {
         String::from_utf8_lossy(&out.stderr)
     );
 
+    // Under JSON (a non-TTY stdout), pull answers one document, its summary, not a prose line.
+    let summary: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("pull's stdout is one JSON document");
+    assert_eq!(summary["written"], 1, "{summary}");
+    assert_eq!(summary["pruned"], 0, "{summary}");
+    assert!(summary["context"].is_string(), "{summary}");
+
     let honoured = projected(elsewhere.path(), "vctx", "research", "Flagged Doc", doc);
     assert!(
         honoured.exists(),

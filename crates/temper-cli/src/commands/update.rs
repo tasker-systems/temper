@@ -307,10 +307,15 @@ pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat)
     }
 
     // 5. No-op when there's nothing newer and no --force.
+    //    The answer is the same report `--check` prints, so a caller reads one shape either way.
     if up_to_date && !force {
-        crate::output::success(format!(
-            "already up to date (running v{VERSION}; latest release v{target_version})"
-        ));
+        let report = UpdateCheckReport {
+            current: VERSION,
+            latest: target_version,
+            up_to_date,
+            install_dir: install_dir.display().to_string(),
+        };
+        crate::output::plain(crate::format::render(&report, fmt)?);
         return Ok(());
     }
 

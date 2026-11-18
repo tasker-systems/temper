@@ -1786,7 +1786,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             AuthAction::RequestAccess { message } => {
                 temper_cli::commands::auth::request_access(message.as_deref())
             }
-            AuthAction::WithdrawRequest => temper_cli::commands::auth::withdraw_request(),
+            AuthAction::WithdrawRequest => {
+                temper_cli::commands::auth::withdraw_request(output_format)
+            }
             AuthAction::Settings => temper_cli::commands::auth::settings(output_format),
             AuthAction::RequestReview { message } => {
                 temper_cli::commands::auth::request_review(message.as_deref())
@@ -2001,7 +2003,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 }
             }
         },
-        Commands::Pull { context } => commands::pull::run(&context, cli.vault.as_deref()),
+        Commands::Pull { context } => {
+            commands::pull::run(&context, cli.vault.as_deref(), output_format)
+        }
         Commands::Config { action } => match action {
             ConfigAction::Edit => commands::config::edit(),
         },

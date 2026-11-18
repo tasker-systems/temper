@@ -128,6 +128,12 @@ async fn a_person_opens_lists_and_the_anchor_side_closes(pool: sqlx::PgPool) {
         String::from_utf8_lossy(&out.stderr)
     );
 
+    let closed: Value =
+        serde_json::from_slice(&out.stdout).expect("close's stdout is one JSON document");
+    assert_eq!(closed["outcome"], "closed", "{closed}");
+    assert_eq!(closed["team_id"], team.id.to_string(), "{closed}");
+    assert_eq!(closed["anchor_id"], anchor.id.to_string(), "{closed}");
+
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_team_public_within")
         .fetch_one(&pool)
         .await

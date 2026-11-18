@@ -21,6 +21,16 @@ pub(crate) fn parse_role(s: &str) -> Result<TeamRole> {
     }
 }
 
+/// Render an act's receipt: one document on stdout, in the resolved format.
+///
+/// For acts whose server answer carries nothing to render, the receipt is built from what the act
+/// already knows (the ids it acted on and what it did), so `--format json` always gets exactly one
+/// parseable document and never a prose line.
+fn print_receipt(receipt: serde_json::Value, fmt: crate::format::OutputFormat) -> Result<()> {
+    output::plain(crate::format::render(&receipt, fmt)?);
+    Ok(())
+}
+
 /// Invite an email to a team
 /// (a team manager or a system admin; on a personal team, its owner only).
 pub async fn invite_remote(
@@ -63,15 +73,15 @@ pub async fn accept_invitation(
 pub async fn decline_invitation(
     client: &temper_client::TemperClient,
     token: &str,
-    _fmt: crate::format::OutputFormat,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     client
         .teams()
         .decline_invitation(token)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
-    output::success("Invitation declined.");
-    Ok(())
+    // The token is a credential, so the receipt does not echo it.
+    print_receipt(serde_json::json!({ "outcome": "declined" }), fmt)
 }
 
 /// Revoke (withdraw) a pending invitation by its id
@@ -81,7 +91,7 @@ pub async fn revoke_invitation_remote(
     client: &temper_client::TemperClient,
     team: &str,
     invitation_id: &str,
-    _fmt: crate::format::OutputFormat,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let team_id = resolve_team_id(client, team).await?;
     let invitation_id = uuid::Uuid::parse_str(invitation_id.trim())
@@ -91,8 +101,14 @@ pub async fn revoke_invitation_remote(
         .revoke_invitation(team_id, invitation_id)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
-    output::success("Invitation revoked.");
-    Ok(())
+    print_receipt(
+        serde_json::json!({
+            "team_id": team_id,
+            "invitation_id": invitation_id,
+            "outcome": "revoked",
+        }),
+        fmt,
+    )
 }
 
 /// List pending invitations for a team
@@ -214,25 +230,30 @@ pub async fn delete_remote(
         .delete(team_id)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
-    output::success("Team deleted.");
-    print_public_within_effects(effects.as_ref(), fmt)
+    print_receipt(
+        with_public_within(
+            serde_json::json!({ "team_id": team_id, "outcome": "deleted" }),
+            effects.as_ref(),
+        ),
+        fmt,
+    )
 }
 
-/// Print what an act did to `public_within` rows, whenever the server reported it (empty lists
-/// included, so the output's shape does not depend on what happened). `None` is a server that
-/// predates the report: nothing is printed and nothing is claimed either way.
-fn print_public_within_effects(
+/// Add what an act did to `public_within` rows to its receipt, under `public_within`, whenever the
+/// server reported it (empty lists included, so the receipt's shape does not depend on what
+/// happened). `None` is a server that predates the report: the key is absent and nothing is
+/// claimed either way.
+fn with_public_within(
+    mut receipt: serde_json::Value,
     effects: Option<&temper_core::types::team::PublicWithinEffects>,
-    fmt: crate::format::OutputFormat,
-) -> Result<()> {
-    let Some(e) = effects else {
-        return Ok(());
-    };
-    println!(
-        "{}",
-        crate::format::render(&serde_json::json!({ "public_within": e }), fmt)?
-    );
-    Ok(())
+) -> serde_json::Value {
+    if let (Some(e), Some(obj)) = (effects, receipt.as_object_mut()) {
+        obj.insert(
+            "public_within".to_string(),
+            serde_json::to_value(e).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    receipt
 }
 
 /// Detach a child team from a parent team (a manager of the parent or of the child, or a system
@@ -276,8 +297,17 @@ pub async fn detach_remote(
         .detach_child(parent_id, child_id)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
-    output::success("Child team detached.");
-    print_public_within_effects(effects.as_ref(), fmt)
+    print_receipt(
+        with_public_within(
+            serde_json::json!({
+                "parent_id": parent_id,
+                "child_id": child_id,
+                "outcome": "detached",
+            }),
+            effects.as_ref(),
+        ),
+        fmt,
+    )
 }
 
 /// Attach a child team under a parent team (a manager of both; a temper-system or gating-team
@@ -459,7 +489,7 @@ pub async fn show_remote(
 pub async fn leave_remote(
     client: &temper_client::TemperClient,
     team: &str,
-    _fmt: crate::format::OutputFormat,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let team_id = resolve_team_id(client, team).await?;
     let me = client
@@ -472,7 +502,15 @@ pub async fn leave_remote(
         .remove_member(team_id, me.id)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
-    output::success("You have left the team.");
+    print_receipt(
+        serde_json::json!({
+            "team_id": team_id,
+            "profile_id": me.id,
+            "outcome": "left",
+            "residual_owned": outcome.residual_owned,
+        }),
+        fmt,
+    )?;
     print_residual_nudge(team, &me.id.to_string(), &outcome.residual_owned);
     Ok(())
 }
@@ -483,7 +521,7 @@ pub async fn remove_member_remote(
     client: &temper_client::TemperClient,
     team: &str,
     profile: &str,
-    _fmt: crate::format::OutputFormat,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let team_id = resolve_team_id(client, team).await?;
     let profile_id = uuid::Uuid::parse_str(profile)
@@ -493,7 +531,15 @@ pub async fn remove_member_remote(
         .remove_member(team_id, profile_id)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
-    output::success("Member removed.");
+    print_receipt(
+        serde_json::json!({
+            "team_id": team_id,
+            "profile_id": profile_id,
+            "outcome": "removed",
+            "residual_owned": outcome.residual_owned,
+        }),
+        fmt,
+    )?;
     print_residual_nudge(team, profile, &outcome.residual_owned);
     Ok(())
 }
@@ -600,7 +646,14 @@ pub async fn public_within(
                 .close_public_within(team_id, anchor_id)
                 .await
                 .map_err(err)?;
-            output::success("Opening closed.");
+            print_receipt(
+                serde_json::json!({
+                    "team_id": team_id,
+                    "anchor_id": anchor_id,
+                    "outcome": "closed",
+                }),
+                fmt,
+            )?;
         }
         PublicWithinAction::Policy { team, setting } => {
             // clap's value_parser admits only `forbid` and `allow`.

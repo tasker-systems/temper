@@ -177,6 +177,12 @@ async fn team_metadata_and_soft_delete(pool: sqlx::PgPool) {
         "team delete exits 0: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    // Under JSON (a non-TTY stdout), the delete answers ONE document: its receipt, with the
+    // `public_within` report folded in. It used to print a prose line before that report.
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("team delete's stdout is one JSON document");
+    assert_eq!(receipt["outcome"], "deleted", "{receipt}");
+    assert_eq!(receipt["team_id"], team2.id.to_string(), "{receipt}");
 
     let resp = get_team(&app, &owner_token, team2.id).await;
     assert_eq!(
