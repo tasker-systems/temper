@@ -1,0 +1,26 @@
+title    = "A resource reassignment serializes with a move of the same resource, and decides its authority against the home the resource is in when its event is written"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp"]
+status   = "signal-only"
+body = '''
+A reassignment now takes the resource's writer lock (writes::lock_resource_for_write, FOR NO KEY
+UPDATE), the lock a move takes, before it reads the resource's home:
+writes::reassign_resource_in_tx takes it, and both doors in reassign_service take it after the
+liveness floor and then decide again under it. The single door re-runs its authority (owner, or
+an admin's reach, and context-homed) against the home it reads under the lock. The team handoff
+checks again that the resource is still owned by the leaver and homed in a live context the team
+owns. Before, the reassignment held only the floor's FOR KEY SHARE, which a move does not wait on.
+A move that committed while a reassignment was in flight left resource_reassigned anchored on the
+home the resource had just left, after that home's resource_departed. That home's change-feed
+readers saw the resource still live there, so its departure read as a move, not as a deletion. The
+authority decided against the old home also outlived it.
+
+Who observes: a reassignment that races a move of the same resource. It now waits for the move,
+then anchors on the new home. An admin whose reach came through the old home is refused 403, as a
+stranger is. A team handoff skips the moved resource and does not return it. A reassignment also
+now waits on an in-flight update of the same resource, under the write floor's lock bound (503
+RESOURCE_BUSY past it). No schema change and no response shape change. Witnesses, each failing
+without the fix: crates/temper-services/tests/reassign_move_race_test.rs. Release relevance:
+signal-only.
+'''
