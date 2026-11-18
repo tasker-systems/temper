@@ -263,6 +263,20 @@ pub struct UpdateResourceInput {
     /// `clear_goal` = retract). Mutually exclusive with `goal`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clear_goal: Option<bool>,
+    /// Move the resource to another context: a context ref, `@owner/slug`, `+team/slug` or a
+    /// UUID. A bare name is refused by name. The id, body, both meta tiers and edges are kept;
+    /// only the home changes. You must be able to modify the resource and to write into the
+    /// destination: a destination you can read but not write is refused, as is a resource you
+    /// cannot modify, and one refusal speaks for both. The CLI's `--context-to`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_to: Option<String>,
+    /// Convert the resource to another doc type, by name (`task`, `research`, `concept`, …; see
+    /// `describe_schema` with `view: doc_types`). An unknown name is refused before the write.
+    /// The resource keeps its id, body and home. A `managed_meta` or `title` sent in the same call
+    /// is validated against the new type, so a value the new type does not take is refused. The
+    /// CLI's `--type-to`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_to: Option<String>,
     /// New markdown content. Replaces existing content and triggers
     /// re-processing.
     pub content: Option<String>,
@@ -1113,6 +1127,30 @@ pub async fn update_resource(
         (None, Some(true)) => (None, Some(true)),
         _ => (None, None),
     };
+    // The CLI refuses an unknown `--type-to` before it sends anything, with this parse; the
+    // server takes any name. Refusing here too keeps the two doors converting to the same set.
+    if let Some(type_to) = input.type_to.as_deref() {
+        type_to
+            .parse::<temper_core::types::doc_type::DocType>()
+            .map_err(|e| {
+                let cause = match e {
+                    temper_core::error::TemperError::Config(cause) => cause,
+                    other => other.to_string(),
+                };
+                rmcp::ErrorData::invalid_params(format!("type_to: {cause}"), None)
+            })?;
+    }
+    // A move adds a second thing `Forbidden` can be about: the destination. The server's refusal
+    // is the same bare 403 for both, so the sentence names both rather than send the agent to
+    // re-check the wrong one.
+    let forbidden = match input.context_to.as_deref() {
+        None => "Resource not found or not modifiable".to_string(),
+        Some(dest) => format!(
+            "Resource not found or not modifiable, or you cannot write into the destination \
+             context {dest:?} (a context you can read but not write is refused as a move \
+             destination)"
+        ),
+    };
 
     // The meta guard and the body guard travel as one expectation, as on HTTP.
     let expect = match (input.expect, input.expect_body) {
@@ -1131,8 +1169,10 @@ pub async fn update_resource(
         content: body.content,
         content_hash: None,
         chunks_packed: None,
-        context_to: None,
-        type_to: None,
+        // Forwarded verbatim, as the CLI forwards its flags: the server parses and resolves the
+        // ref (a bare name is a 400 naming it) and gates the destination for write.
+        context_to: input.context_to.clone(),
+        type_to: input.type_to.clone(),
         goal,
         clear_goal,
         sources: body.sources,
@@ -1153,12 +1193,10 @@ pub async fn update_resource(
     };
     let written = answer.across_auth(|e| match e {
         // Arm-for-arm from the direct binding: the gate's sentence names the withheld
-        // capability; missing and not-modifiable share the Forbidden face on this path.
+        // capability; missing, not-modifiable and (on a move) an unwritable destination share
+        // the Forbidden face on this path, and its sentence names each that can apply.
         ClientError::ForbiddenDetail { message } => rmcp::ErrorData::invalid_params(message, None),
-        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
-            "Resource not found or not modifiable".to_string(),
-            None,
-        ),
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(forbidden, None),
         ClientError::NotFound { message } => {
             rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
         }
@@ -1253,6 +1291,11 @@ pub async fn update_resource_meta(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let client = svc.relay_client(parts)?;
 
+    // Meta only, by decision (task 01a1ec86-0d90-767a-b7a6-6d97c916bfc4): this door never moves
+    // or converts. Its route's payload has no move field, and a move is a placement act with its
+    // own destination gate, which belongs on the one door that carries it, `update_resource`.
+    // The tool description says so, so the absence is a stated choice.
+    //
     // The door's meta-only PUT runs the same translator's meta-only branch (body=None,
     // both meta tiers stated in full, update_meta audit, edge reconciliation). The
     // payload's resource_id/hash fields are vestigial wire baggage — the handler takes
