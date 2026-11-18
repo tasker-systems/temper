@@ -2275,32 +2275,24 @@ fn build_partial_managed_meta_from_args(
 
 /// Typed partial `open_meta` payload built from update CLI list flags.
 ///
-/// Serialized keys are byte-identical to the historical stringly-keyed map:
-/// the graph-edge fields carry kebab-case `rename`s. Every field uses
-/// `skip_serializing_if` so an all-empty value serializes to `{}` — the
-/// `None`-on-empty contract is reconstructed by `build_partial_open_meta_from_args`.
+/// The relationship flags serialize through
+/// [`temper_core::types::graph::ResourceRelationships`] — the type the open tier is projected
+/// into when its edges are read — so each flag writes the key the server reads, and a flag
+/// cannot name a key of its own. A hand-written `rename` here once sent `depends-on`,
+/// `relates-to`, `preceded-by` and `derived-from`, which nothing that reads the open tier
+/// recognizes (`open_meta_flags_write_the_keys_the_open_tier_is_read_by` pins this).
 ///
-/// This is a focused CLI-local struct rather than a reuse of the graph-edge
-/// struct in `temper-core` (which omits `tags`/`aliases`/`references` and uses
-/// snake_case serialization).
+/// `tags` and `aliases` are metadata rather than relationships, so they sit beside it. Every
+/// field skips when empty, so an all-empty value serializes to `{}` — the `None`-on-empty
+/// contract is reconstructed by `build_partial_open_meta_from_args`.
 #[derive(Debug, serde::Serialize)]
 struct PartialOpenMeta<'a> {
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     tags: &'a [String],
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     aliases: &'a [String],
-    #[serde(rename = "relates-to", skip_serializing_if = "<[String]>::is_empty")]
-    relates_to: &'a [String],
-    #[serde(skip_serializing_if = "<[String]>::is_empty")]
-    references: &'a [String],
-    #[serde(rename = "depends-on", skip_serializing_if = "<[String]>::is_empty")]
-    depends_on: &'a [String],
-    #[serde(skip_serializing_if = "<[String]>::is_empty")]
-    extends: &'a [String],
-    #[serde(rename = "preceded-by", skip_serializing_if = "<[String]>::is_empty")]
-    preceded_by: &'a [String],
-    #[serde(rename = "derived-from", skip_serializing_if = "<[String]>::is_empty")]
-    derived_from: &'a [String],
+    #[serde(flatten)]
+    relationships: temper_core::types::graph::ResourceRelationships,
 }
 
 /// Parse an open-tier JSON object flag value (`--open-meta`, `--open-meta-add`).
@@ -2537,12 +2529,16 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
     let partial = PartialOpenMeta {
         tags: params.tags,
         aliases: params.aliases,
-        relates_to: params.relates_to,
-        references: params.references,
-        depends_on: params.depends_on,
-        extends: params.extends,
-        preceded_by: params.preceded_by,
-        derived_from: params.derived_from,
+        relationships: temper_core::types::graph::ResourceRelationships {
+            relates_to: params.relates_to.to_vec(),
+            extends: params.extends.to_vec(),
+            depends_on: params.depends_on.to_vec(),
+            references: params.references.to_vec(),
+            // No `--parent` flag: the update surface does not set it.
+            parent: None,
+            preceded_by: params.preceded_by.to_vec(),
+            derived_from: params.derived_from.to_vec(),
+        },
     };
     let value = serde_json::to_value(&partial).ok()?;
     if value.as_object().is_some_and(|o| o.is_empty()) {
@@ -3854,6 +3850,55 @@ mod build_helpers_tests {
         assert!(build_open_meta_add_for_update(&params)
             .expect("ok")
             .is_none());
+    }
+
+    /// Each relationship flag writes the key the open tier is read by, and nothing else.
+    ///
+    /// Two readers, both checked: the `ResourceRelationships` projection, which is what the
+    /// open tier's edges are read through, and the canonical names in
+    /// `KNOWN_OPEN_FIELDS`. A key that is only an alias there (`depends-on`) is accepted on
+    /// write and then read by nothing — `--depends-on` wrote exactly that, so the needs it
+    /// added were invisible to the coordination convention that reads `depends_on`.
+    #[test]
+    fn open_meta_flags_write_the_keys_the_open_tier_is_read_by() {
+        type Pick = fn(&temper_core::types::graph::ResourceRelationships) -> &Vec<String>;
+        type Set = for<'a> fn(&mut UpdateParams<'a>, &'a [String]);
+        let cases: [(&str, Set, Pick); 6] = [
+            ("relates_to", |p, v| p.relates_to = v, |r| &r.relates_to),
+            ("references", |p, v| p.references = v, |r| &r.references),
+            ("depends_on", |p, v| p.depends_on = v, |r| &r.depends_on),
+            ("extends", |p, v| p.extends = v, |r| &r.extends),
+            ("preceded_by", |p, v| p.preceded_by = v, |r| &r.preceded_by),
+            (
+                "derived_from",
+                |p, v| p.derived_from = v,
+                |r| &r.derived_from,
+            ),
+        ];
+        let value = vec!["01a1d4a2-080b-77cf-840f-ab72e634bc8f".to_string()];
+        for (key, set, pick) in cases {
+            let mut params = empty_update_params("foo");
+            set(&mut params, &value);
+            let add = build_open_meta_add_for_update(&params)
+                .expect("ok")
+                .expect("a relationship flag fills the add channel");
+
+            let keys: Vec<&String> = add.as_object().expect("object").keys().collect();
+            assert_eq!(keys, [key], "the flag for `{key}` wrote {add}");
+            assert!(
+                temper_workflow::frontmatter::KNOWN_OPEN_FIELDS
+                    .iter()
+                    .any(|f| f.canonical == key),
+                "`{key}` must be a canonical open-tier key, not an alias"
+            );
+            let read: temper_core::types::graph::ResourceRelationships =
+                serde_json::from_value(add.clone()).expect("projects");
+            assert_eq!(
+                pick(&read),
+                &value,
+                "the edge projection must see what the flag for `{key}` wrote: {add}"
+            );
+        }
     }
 
     /// A key none of the eight repeatable flags names still reaches the ADD channel,
