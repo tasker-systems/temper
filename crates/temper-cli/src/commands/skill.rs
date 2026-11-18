@@ -1158,117 +1158,148 @@ fn write_if_changed(dest: &Path, content: &str) -> Result<bool> {
     Ok(true)
 }
 
-/// Check skill installation status.
-pub fn check(config: &Config, target: SkillTarget) -> Result<()> {
-    // 1. Check skill directory exists — a missing directory short-circuits
-    //    the remaining checks.
-    let skill_dir = &config.skill_output;
-    if !skill_dir.exists() {
-        output::status_icon(
-            false,
-            format!("Skill directory: NOT FOUND ({})", skill_dir.display()),
-        );
+/// What `temper skill check` found, rendered once in the resolved format.
+#[derive(Debug, serde::Serialize)]
+pub struct SkillCheckReport {
+    /// The skill directory the config names.
+    pub skill_dir: String,
+    /// Whether that directory exists. When it does not, the other checks do not run and their
+    /// fields are empty or absent.
+    pub skill_dir_found: bool,
+    /// How many skill files an install writes.
+    pub expected_files: usize,
+    /// The expected files that are missing; empty when all are present.
+    pub missing_files: Vec<String>,
+    /// The config-hash staleness check. Absent when there is no `SKILL.md` to read it from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<HashCheck>,
+    /// The command wrapper check. Absent when the skill directory was not found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_wrapper: Option<WrapperCheck>,
+}
+
+/// The config-hash staleness outcome.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum HashCheck {
+    /// The hash embedded in `SKILL.md` matches the current config.
+    UpToDate,
+    /// The embedded hash differs from the current one.
+    Stale { embedded: String, current: String },
+    /// `SKILL.md` carries no `config-hash` comment. Reported, not hidden: silence here would read
+    /// as "the check did not run".
+    Unknown,
+}
+
+/// The command wrapper outcome.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum WrapperCheck {
+    /// This target installs skill content only and has no wrapper, by design.
+    NotApplicable,
+    /// The wrapper exists.
+    Found { path: String },
+    /// The wrapper is missing.
+    Missing { path: String },
+}
+
+impl SkillCheckReport {
+    /// Whether anything the check found needs `temper skill install`.
+    fn needs_install(&self) -> bool {
+        !self.skill_dir_found
+            || !self.missing_files.is_empty()
+            || matches!(self.config_hash, Some(HashCheck::Stale { .. }))
+            || matches!(self.command_wrapper, Some(WrapperCheck::Missing { .. }))
+    }
+}
+
+/// The files an install writes, which `check` looks for.
+const EXPECTED_SKILL_FILES: &[&str] = &[
+    "SKILL.md",
+    "reference.md",
+    "implementation-grounding.md",
+    "outcome-registers.md",
+    "working-a-goal.md",
+    "data-artifacts.md",
+    "coordinating-through-records.md",
+    "session-lifecycle.md",
+    "memories.md",
+    "cognitive-maps.md",
+    "teams.md",
+    "querying.md",
+    "knowledge-base.md",
+    "project-setup.md",
+];
+
+/// Check skill installation status and print one report in the resolved format. The remedy, when
+/// one is needed, goes to stderr as a hint.
+pub fn check(config: &Config, target: SkillTarget, fmt: crate::format::OutputFormat) -> Result<()> {
+    let report = check_report(config, target)?;
+    output::plain(crate::format::render(&report, fmt)?);
+    if report.needs_install() {
         output::hint("  Run: temper skill install");
-        return Ok(());
     }
-    output::status_icon(true, format!("Skill directory: {}", skill_dir.display()));
-
-    check_expected_files(skill_dir);
-    check_config_hash_staleness(skill_dir)?;
-    check_command_wrapper(target);
-
     Ok(())
 }
 
-/// Report which of the expected skill files are present under `skill_dir`.
-fn check_expected_files(skill_dir: &Path) {
-    let expected_files = [
-        "SKILL.md",
-        "reference.md",
-        "implementation-grounding.md",
-        "outcome-registers.md",
-        "working-a-goal.md",
-        "data-artifacts.md",
-        "coordinating-through-records.md",
-        "session-lifecycle.md",
-        "memories.md",
-        "cognitive-maps.md",
-        "teams.md",
-        "querying.md",
-        "knowledge-base.md",
-        "project-setup.md",
-    ];
-
-    let mut all_present = true;
-    for file in &expected_files {
-        let path = skill_dir.join(file);
-        if !path.exists() {
-            output::status_icon(false, format!("Missing: {}", file));
-            all_present = false;
-        }
+/// Gather the skill check's findings. A missing skill directory short-circuits the rest.
+pub fn check_report(config: &Config, target: SkillTarget) -> Result<SkillCheckReport> {
+    let skill_dir = &config.skill_output;
+    let mut report = SkillCheckReport {
+        skill_dir: skill_dir.display().to_string(),
+        skill_dir_found: skill_dir.exists(),
+        expected_files: EXPECTED_SKILL_FILES.len(),
+        missing_files: Vec::new(),
+        config_hash: None,
+        command_wrapper: None,
+    };
+    if !report.skill_dir_found {
+        return Ok(report);
     }
-    if all_present {
-        output::status_icon(
-            true,
-            format!("All {} skill files present", expected_files.len()),
-        );
-    }
+    report.missing_files = EXPECTED_SKILL_FILES
+        .iter()
+        .filter(|f| !skill_dir.join(f).exists())
+        .map(|f| (*f).to_string())
+        .collect();
+    report.config_hash = check_config_hash_staleness(skill_dir)?;
+    report.command_wrapper = Some(check_command_wrapper(target));
+    Ok(report)
 }
 
-/// Compare the config-hash embedded in `SKILL.md` against the current config
-/// hash, reporting up-to-date / stale / unknown status.
-fn check_config_hash_staleness(skill_dir: &Path) -> Result<()> {
+/// Compare the config-hash embedded in `SKILL.md` against the current config hash. `None` when
+/// there is no `SKILL.md`.
+fn check_config_hash_staleness(skill_dir: &Path) -> Result<Option<HashCheck>> {
     let skill_md_path = skill_dir.join("SKILL.md");
-    if skill_md_path.exists() {
-        let existing = std::fs::read_to_string(&skill_md_path)
-            .map_err(|e| TemperError::Config(format!("cannot read SKILL.md: {}", e)))?;
-
-        let embedded_hash = extract_config_hash(&existing);
-        let current_hash = compute_config_hash()?;
-
-        match embedded_hash {
-            Some(h) if h == current_hash => {
-                output::status_icon(true, "Hash: up to date");
-            }
-            Some(h) => {
-                output::status_icon(false, "Hash: STALE");
-                output::plain(format!("  Embedded: {}", h));
-                output::plain(format!("  Current:  {}", current_hash));
-                output::hint("  Run: temper skill install");
-            }
-            None => {
-                // Same stream (stdout) and shape (`status_icon`) as the up-to-date
-                // and STALE arms above: this is a *report*, and a non-passing outcome
-                // routed to stderr would render as silence for a caller reading the
-                // stdout report — indistinguishable from "the check did not run",
-                // which is the worst reading for UNKNOWN specifically.
-                output::status_icon(false, "Hash: UNKNOWN (no config-hash comment found)");
-            }
-        }
+    if !skill_md_path.exists() {
+        return Ok(None);
     }
-    Ok(())
+    let existing = std::fs::read_to_string(&skill_md_path)
+        .map_err(|e| TemperError::Config(format!("cannot read SKILL.md: {}", e)))?;
+    let current_hash = compute_config_hash()?;
+    Ok(Some(match extract_config_hash(&existing) {
+        Some(h) if h == current_hash => HashCheck::UpToDate,
+        Some(h) => HashCheck::Stale {
+            embedded: h,
+            current: current_hash,
+        },
+        None => HashCheck::Unknown,
+    }))
 }
 
 /// Check the command wrapper at the target's command path. `Agents` has no wrapper by design;
-/// that is stated rather than left to be inferred from a missing line.
-fn check_command_wrapper(target: SkillTarget) {
+/// that is stated rather than left to be inferred from a missing field.
+fn check_command_wrapper(target: SkillTarget) -> WrapperCheck {
     let Some(commands_dir) =
         target.command_dir(&dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("~")))
     else {
-        output::plain("Command wrapper: none (this target installs skill content only)");
-        return;
+        return WrapperCheck::NotApplicable;
     };
-
     let wrapper_path = commands_dir.join("temper.md");
-
+    let path = wrapper_path.display().to_string();
     if wrapper_path.exists() {
-        output::status_icon(true, format!("Command wrapper: {}", wrapper_path.display()));
+        WrapperCheck::Found { path }
     } else {
-        output::status_icon(
-            false,
-            format!("Command wrapper: NOT FOUND ({})", wrapper_path.display()),
-        );
-        output::hint("  Run: temper skill install");
+        WrapperCheck::Missing { path }
     }
 }
 

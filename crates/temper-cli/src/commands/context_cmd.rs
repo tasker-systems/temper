@@ -35,7 +35,8 @@ fn parse_owner(owner: &str) -> Result<ContextOwnerRef> {
 /// Subscribe to a context locally: add it to sync.subscriptions.contexts in the
 /// global config so `temper pull` materializes it. This is a local-only
 /// subscription toggle — it does not create or touch the context server-side.
-pub fn subscribe(name: &str) -> Result<()> {
+/// Prints `{context, outcome: "subscribed"}` in the resolved format.
+pub fn subscribe(name: &str, fmt: crate::format::OutputFormat) -> Result<()> {
     let config_path = config::global_config_path();
 
     config::safe_write(&config_path, |content| {
@@ -69,13 +70,17 @@ pub fn subscribe(name: &str) -> Result<()> {
         result
     })?;
 
-    output::success(format!("Subscribed to context '{name}'"));
+    output::plain(crate::format::render(
+        &serde_json::json!({ "context": name, "outcome": "subscribed" }),
+        fmt,
+    )?);
     Ok(())
 }
 
 /// Unsubscribe from a context locally: remove it from
 /// sync.subscriptions.contexts in the global config. Local-only — no server effect.
-pub fn unsubscribe(name: &str) -> Result<()> {
+/// Prints `{context, outcome: "unsubscribed"}` in the resolved format.
+pub fn unsubscribe(name: &str, fmt: crate::format::OutputFormat) -> Result<()> {
     let config_path = config::global_config_path();
 
     config::safe_write(&config_path, |content| {
@@ -108,7 +113,10 @@ pub fn unsubscribe(name: &str) -> Result<()> {
         result
     })?;
 
-    output::success(format!("Unsubscribed from context '{name}'"));
+    output::plain(crate::format::render(
+        &serde_json::json!({ "context": name, "outcome": "unsubscribed" }),
+        fmt,
+    )?);
     Ok(())
 }
 

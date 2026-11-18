@@ -635,10 +635,10 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         }
         Commands::Context { action } => match action {
             ContextAction::Subscribe { name } => {
-                temper_cli::commands::context_cmd::subscribe(&name)
+                temper_cli::commands::context_cmd::subscribe(&name, output_format)
             }
             ContextAction::Unsubscribe { name } => {
-                temper_cli::commands::context_cmd::unsubscribe(&name)
+                temper_cli::commands::context_cmd::unsubscribe(&name, output_format)
             }
             ContextAction::Create { name, owner } => {
                 temper_cli::actions::runtime::with_client(|client| {
@@ -1319,8 +1319,13 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 AdminSamlAction::Verify { instance_url, db } => {
                     temper_cli::actions::runtime::with_client(|client| {
                         Box::pin(async move {
-                            temper_cli::commands::admin_saml::verify(client, &instance_url, db)
-                                .await
+                            temper_cli::commands::admin_saml::verify(
+                                client,
+                                &instance_url,
+                                db,
+                                output_format,
+                            )
+                            .await
                         })
                     })
                 }
@@ -1810,14 +1815,17 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             SkillAction::Emit { path } => {
                 let dir = std::path::PathBuf::from(path);
                 let written = temper_cli::commands::skill::emit_agent_skills(&dir)?;
-                temper_cli::output::success(format!(
+                // The count line stays, on stderr: `check-skills-drift.sh` reads "Emitted N skill
+                // files" from the emit's combined output to refuse an emit that wrote nothing.
+                temper_cli::output::success_err(format!(
                     "Emitted {} skill files: {}",
                     written.len(),
                     dir.display()
                 ));
-                for rel in &written {
-                    temper_cli::output::item(rel);
-                }
+                temper_cli::output::plain(temper_cli::format::render(
+                    &serde_json::json!({ "path": dir.display().to_string(), "written": written }),
+                    output_format,
+                )?);
                 Ok(())
             }
             SkillAction::Generate { include_admin } => {
@@ -1848,39 +1856,26 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     target,
                     include_admin,
                 )?;
-                if report.is_no_op() || report.changed.is_empty() {
-                    temper_cli::output::success(format!(
-                        "Skill already up to date ({} files): {}",
-                        report.total,
-                        skill_dir.display()
-                    ));
-                } else {
-                    temper_cli::output::success(format!(
-                        "Skill installed: {} ({} of {} files updated)",
-                        skill_dir.display(),
-                        report.changed.len(),
-                        report.total
-                    ));
-                    for path in &report.changed {
-                        temper_cli::output::item(path);
-                    }
-                }
-                for path in &report.removed_legacy {
-                    temper_cli::output::item(format!("removed stale guidance duplicate: {path}"));
-                }
-                for path in &report.removed_retired {
-                    temper_cli::output::item(format!("removed retired skill file: {path}"));
-                }
-                for path in &report.removed_admin {
-                    temper_cli::output::item(format!(
-                        "removed admin file (no --include-admin): {path}"
-                    ));
-                }
+                // One document: the install report, with the directory it wrote and whether
+                // anything changed. `up_to_date` keeps the old "already up to date" reading: no
+                // skill file was rewritten (removals are listed on their own).
+                temper_cli::output::plain(temper_cli::format::render(
+                    &serde_json::json!({
+                        "skill_dir": skill_dir.display().to_string(),
+                        "up_to_date": report.changed.is_empty(),
+                        "total": report.total,
+                        "changed": report.changed,
+                        "removed_legacy": report.removed_legacy,
+                        "removed_retired": report.removed_retired,
+                        "removed_admin": report.removed_admin,
+                    }),
+                    output_format,
+                )?);
                 Ok(())
             }
             SkillAction::Check { target } => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
-                temper_cli::commands::skill::check(&config, target)
+                temper_cli::commands::skill::check(&config, target, output_format)
             }
         },
         Commands::Memory { action } => match action {
@@ -1906,12 +1901,12 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             &config,
                             path.as_deref(),
                         ))?;
-                        let paths = written
-                            .iter()
-                            .map(|p| p.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        temper_cli::output::success(format!("Memory index written: {paths}",));
+                        let paths: Vec<String> =
+                            written.iter().map(|p| p.display().to_string()).collect();
+                        temper_cli::output::plain(temper_cli::format::render(
+                            &serde_json::json!({ "written": paths }),
+                            output_format,
+                        )?);
                         Ok(())
                     }
                 }
@@ -1965,15 +1960,33 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         ))?;
                         // Every verdict is reported before the exit decision — one file's
                         // drift must not mask another's.
+                        //
+                        // stdout carries one document, `[{path, verdict}]`; the explanation for
+                        // an absent or drifted index, and the diff, go to stderr.
                         let mut drifted = false;
+                        let mut rows = Vec::with_capacity(verdicts.len());
+                        for v in &verdicts {
+                            let verdict = match &v.verdict {
+                                temper_cli::commands::memory::check::DriftVerdict::Match => "match",
+                                temper_cli::commands::memory::check::DriftVerdict::Absent => {
+                                    "absent"
+                                }
+                                temper_cli::commands::memory::check::DriftVerdict::Drifted {
+                                    ..
+                                } => "drifted",
+                            };
+                            rows.push(serde_json::json!({
+                                "path": v.path.display().to_string(),
+                                "verdict": verdict,
+                            }));
+                        }
+                        temper_cli::output::plain(temper_cli::format::render(
+                            &rows,
+                            output_format,
+                        )?);
                         for v in &verdicts {
                             match &v.verdict {
-                                temper_cli::commands::memory::check::DriftVerdict::Match => {
-                                    temper_cli::output::success(format!(
-                                        "Memory index is up to date: {}",
-                                        v.path.display()
-                                    ));
-                                }
+                                temper_cli::commands::memory::check::DriftVerdict::Match => {}
                                 temper_cli::commands::memory::check::DriftVerdict::Absent => {
                                     temper_cli::output::warning(format!(
                                         "No memory index on disk yet — run `temper memory emit`: {}",

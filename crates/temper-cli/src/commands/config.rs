@@ -42,7 +42,8 @@ pub fn edit() -> Result<()> {
         match action::parse_and_validate(&content) {
             action::ParseOutcome::Valid(_) => {
                 action::commit_edit(&edit_path, &target)?;
-                output::success(format!("Config saved: {}", target.display()));
+                // stderr: `config edit` is interactive and has no document to put on stdout.
+                output::success_err(format!("Config saved: {}", target.display()));
                 return Ok(());
             }
             action::ParseOutcome::Invalid(msg) => {
@@ -77,7 +78,7 @@ fn ensure_config_exists(target: &Path) -> Result<()> {
         .map_err(|e| TemperError::Config(format!("default config serialize: {e}")))?;
     std::fs::write(target, toml)
         .map_err(|e| TemperError::Config(format!("cannot write default config: {e}")))?;
-    output::dim(format!("Seeded default config at {}", target.display()));
+    output::dim_err(format!("Seeded default config at {}", target.display()));
     Ok(())
 }
 

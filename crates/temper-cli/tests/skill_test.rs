@@ -425,21 +425,15 @@ fn test_skill_generate_uses_decorated_context_ref_form() {
     });
 }
 
-/// **The UNKNOWN staleness arm must land on stdout, like its two siblings.**
+/// **The UNKNOWN staleness arm is reported on stdout, in the report, like its two siblings.**
 ///
-/// `check_config_hash_staleness` has three outcomes — up-to-date, STALE, and
-/// UNKNOWN (no `config-hash` comment in SKILL.md). The first two render via
-/// `status_icon` (stdout); UNKNOWN once rendered via `warning` (**stderr**), so
-/// a caller reading the stdout report saw a line for two of three outcomes and
-/// *nothing* for the third. That silence is indistinguishable from "the check
-/// did not run" — the worst reading for UNKNOWN, which is precisely the case
-/// where the hash comment is missing.
+/// `check_config_hash_staleness` has three outcomes: up-to-date, STALE, and UNKNOWN (no
+/// `config-hash` comment in SKILL.md). UNKNOWN once rendered on stderr, so a caller reading the
+/// stdout report saw nothing for it, which reads as "the check did not run".
 ///
-/// This drives the real binary and captures the two streams separately — the
-/// only faithful way to pin *which stream* the arm uses, since the `output::*`
-/// helpers write to the process-global stdout/stderr. It fails against the
-/// pre-fix code (UNKNOWN on stderr) and passes once the arm routes through
-/// `status_icon` like its siblings.
+/// The report is now one document in the resolved format. A spawned CLI's stdout is not a TTY, so
+/// it is JSON: this parses stdout and asserts the `config_hash` status is `unknown`, which also
+/// pins that `skill check` prints nothing else to stdout under `--format json`.
 #[test]
 fn unknown_hash_arm_reports_on_stdout_like_its_siblings() {
     let dir = TempDir::new().unwrap();
@@ -480,16 +474,14 @@ path = "{vault_path}"
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(
-        stdout.contains("Hash: UNKNOWN"),
-        "the UNKNOWN staleness line must render on stdout with its report siblings, \
-         not vanish onto stderr.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("skill check's stdout must be one JSON document ({e}).\nstdout:\n{stdout}\nstderr:\n{stderr}")
+    });
+    assert_eq!(
+        report["config_hash"]["status"], "unknown",
+        "the UNKNOWN staleness outcome must be in the stdout report.\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
-    assert!(
-        !stderr.contains("Hash: UNKNOWN"),
-        "the UNKNOWN line must not also leak onto stderr — one outcome, one stream.\n\
-         stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
+    assert_eq!(report["skill_dir_found"], true, "{report}");
 }
 
 #[test]

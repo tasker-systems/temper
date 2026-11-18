@@ -10,16 +10,20 @@
 //! - `output::plain` called with a string literal or `format!`, not a rendered document;
 //! - `println!` / `print!` whose format string has text besides its `{}` placeholders.
 //!
-//! [`ALLOWED`] names each function that may still do so, and why. An entry is either a human-only
-//! arm (prose under `OutputFormat::Toon`, never under `Json`) or a command still on the work list.
-//! An entry whose function no longer offends fails the guard too, so the list only shrinks.
+//! [`ALLOWED`] names each function that may still do so, and why: today only human-only arms
+//! (prose under `OutputFormat::Toon`, never under `Json`). An entry whose function no longer
+//! offends fails the guard too, so the list only shrinks.
+//!
+//! **Raw artifacts are not prose.** A few commands exist to emit an artifact for a pipe or a file,
+//! and print it verbatim in either format: `skill generate` (the skill markdown), `resource create
+//! --show-template`, `auth export-token`, `blob get` to stdout, and `admin saml provision`'s env
+//! bundle and SQL and `--from-seen`'s rows. Their `println!("{x}")` has no text of its own, so the
+//! guard passes them by construction. Their status lines go to stderr.
 //!
 //! What it does not cover:
 //!
 //! - **Attribution is by the nearest preceding `fn` line.** A closure or nested fn is charged to
-//!   its enclosing function. An allowlisted function is allowed every prose line it holds, and
-//!   `main.rs::run` is the whole dispatch, so its entry hides any new prose line added there until
-//!   the skill and memory arms leave the list.
+//!   its enclosing function. An allowlisted function is allowed every prose line it holds.
 //! - **Payload shape.** A rendered document is trusted to be one document. Two `render` calls in
 //!   one command, which would print two documents, are not caught.
 //! - **Writers outside these forms.** A raw `std::io::stdout()` write, or a prose `String` built
@@ -42,69 +46,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "commands/facet.rs",
         "print_ack",
         "Toon-only arm; Json renders the ack",
-    ),
-    // Still on the work list: local and tooling commands, and interactive output that belongs on
-    // stderr.
-    (
-        "main.rs",
-        "run",
-        "pending: skill emit/install, memory emit/check",
-    ),
-    (
-        "commands/context_cmd.rs",
-        "subscribe",
-        "pending: local config write",
-    ),
-    (
-        "commands/context_cmd.rs",
-        "unsubscribe",
-        "pending: local config write",
-    ),
-    ("commands/skill.rs", "check", "pending: skill check report"),
-    (
-        "commands/skill.rs",
-        "check_expected_files",
-        "pending: skill check report",
-    ),
-    (
-        "commands/skill.rs",
-        "check_config_hash_staleness",
-        "pending: skill check report",
-    ),
-    (
-        "commands/skill.rs",
-        "check_command_wrapper",
-        "pending: skill check report",
-    ),
-    (
-        "commands/admin_saml.rs",
-        "provision",
-        "pending: operator provisioning tool",
-    ),
-    (
-        "commands/admin_saml.rs",
-        "verify",
-        "pending: operator verification tool",
-    ),
-    (
-        "commands/init.rs",
-        "print_summary",
-        "pending: interactive summary, belongs on stderr",
-    ),
-    (
-        "commands/memory/migrate.rs",
-        "confirm_batch",
-        "pending: interactive confirm, belongs on stderr",
-    ),
-    (
-        "commands/config.rs",
-        "edit",
-        "pending: interactive editor, belongs on stderr",
-    ),
-    (
-        "commands/config.rs",
-        "ensure_config_exists",
-        "pending: interactive editor, belongs on stderr",
     ),
 ];
 
