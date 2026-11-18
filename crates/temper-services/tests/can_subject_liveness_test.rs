@@ -17,13 +17,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 async fn insert_profile(pool: &sqlx::PgPool, handle: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .unwrap()
+    temper_services::test_support::profile::insert(pool, handle).await
 }
 
 async fn insert_resource(pool: &sqlx::PgPool, title: &str) -> Uuid {

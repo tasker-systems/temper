@@ -11,13 +11,7 @@ use temper_services::test_support;
 
 /// Seed a profile and mint the `HumanPrincipal` the auth path classifies it as.
 async fn authed(pool: &PgPool, handle: &str) -> HumanPrincipal {
-    let id: uuid::Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .unwrap();
+    let id = test_support::profile::insert(pool, handle).await;
     test_support::human_principal_for(pool, id).await
 }
 

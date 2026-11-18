@@ -26,27 +26,15 @@ use temper_workflow::types::managed_meta::ManagedMeta;
 /// [`seed_profile_with_context`] because the auditor below needs a principal and no context of its
 /// own: its access to the finding is a grant, not a home.
 async fn seed_profile(pool: &PgPool, email: &str) -> uuid::Uuid {
-    let profile_id = uuid::Uuid::now_v7();
-    let local = email.split('@').next().unwrap_or("test-user");
-    let handle = format!("{local}-{}", &profile_id.simple().to_string()[..8]);
-    sqlx::query("INSERT INTO kb_profiles (id, handle, display_name, email) VALUES ($1,$2,$3,$4)")
-        .bind(profile_id)
-        .bind(&handle)
-        .bind(email)
-        .bind(email)
-        .execute(pool)
-        .await
-        .expect("seed profile");
-    for surface in ["web", "cli", "mcp"] {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1,$2,'{}'::jsonb)",
-        )
-        .bind(profile_id)
-        .bind(format!("{handle}@{surface}"))
-        .execute(pool)
-        .await
-        .expect("seed emitter entity");
-    }
+    let (profile_id, handle) =
+        temper_services::test_support::profile::insert_with_email(pool, email).await;
+    temper_services::test_support::entity::insert_surfaces(
+        pool,
+        profile_id,
+        &handle,
+        &temper_services::test_support::entity::DOOR_SURFACES,
+    )
+    .await;
     profile_id
 }
 

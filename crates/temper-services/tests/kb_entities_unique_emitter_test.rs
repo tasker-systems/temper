@@ -59,13 +59,7 @@ async fn unique_index_exists(pool: &PgPool) -> bool {
 }
 
 async fn seed_profile(pool: &PgPool, handle: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("seed profile")
+    temper_services::test_support::profile::insert(pool, handle).await
 }
 
 /// Insert an emitter entity with an explicit id, so tests control which row is the survivor

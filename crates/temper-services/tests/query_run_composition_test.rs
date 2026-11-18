@@ -39,11 +39,7 @@ async fn system_actor(pool: &PgPool) -> (ProfileId, EntityId) {
 
 /// A second principal, so a test can tell an APPLIED owner narrowing from an inert one.
 async fn insert_profile(pool: &PgPool, handle: &str) -> Uuid {
-    sqlx::query_scalar("INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$1) RETURNING id")
-        .bind(handle)
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    temper_services::test_support::profile::insert(pool, handle).await
 }
 
 async fn ctx(pool: &PgPool, owner: ProfileId, slug: &str) -> ContextId {

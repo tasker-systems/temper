@@ -50,16 +50,13 @@ async fn seed_profile(pool: &PgPool, local: &str) -> Uuid {
         .execute(pool)
         .await
         .expect("seed profile");
-    for surface in ["web", "cli", "mcp"] {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1,$2,'{}'::jsonb)",
-        )
-        .bind(profile_id)
-        .bind(format!("{handle}@{surface}"))
-        .execute(pool)
-        .await
-        .expect("seed emitter entity");
-    }
+    temper_services::test_support::entity::insert_surfaces(
+        pool,
+        profile_id,
+        &handle,
+        &temper_services::test_support::entity::DOOR_SURFACES,
+    )
+    .await;
     profile_id
 }
 

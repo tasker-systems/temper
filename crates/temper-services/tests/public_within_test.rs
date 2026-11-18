@@ -70,23 +70,14 @@ async fn person_via(pool: &PgPool, handle: &str, provider: &str) -> Uuid {
 }
 
 async fn profile_with_emitters(pool: &PgPool, handle: &str) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
+    let id = temper_services::test_support::profile::insert(pool, handle).await;
+    temper_services::test_support::entity::insert_surfaces(
+        pool,
+        id,
+        handle,
+        &temper_services::test_support::entity::DOOR_SURFACES,
     )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("profile");
-    for surface in ["web", "cli", "mcp"] {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
-        )
-        .bind(id)
-        .bind(format!("{handle}@{surface}"))
-        .execute(pool)
-        .await
-        .expect("emitter");
-    }
+    .await;
     id
 }
 

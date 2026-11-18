@@ -195,22 +195,14 @@ async fn seed_source_resource(pool: &PgPool) -> Uuid {
 async fn seed_auditor(pool: &PgPool) -> ProfileId {
     let profile_id = Uuid::now_v7();
     let handle = format!("auditor-{}", &profile_id.simple().to_string()[..8]);
-    sqlx::query("INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $2)")
-        .bind(profile_id)
-        .bind(&handle)
-        .execute(pool)
-        .await
-        .unwrap();
-    for surface in ["web", "cli", "mcp"] {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
-        )
-        .bind(profile_id)
-        .bind(format!("{handle}@{surface}"))
-        .execute(pool)
-        .await
-        .unwrap();
-    }
+    temper_services::test_support::profile::insert_with_id(pool, profile_id, &handle).await;
+    temper_services::test_support::entity::insert_surfaces(
+        pool,
+        profile_id,
+        &handle,
+        &temper_services::test_support::entity::DOOR_SURFACES,
+    )
+    .await;
     ProfileId::from(profile_id)
 }
 
