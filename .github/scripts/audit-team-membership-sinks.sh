@@ -92,9 +92,13 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 #     `mod subscription_test_support;` declaration in `services/mod.rs`, so the per-file
 #     structural skip cannot see the gate. Named here instead of excluded by path, so a production
 #     write added to it would still move its count.
+#   test_support/team.rs — test-only, for the same reason: `team::set_member`, the shared
+#     membership builder every test module uses (R24), under `test_support`'s
+#     `#[cfg(feature = "test-db")]` gate in `lib.rs`.
 read -r -d '' BASELINE <<'EOF' || true
 1 crates/temper-services/src/services/access_service.rs
 2 crates/temper-services/src/services/subscription_test_support.rs
+1 crates/temper-services/src/test_support/team.rs
 1 crates/temper-substrate/src/scenario/access/loader.rs
 EOF
 
@@ -174,13 +178,71 @@ EOF
 # `any(test, feature = "x")`, `any(test, unix)`, `not(test)` — compiles into some production
 # build, so a module under it is scanned. A skip that is still open at end of file fails CLOSED:
 # the file is reported under a `#unclosed-test-module` key, which no baseline carries.
+#
+# The out-of-line form of the same gate, `#[cfg(test)]` / `#[cfg(all(test, …))]` on a `mod NAME;`
+# declaration (ruling R24 moves DB test modules into such sibling files), skips the whole declared
+# file, and every module that file declares in turn: none of it compiles into a production build.
+# The predicate is the inline opener's, so `any(…)`, `not(…)` and a feature-only gate still skip
+# nothing, and a file gated that way is named in the baseline as before.
+
+# The file `mod NAME;` in file $1 resolves to (lib.rs, main.rs and mod.rs declare siblings; any
+# other foo.rs declares into foo/), or nothing.
+child_module_file() {
+  local parent="$1" name="$2" base
+  case "$(basename "$parent")" in
+    lib.rs | main.rs | mod.rs) base="$(dirname "$parent")" ;;
+    *) base="${parent%.rs}" ;;
+  esac
+  if [[ -f "$base/$name.rs" ]]; then echo "$base/$name.rs"; elif [[ -f "$base/$name/mod.rs" ]]; then echo "$base/$name/mod.rs"; fi
+}
+
+# NAME for each test-gated `mod NAME;` in file $1 (with `all`=1, for each `mod NAME;` at all: the
+# children of a file that is already test code).
+declared_modules() {
+  awk -v all="${2:-0}" '
+    function opener(l) {
+      return l ~ /^[[:space:]]*#\[cfg\(test\)\]/ ||
+        (l ~ /^[[:space:]]*#\[cfg\(all\(/ && l ~ /[(,[:space:]]test[),[:space:]]/ && l !~ /any\(/ && l !~ /not\(/)
+    }
+    {
+      if (pending && ($0 ~ /^[[:space:]]*#\[/ || $0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*\/\//)) next
+      if ((pending || all) && match($0, /^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?mod[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*;/)) {
+        m = substr($0, RSTART, RLENGTH); sub(/;.*/, "", m); sub(/.*mod[[:space:]]+/, "", m); sub(/[[:space:]]+$/, "", m)
+        print m
+      }
+      pending = opener($0)
+    }
+  ' "$1"
+}
+
+# Every file under $CRATES_DIR that is wholly test code by an out-of-line test gate.
+out_of_line_test_files() {
+  local f name child queue=() seen=" "
+  while read -r f; do
+    while read -r name; do
+      [[ -n "$name" ]] && child="$(child_module_file "$f" "$name")" && [[ -n "$child" ]] && queue+=("$child")
+    done < <(declared_modules "$f")
+  done < <(find "$CRATES_DIR" -type f -name '*.rs' -path '*/src/*' 2>/dev/null | sort)
+  while [[ ${#queue[@]} -gt 0 ]]; do
+    f="${queue[0]}"; queue=("${queue[@]:1}")
+    [[ "$seen" == *" $f "* ]] && continue
+    seen+="$f "
+    echo "$f"
+    while read -r name; do
+      [[ -n "$name" ]] && child="$(child_module_file "$f" "$name")" && [[ -n "$child" ]] && queue+=("$child")
+    done < <(declared_modules "$f" 1)
+  done
+}
+
 rust_hits() {
   local pattern="$1" verb="${2:-}" table="${3:-}" exclude="${4:-}"
-  local f
+  local f skipped
+  skipped="$(out_of_line_test_files)"
   # `find` rather than `grep -r --include`, so the walk sees every file once, in order.
   # Paths print as `crates/<rest>` whatever CRATES_DIR is, so a fixture tree is read against the
   # same baseline keys as the real one.
   find "$CRATES_DIR" -type f -name '*.rs' -path '*/src/*' 2>/dev/null | sort | while read -r f; do
+    if grep -qxF -- "$f" <<<"$skipped"; then continue; fi
     # Patterns travel through the environment: `awk -v` would process their backslashes.
     PAT="$pattern" VERB="$verb" TABLE="$table" EXCL="$exclude" \
     awk -v path="crates/${f#"$CRATES_DIR"/}" '
