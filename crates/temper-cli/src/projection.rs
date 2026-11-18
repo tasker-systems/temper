@@ -300,7 +300,7 @@ pub fn prune_context(
 ///
 /// **The usable budget is 238, not 255.** `Frontmatter::write_to` writes through
 /// a sibling temp file named `.{filename}.frontmatter.tmp`
-/// (`temper-workflow/src/frontmatter/document.rs:390`), which is 17 bytes longer
+/// (`temper_workflow::frontmatter::document::write_atomic`), which is 17 bytes longer
 /// than the file it becomes — so the temp path hits the limit first, and the
 /// error names a path that does not exist afterwards. Any future raise of this
 /// constant must clear `238 - 1 - 36 - 3 = 198`.

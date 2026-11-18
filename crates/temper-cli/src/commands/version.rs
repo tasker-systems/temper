@@ -310,8 +310,8 @@ const DAMAGED_LOCAL_MANIFEST_SUFFIX: &str =
 
 /// Build the offline verdict for an install directory. Absent manifest =>
 /// [`Verdict::Unverifiable`], never [`Verdict::Mismatch`] — "we cannot tell"
-/// is not "it is wrong", the same distinction `CARGO_REFUSAL` draws at
-/// `update.rs:58`. See [`NO_LOCAL_MANIFEST_REASON`] for why that reason
+/// is not "it is wrong", the same distinction `update::CARGO_REFUSAL`
+/// draws. See [`NO_LOCAL_MANIFEST_REASON`] for why that reason
 /// enumerates causes rather than naming one.
 ///
 /// `include_checksum` folds in the running binary's self-attestation
@@ -867,7 +867,7 @@ mod tests {
 
     /// A `cargo install` build has no manifest beside it. That must render as
     /// Unverifiable — never Mismatch. "We cannot tell" is not "it is wrong",
-    /// the same distinction CARGO_REFUSAL draws at update.rs:58.
+    /// the same distinction `update::CARGO_REFUSAL` draws.
     #[test]
     fn absent_manifest_renders_unverifiable_not_mismatch() {
         let tmp = tempfile::tempdir().unwrap();

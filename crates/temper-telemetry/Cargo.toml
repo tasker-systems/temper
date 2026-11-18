@@ -26,7 +26,7 @@ opentelemetry = "0.33"
 # works from any thread, which is what a dedicated-thread batch processor needs.
 # Measured, not deduced: `crates/temper-telemetry/tests/live_export_client.rs` fails on the async client.
 # The builder's precedence is explicit-client → reqwest-client → hyper-client → reqwest-blocking-client
-# (`opentelemetry-otlp-0.32.0/src/exporter/http/mod.rs:224-268`), so leaving `reqwest-client` enabled
+# (`opentelemetry-otlp` 0.32.0, `HttpExporterBuilder::build_client`), so leaving `reqwest-client` enabled
 # would silently win and reinstate the bug.
 #
 # `gzip-http` because without it `OTEL_EXPORTER_OTLP_COMPRESSION=gzip` is not merely ignored — the

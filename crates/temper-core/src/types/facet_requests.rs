@@ -270,7 +270,7 @@ pub struct ResourceFacetRow {
     /// observed: `{"node_label": "concern", "status": "open", "severity": "high"}`.
     pub value: serde_json::Value,
     /// `kb_properties.weight`. **Load-bearing, and precisely what the frontmatter collapse drops**:
-    /// the region producer clusters on it (`temper-substrate/src/substrate.rs:110-122` →
+    /// the region producer clusters on it (`temper_substrate::substrate::load` →
     /// `expand_facets`), and 128 production rows carry a non-default value.
     pub weight: f64,
     /// When the facet was asserted. What lets a caller order two live rows for one logical facet.

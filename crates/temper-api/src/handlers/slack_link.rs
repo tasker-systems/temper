@@ -131,7 +131,7 @@ const EXPIRED_LINK: &str =
 
 /// The flow proper. Returns the linked profile's slug, or a user-actionable message.
 ///
-/// `Profile` has NO `handle` field — it is `slug` (`temper-core/src/types/profile.rs:23`).
+/// `Profile` has NO `handle` field — it is `slug` (`temper_core::types::profile::Profile::slug`).
 /// The `handle` on the team types is a different thing; do not reach for it.
 ///
 /// Every `Err` string here is shown to a human, so none of them may reveal whether a given

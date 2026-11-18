@@ -50,10 +50,10 @@ pub async fn lookup_by_client_id(
 /// Is this **profile** a registered, unrevoked machine principal?
 ///
 /// The authorization-time twin of [`lookup_by_client_id`], keyed on the profile rather than the
-/// `client_id`: by the time a gate runs, the `client_id` is gone — `resolve_machine_from_claims`
-/// exchanged it for `client.profile_id` and every downstream layer carries only that
-/// (`profile_service.rs:230-262`). Set 5's audit gate needs the same fact at a *scoped* decision, so
-/// it asks here rather than re-deriving it from claims it does not have.
+/// `client_id`: by the time a gate runs, the `client_id` is gone —
+/// `profile_service::resolve_machine_from_claims` exchanged it for `client.profile_id` and every
+/// downstream layer carries only that. Set 5's audit gate needs the same fact at a *scoped*
+/// decision, so it asks here rather than re-deriving it from claims it does not have.
 ///
 /// `revoked_at IS NULL` is not optional: a revoked row still resolves in
 /// [`lookup_by_client_id`] (the authentication gate wants the timestamp for its message), so a

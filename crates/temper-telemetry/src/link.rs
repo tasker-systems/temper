@@ -42,14 +42,15 @@
 //!   runs.
 //! - **Not a sampling lever**, and this one deserves its citation because `Sampler::should_sample`
 //!   *does* take links. It never sees ours: `tracing_opentelemetry::layer()` defaults
-//!   `context_activation: true` (`tracing-opentelemetry-0.33.0/src/layer.rs:668`), so entering a
-//!   span starts the OpenTelemetry span (`on_enter` → `with_started_cx` → `start_cx`, `:1206-1222`,
-//!   `:1077-1096`) — and the root span is entered by `traced_request`'s `.instrument()` long before
-//!   any auth gate runs. A link added afterwards takes the `OtelDataState::Context` arm of
-//!   `add_link` (`src/span_ext.rs:330-336`), which mutates a span whose sampling decision was taken
-//!   at entry. Belt and braces: the default `ParentBased` sampler reads only the parent context
-//!   anyway. Rule 3 holds, and `link_survives_without_becoming_a_parent_or_a_sampler_input` pins the
-//!   observable half against a real tracer.
+//!   `context_activation: true` (`tracing-opentelemetry` 0.33.0, `OpenTelemetryLayer::new`), so
+//!   entering a span starts the OpenTelemetry span (`on_enter` → `with_started_cx` → `start_cx`)
+//!   — and the root span is entered by `traced_request`'s `.instrument()` long before any auth
+//!   gate runs. A link added afterwards takes the `OtelDataState::Context` arm of `add_link`
+//!   (`OpenTelemetrySpanExt::add_link_with_attributes`), which mutates a span whose sampling
+//!   decision was taken at entry. Belt and braces: the default `ParentBased` sampler reads only
+//!   the parent context anyway. Rule 3 holds, and
+//!   `link_survives_without_becoming_a_parent_or_a_sampler_input` pins the observable half against
+//!   a real tracer.
 //! - **Not unbounded content.** [`crate::TraceParent::parse`] admits 32 and 16 hex characters and
 //!   the all-zero sentinels are rejected, so the worst payload is a well-formed id.
 //!
@@ -239,7 +240,8 @@ mod tests {
 
     /// No `traceparent` at all is the common case — most callers are not instrumented — and it must
     /// be a silent no-op rather than an invalid `SpanContext` link. `add_link` itself drops invalid
-    /// contexts (`tracing-opentelemetry-0.33.0/src/span_ext.rs:307`, the `cx.is_valid()` guard), so
+    /// contexts (`tracing-opentelemetry` 0.33.0, the `cx.is_valid()` guard in
+    /// `OpenTelemetrySpanExt::add_link_with_attributes`, which `add_link` delegates to), so
     /// this pins our own early return rather than relying on that.
     #[test]
     fn no_traceparent_links_nothing() {

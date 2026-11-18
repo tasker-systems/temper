@@ -110,8 +110,9 @@ mod tests {
     /// **The plan is VALIDATED before it is measured, and that assertion is not ceremony**
     /// `[added — 2026-08-28, found in review]`. The first version of this fixture used
     /// `find-about-anywhere` and carried a seed and a bound — an act that declares
-    /// `accepts_bounds: vec![]` and `accepts_seeds: vec![]` (`registry.rs:202-203`, *"a bound would
-    /// make this find-about-within"*). So it measured a plan carrying **128 refusals** while its
+    /// `accepts_bounds: vec![]` and `accepts_seeds: vec![]` (its declaration in
+    /// `temper_core::types::query::registry::search_family`, *"a bound would make this
+    /// find-about-within"*). So it measured a plan carrying **128 refusals** while its
     /// own doc called it *"a plan the contract calls legal"*, and nothing asked. The size claim
     /// happened to survive — `follow-from` is the one act declaring both, and swapping it moved the
     /// total by 512 bytes — but a size measured over an illegal plan proves nothing about what the

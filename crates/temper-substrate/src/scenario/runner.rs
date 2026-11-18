@@ -500,10 +500,11 @@ async fn eval_expectation(
             // read every region of the map they own". **That is false for a seeded map.**
             // `cogmap_readable_by_profile` needs a `kb_team_cogmaps` binding or an explicit grant,
             // and `scenario::loader` writes NEITHER — only the access-scenario loader does
-            // (`scenario/access/loader.rs:428`). So the gate denied, the deny is zero rows by
-            // design, and `fetch_one` turned it into `RowNotFound`: every growth runbook died at
-            // its first `stale` check with "no rows returned by a query that expected to return at
-            // least one row". Green locally under `test-db`, which does not compile this tier.
+            // (`scenario::access::loader::insert_cogmaps`). So the gate denied, the deny is zero
+            // rows by design, and `fetch_one` turned it into `RowNotFound`: every growth runbook
+            // died at its first `stale` check with "no rows returned by a query that expected to
+            // return at least one row". Green locally under `test-db`, which does not compile this
+            // tier.
             //
             // The self-read arm is the RIGHT principal here rather than a workaround for that.
             // A runbook asserting `stale: true` is asserting a STRUCTURAL property of the map --

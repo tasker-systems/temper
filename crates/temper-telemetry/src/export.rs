@@ -6,10 +6,10 @@
 //! | Concern | Owner | Evidence |
 //! |---|---|---|
 //! | redirects | **us** | `exporter_http_client` builds the client with redirects off; the SDK's default client follows them |
-//! | protocol, headers, timeout | **the SDK** | `SpanExporter::builder().build()` resolves `OTEL_EXPORTER_OTLP_(TRACES_)*`, signal-specific first (`opentelemetry-otlp-0.32.0/src/span.rs:78-93`, `exporter/http/mod.rs:287,738`) |
+//! | protocol, headers, timeout | **the SDK** | `SpanExporter::builder().build()` resolves `OTEL_EXPORTER_OTLP_(TRACES_)*`, signal-specific first (`opentelemetry-otlp` 0.32.0: `SpanExporterBuilder::build`, `HttpExporterBuilder::build_client`, `resolve_http_endpoint`) |
 //! | endpoint | **us**, from the same variables | resolved and vetted by `traces_url` / `vet_endpoint`, then passed to `with_endpoint` — the SDK's own env resolution falls back to the general variable when the signal-specific one fails to parse, which would route the credential to a URL nobody vetted |
-//! | `service.name`, resource attributes | **the SDK** | `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` (`opentelemetry_sdk-0.32.1/src/resource/env.rs:80`) |
-//! | sampler | **the SDK** | `OTEL_TRACES_SAMPLER{,_ARG}` (`opentelemetry_sdk-0.32.1/src/trace/config.rs:60-61`) |
+//! | `service.name`, resource attributes | **the SDK** | `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` (`opentelemetry_sdk` 0.32.1, `resource::SdkProvidedResourceDetector::detect` / `EnvResourceDetector`) |
+//! | sampler | **the SDK** | `OTEL_TRACES_SAMPLER{,_ARG}` (`opentelemetry_sdk` 0.32.1, `trace::Config::default`) |
 //! | whether to export at all | **us** | see below |
 //! | Vercel deployment identity | **us** | not a thing the SDK could know |
 //! | flushing before the sandbox freezes | **us** | see [`force_flush_spans`] |
@@ -37,7 +37,7 @@
 //! drive sampling. Record it; do not obey it."*
 //!
 //! The SDK's default sampler is `ParentBased(AlwaysOn)`
-//! (`opentelemetry_sdk-0.32.1/src/trace/config.rs:33`), and `ParentBased` **does** obey a remote
+//! (`opentelemetry_sdk` 0.32.1, `trace::Config::default`), and `ParentBased` **does** obey a remote
 //! parent's sampled flag — that is its entire purpose. We satisfy rule 3 not by configuring a
 //! different sampler but because **there is never a remote parent**: nothing here or in
 //! [`crate::record_inbound_trace_context`] constructs a `SpanContext` from the inbound header, so
@@ -249,7 +249,7 @@ fn export_disabled() -> bool {
 /// defaults like `format` and `color`, resolved *flag → env → config → default*, and this switch
 /// would belong there by symmetry. But the subscriber must be installed before anything logs, and
 /// `temper_core::types::config::load_config_from` itself emits a `tracing::warn!` for a config with
-/// validation issues (`crates/temper-core/src/types/config.rs:395-400`). Reading config early enough
+/// validation issues (the `cfg.validate()` branch of `load_config_from`). Reading config early enough
 /// to feed this would drop that warning at the CLI's default level — trading a user-facing diagnostic
 /// for a config key. Adding a `[cli]` key needs that ordering solved first, not just the key defined.
 fn cli_export_opted_in() -> bool {
@@ -539,11 +539,11 @@ where
 /// Flush pending spans, blocking until they are exported or the SDK gives up.
 ///
 /// **Call this after a response is produced, on every request.** Vercel *freezes* the sandbox
-/// rather than exiting the process (`vercel_runtime` 2.1.1 `run` is a long-lived hyper server —
-/// `src/lib.rs:238-401`), so a batch processor's timer may simply never fire again: spans queued at
-/// freeze are lost silently and non-deterministically. Batching is still right — it makes one HTTP
-/// request per flush instead of one per span, which is what `SimpleSpanProcessor` would do — but
-/// the *timer* cannot be trusted, so we drain it ourselves at a point we control.
+/// rather than exiting the process (`vercel_runtime` 2.1.1 `run` is a long-lived hyper server), so
+/// a batch processor's timer may simply never fire again: spans queued at freeze are lost silently
+/// and non-deterministically. Batching is still right — it makes one HTTP request per flush
+/// instead of one per span, which is what `SimpleSpanProcessor` would do — but the *timer* cannot
+/// be trusted, so we drain it ourselves at a point we control.
 ///
 /// A no-op when export is off, which is what makes it safe to call unconditionally from the
 /// transport layer.
@@ -611,7 +611,7 @@ pub fn shutdown_telemetry() {
 /// **The measurement arrived, and it says this is needed.** With export actually reaching a vendor —
 /// which it never did before the blocking-client fix — the flush is a synchronous network round trip,
 /// and the SDK's own ceiling is a hardcoded, non-configurable 5 seconds
-/// (`opentelemetry_sdk-0.32.1/src/trace/span_processor.rs:476`, whose comment reads
+/// (`opentelemetry_sdk` 0.32.1, `BatchSpanProcessor::new`'s `forceflush_timeout`, whose comment reads
 /// `// TODO: make this configurable`). Measured against an unreachable endpoint, every request paid
 /// `5.01s`. On a Vercel function with `maxDuration: 60` that is 8% of the budget per request, for a
 /// telemetry backend that is not a dependency of serving traffic.

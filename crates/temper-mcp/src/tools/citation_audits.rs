@@ -10,7 +10,7 @@
 //! `act`, never defaulted, never dropped: an audit is an authored, per-act write, and the
 //! write keeps the authorship the caller supplied. `RecordCitationAudit` carries no finding
 //! id and none may be added: the server derives the authorization subject from `block_id`
-//! (`temper-services/src/authz/audit_gate.rs:65-77`), so this tool does not authorize — it
+//! (`temper_services::authz::audit_gate::finding_of_block`), so this tool does not authorize — it
 //! forwards, like every other network-door tool, and the API's gate is the ONE gate.
 //!
 //! # The one-string-by-construction property survives the wire

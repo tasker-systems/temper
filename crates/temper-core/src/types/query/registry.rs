@@ -1278,9 +1278,9 @@ mod tests {
     /// brittleness. A stage whose act orders nothing has no quantity to score its rows; asked for
     /// in `returns`, the assembler drops every row for want of a score kind and reports
     /// `disposition: answered` over an empty list. That is not hypothetical — it is verbatim the
-    /// defect `CombinatorNotReturnable` was minted to close (`validate/shape.rs:202-216`), arriving
-    /// a second time by a different route. An act added here without the matching returns-refusal
-    /// reopens it.
+    /// defect `CombinatorNotReturnable` (now `RefusalReason::StageNotReturnable`, raised in
+    /// `validate::shape::validate_shape_indexed`) was minted to close, arriving a second time by a
+    /// different route. An act added here without the matching returns-refusal reopens it.
     ///
     /// Failing this test is not a defect. It means the cell gained a member, and the question to
     /// answer is whether that member is unreturnable too.

@@ -14,18 +14,17 @@
 //! `DbBackend` and dispatches exactly one command, with no persistence in the handler. This
 //! module exists ONLY because that dispatch needs one thing no surface can do unaided — refuse a
 //! path/block mismatch — and the lookup it needs, `finding_of_block`, is `pub(crate)` to this
-//! crate (`crate::authz`, `authz/mod.rs:39`), so the check cannot live in temper-api.
+//! crate (`crate::authz`'s re-export of `audit_gate`), so the check cannot live in temper-api.
 //!
 //! **Not a second gate.** `DbBackend::record_citation_audit` holds the ONE
-//! `authorize::<AuditAuthority>` call in the codebase (`backend/db_backend.rs:1960-1962`), and
-//! this function never calls `authorize`. It calls `finding_of_block` a SECOND time, which is a
-//! pure `SELECT resource_id FROM kb_content_blocks WHERE id = $1` lookup — not an authorization
-//! decision. `audit_gate.rs:70-71` names both call sites (the backend command and this HTTP
-//! surface) as the one spelling's two intended callers, so this is the anticipated second use,
-//! not a drift.
+//! `authorize::<AuditAuthority>` call in the codebase, and this function never calls `authorize`.
+//! It calls `finding_of_block` a SECOND time, which is a pure `SELECT resource_id FROM
+//! kb_content_blocks WHERE id = $1` lookup — not an authorization decision. `finding_of_block`'s
+//! doc names both call sites (the backend command and this HTTP surface) as the one spelling's two
+//! intended callers, so this is the anticipated second use, not a drift.
 //!
 //! 404, never 400/403, on a mismatch — the same refusal dialect `AuditAuthority::denial` uses
-//! (`audit_gate.rs:159-173`), so a caller cannot distinguish "you named the wrong finding in the
+//! (see its doc in `crate::authz::audit_gate`), so a caller cannot distinguish "you named the wrong finding in the
 //! path" from "this finding cannot be audited by you". Both are existence-shaped leaks otherwise.
 //!
 //! # Why the READ 404s instead of returning `[]`

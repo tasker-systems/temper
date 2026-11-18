@@ -1119,7 +1119,7 @@ pub fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorData> {
         return None;
     };
     // The preserved body is the API's RENDERED 401 voice: `ApiError::Unauthorized`'s
-    // Display is "Unauthorized: {cause}" (temper-services/src/error.rs:29), and the
+    // Display is "Unauthorized: {cause}" (`temper_services::error::ApiError`), and the
     // body carries that Display verbatim. The arms below split on the CAUSE — the
     // body's distinguishing text — so the prefix comes off first; matching the raw
     // body never hit any arm and every refusal fell through to the catch-all, a
@@ -1136,10 +1136,10 @@ pub fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorData> {
         Some(terminal(TERMINAL_DEACTIVATION_SENTENCE.to_string()))
     } else if cause == "Token missing email claim and userinfo lookup failed" {
         // The email-ladder 401 (the API passes `EmailResolution` straight through as
-        // the body, auth.rs:136). A human token with no resolvable email — terminal:
-        // re-sending changes nothing (the fix is a token with an email claim). Speaks
-        // the direct binding's `AuthzError::EmailResolution` sentence via the shared
-        // constant.
+        // the body, `temper_api::middleware::auth::require_auth`). A human token with no
+        // resolvable email — terminal: re-sending changes nothing (the fix is a token with
+        // an email claim). Speaks the direct binding's `AuthzError::EmailResolution`
+        // sentence via the shared constant.
         Some(terminal(TERMINAL_EMAIL_RESOLUTION_SENTENCE.to_string()))
     } else if REAUTHENTICATE_CAUSES.contains(&cause) {
         // The API's pre-identity refusal: one body for every way a credential fails to verify

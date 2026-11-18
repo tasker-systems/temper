@@ -14,12 +14,12 @@
 //! the resource's. The finding is the path segment of `POST /api/resources/{id}/citation-audits`,
 //! and it is a *routing* address only: the server derives the authorization subject from
 //! `block_id` and refuses a mismatch, so naming a finding here confers nothing
-//! (`temper-services/src/authz/audit_gate.rs:65-77`).
+//! (`temper_services::authz::audit_gate::finding_of_block` / `citation_subject`).
 //!
 //! **The auditor's own confidence does not belong on this body.** It rides the act envelope
 //! (`ActContext` → `kb_events.metadata`); only the signed `value` below is ever read by the
 //! standing projection. That is spec §4.2's self-grading prohibition: an agent's confidence in its
-//! own verdict must never move standing (`temper-substrate/src/writes.rs:538-541`).
+//! own verdict must never move standing (`temper_substrate::writes::record_citation_audit_with`).
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -27,7 +27,7 @@
 //! The delivery rows are a PROJECTION, not a second event (goal C2: one webhook receipt is one
 //! ledger event, always). They are written in Rust inside the same transaction as the append —
 //! the `region_materialized` precedent, which writes its N member rows in the event's own
-//! transaction (`temper-substrate/src/write.rs:196-204`). A payload-first `_project_*` half is
+//! transaction (`temper_substrate::write::materialize`). A payload-first `_project_*` half is
 //! unavailable here: the halves read only the payload (`canonical_schema.sql:473`) and this
 //! payload is the remote's verbatim body, which does not carry the matched set.
 
@@ -132,7 +132,7 @@ impl<'a> ProviderEvent<'a> {
 /// `provider` comes from the attestation's **signed** `trigger` claim, so the dispatch key is the
 /// one part of the request that is attested — the same discipline as reading the connector from
 /// the JWT rather than the unsigned `x-trigger-*` mirror headers
-/// (`broker/vercel_connect.rs:475-476`).
+/// (`broker::vercel_connect::verify_attestation_claims`).
 pub fn event_type_header(provider: &str) -> Option<&'static str> {
     match provider {
         "github" => Some("x-github-event"),

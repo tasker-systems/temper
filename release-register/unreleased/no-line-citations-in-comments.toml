@@ -1,0 +1,17 @@
+title    = "Schema and tool descriptions cite code by symbol, not line number"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "mcp", "clients"]
+status   = "signal-only"
+body = '''
+Description text only. Seven openapi.json schema descriptions and one MCP input-schema
+description (the `ResourceSection` items under a query plan's `returns.with`, in
+tools_list.json) carried `file.rs:NNN` citations copied from Rust doc comments, or prose
+around them; each now names the symbol instead (`temper_substrate::write::assert_region`,
+`ResourceListResponse::new`, ...). The `ResourceSection` and `ResourceView.origin_uri`
+descriptions are rewritten to state current behaviour. The regenerated SDKs (temper-rb, temper-ts,
+temper-py) change in docstrings only.
+
+No property, type, required set, enum value or route moves in either skew direction; a client
+that reads descriptions sees new wording. Release relevance: signal-only.
+'''

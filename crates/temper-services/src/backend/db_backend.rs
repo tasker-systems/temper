@@ -3851,7 +3851,8 @@ impl Backend for DbBackend {
     /// **Authorization lives HERE, not on a surface and not in a service.** This backend is the
     /// single chokepoint every surface (HTTP, MCP, CLI) funnels through, so a gate placed here
     /// cannot be forgotten by a new caller — the failure mode a surface-only gate has (`db_backend`'s
-    /// own F1 create-into-cogmap note at `:1258-1262` says the same thing about the same hazard).
+    /// own F1 create-into-cogmap note in `create_resource_unread` says the same thing about the
+    /// same hazard).
     /// There is exactly ONE `authorize::<AuditAuthority>` for this command in the codebase; a second
     /// one on the HTTP service would be a double gate free to drift from this one.
     ///
@@ -3908,8 +3909,9 @@ impl Backend for DbBackend {
         //    deliberate widening of spec §7, narrowed back by the self-audit arm; the machine
         //    conjunct was removed by product decision so a human may audit (`audit_gate.rs`'s
         //    module doc carries the decision). Every denial arm renders `NotFound`, which
-        //    `From<ApiError>` carries through as `TemperError::NotFound` (`error.rs:158-168`) — no
-        //    existence oracle beside the leak-safe evidence read.
+        //    `From<ApiError>` carries through as `TemperError::NotFound` (`crate::error`'s
+        //    `impl From<ApiError> for TemperError`) — no existence oracle beside the leak-safe
+        //    evidence read.
         let subject = citation_subject(&self.pool, cmd.block, source_id).await?;
         // The gate dispatches the caller principal arm-for-arm (`self.principal()`): the
         // classified arm the surface minted. Same gate, one spelling, the caller's own arm.
@@ -4787,8 +4789,8 @@ impl Backend for DbBackend {
     /// Structurally the steward's tick with one extra step, and that step is the whole point. The
     /// sweep is finding-grained; the queue's single-flight index is cogmap-grained
     /// (`migrations/20260705000001_workflow_jobs.sql:43-45`). Enqueuing per swept row would create
-    /// the first job per cogmap and let `workflow_job_enqueue`'s `ON CONFLICT DO NOTHING` (`:59-62`)
-    /// discard the rest **without an error** — N findings silently becoming 1. So
+    /// the first job per cogmap and let `workflow_job_enqueue`'s `ON CONFLICT DO NOTHING` (same
+    /// migration) discard the rest **without an error** — N findings silently becoming 1. So
     /// `auditor_service::group_by_cogmap` collapses the sweep first, and each cogmap's whole finding
     /// list rides one job's payload for the session to iterate.
     ///

@@ -37,7 +37,7 @@ class ResourceFacetRow(BaseModel):
     property_id: UUID = Field(description="`kb_properties.id`. A **masked surrogate** — a replay re-mints it, so the replay-stable identity is `authored_by_event_id`, exactly as for an edge facet or a citation audit.")
     property_key: StrictStr = Field(description="`kb_properties.property_key` — always `\"facet\"` for rows this read returns. Carried so the row shape survives widening the read past that one key.")
     value: Optional[Any]
-    weight: Union[StrictFloat, StrictInt] = Field(description="`kb_properties.weight`. **Load-bearing, and precisely what the frontmatter collapse drops**: the region producer clusters on it (`temper-substrate/src/substrate.rs:110-122` → `expand_facets`), and 128 production rows carry a non-default value.")
+    weight: Union[StrictFloat, StrictInt] = Field(description="`kb_properties.weight`. **Load-bearing, and precisely what the frontmatter collapse drops**: the region producer clusters on it (`temper_substrate::substrate::load` → `expand_facets`), and 128 production rows carry a non-default value.")
     __properties: ClassVar[List[str]] = ["authored_by_display_name", "authored_by_event_id", "authored_by_handle", "authored_by_profile_id", "created", "property_id", "property_key", "value", "weight"]
 
     model_config = ConfigDict(

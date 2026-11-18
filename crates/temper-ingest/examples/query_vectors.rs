@@ -11,11 +11,10 @@
 //! feed it to the same differential SQL.
 //!
 //! It is the *same* code path the CLI uses. `temper_cli::actions::search::embed_query` is a
-//! one-line delegate to `temper_ingest::embed::embed_text` (`crates/temper-cli/src/actions/
-//! search.rs:12`), and the e2e test `server_query_embedding_matches_cli_embed_query`
-//! (`tests/e2e/tests/server_query_embed_test.rs:148`) pins server and CLI to that one function.
-//! No BGE "represent this sentence…" query prefix is applied, matching how the corpus was
-//! ingested.
+//! one-line delegate to `temper_ingest::embed::embed_text`, and the e2e test
+//! `server_query_embedding_matches_cli_embed_query` (in
+//! `tests/e2e/tests/server_query_embed_test.rs`) pins server and CLI to that one function. No BGE
+//! "represent this sentence…" query prefix is applied, matching how the corpus was ingested.
 //!
 //! Reads one query per line on stdin; writes `query<TAB>[v1,v2,…]` per line on stdout, so the
 //! output pipes straight into `psql -v`. Blank lines and `#` comments are skipped.

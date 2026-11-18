@@ -36,6 +36,17 @@ What follows is temper's own.
   keys come from typed columns (`assemble_frontmatter_document`), never from the payload.
   *(convention: a write that misses a required field is refused at runtime by
   `validate_managed_meta`; nothing checks that a new write path uses the pipeline)*
+- **A comment states the current invariant and why it holds; it cites code by symbol, never by line
+  number.** Name the fn, type, const or module path (`audit_gate::AuditAuthority`), not
+  `audit_gate.rs:65-77`, and never swap one line number for another. History goes to the commit
+  message, or to a decision resource linked by name. A migration cited by file name is fine: it
+  never changes. *Why:* a line citation is true at the commit that writes it and false once the file
+  grows; the 2026-08-26 retirement review found fourteen wrong ones, two of them checked by their
+  author three commits earlier. *(gated: `quality-gate.yml#rust-gate`, `check-no-line-citations.sh`
+  refuses any `.rs:NNN` in a comment under `crates/*/src` or `tests/*/src`, test modules included.
+  Elsewhere under `crates/` and `tests/` it is a per-file ratchet, `line-citation-ratchet.tsv`: no new one lands, and existing
+  ones leave when their file is touched — that half is convention. Block comments, string literals
+  and non-Rust citations are not scanned.)*
 
 ## SQL
 

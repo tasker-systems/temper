@@ -193,7 +193,7 @@ pub(crate) trait ScopedAuthority: Sized + Copy + Debug {
     /// **Not boilerplate, and not always `Forbidden`.** Some gates refuse with `NotFound` on
     /// purpose, because the existence of the subject is itself the secret: `team_detail` returns
     /// `NotFound` to non-members since *"team slugs are globally unique and used in share flows"*
-    /// (`team_service.rs:277`), and the admin ledger's actor axis does the same. Hardcoding
+    /// (`team_service::team_detail`), and the admin ledger's actor axis does the same. Hardcoding
     /// `Forbidden` in `authorize` would convert those deliberate information-hiding decisions
     /// into existence leaks. If you are tempted to "simplify" this method away, that is what you
     /// would be removing.
@@ -222,9 +222,9 @@ pub(crate) trait ScopedAuthority: Sized + Copy + Debug {
     /// > structurally cannot name the subject it refused.
     ///
     /// Which is why this takes `&self` and not `Self::Subject`. Widening it to the subject would
-    /// reopen the question `read_gates.rs:68-70` records as already settled — whether the ambiguity
-    /// in "team not found or not readable" is preserved by the signature, or by everyone remembering
-    /// to preserve it.
+    /// reopen the question `TeamReadAuthority::denial`'s doc records as already settled — whether
+    /// the ambiguity in "team not found or not readable" is preserved by the signature, or by
+    /// everyone remembering to preserve it.
     fn denial_for(&self) -> ApiError {
         Self::denial()
     }
