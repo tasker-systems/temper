@@ -34,19 +34,8 @@ use uuid::Uuid;
 // ── Fixture ───────────────────────────────────────────────────────────────────────────────────────
 
 async fn profile(pool: &PgPool, handle: &str) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("seed profile");
-    sqlx::query("INSERT INTO kb_entities (name, profile_id) VALUES ($1 || '@web', $2)")
-        .bind(handle)
-        .bind(id)
-        .execute(pool)
-        .await
-        .expect("seed emitter");
+    let id = temper_services::test_support::profile::insert(pool, handle).await;
+    temper_services::test_support::entity::insert(pool, id, &format!("{handle}@web")).await;
     id
 }
 

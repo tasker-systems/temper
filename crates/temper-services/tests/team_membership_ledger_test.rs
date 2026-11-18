@@ -18,19 +18,8 @@ use uuid::Uuid;
 
 /// An approved profile with its `<handle>@web` emitter — it can act, and it can read its own acts.
 async fn person(pool: &PgPool, handle: &str) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2 || '@web')")
-        .bind(id)
-        .bind(handle)
-        .execute(pool)
-        .await
-        .unwrap();
+    let id = test_support::profile::insert(pool, handle).await;
+    test_support::entity::insert(pool, id, &format!("{handle}@web")).await;
     test_support::approve(pool, id).await;
     id
 }

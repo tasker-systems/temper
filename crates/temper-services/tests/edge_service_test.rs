@@ -23,14 +23,7 @@ use temper_services::error::ApiError;
 use temper_services::services::edge_service;
 
 async fn profile(pool: &PgPool, handle: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .unwrap()
+    temper_services::test_support::profile::insert(pool, handle).await
 }
 
 async fn personal_context(pool: &PgPool, owner: Uuid, slug: &str) -> Uuid {

@@ -477,14 +477,7 @@ struct World {
 }
 
 async fn profile(pool: &PgPool, handle: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("profile")
+    temper_services::test_support::profile::insert(pool, handle).await
 }
 
 async fn team(pool: &PgPool, slug: &str, member: Uuid) -> Uuid {

@@ -4,11 +4,7 @@
 use sqlx::PgPool;
 
 async fn a_profile(pool: &PgPool, handle: &str) -> uuid::Uuid {
-    sqlx::query_scalar("INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$1) RETURNING id")
-        .bind(handle)
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    temper_services::test_support::profile::insert(pool, handle).await
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
