@@ -142,6 +142,51 @@ else
   bad "a #[cfg(test)] call must not count (got $rc)" "$LAST_OUT"
 fi
 
+# ── 5b. a call in an out-of-line test module file is not production ──────────────────────────
+# R24 moves DB test modules into sibling files (`#[cfg(test)] mod tests;` → `foo/tests.rs`). The
+# whole declared file is test code, and so is any module it declares in turn; an ordinary
+# `mod helpers;` beside it stays production.
+new_fixture "$FX"
+mkdir -p "$FX/crates/beta/src/svc/tests"
+cat >> "$FX/crates/beta/src/lib.rs" <<'RS'
+mod svc;
+RS
+cat > "$FX/crates/beta/src/svc.rs" <<'RS'
+#[cfg(all(test, feature = "test-db"))]
+mod tests;
+RS
+cat > "$FX/crates/beta/src/svc/tests.rs" <<'RS'
+mod fixtures;
+async fn t(pool: &PgPool) {
+    sqlx::query("INSERT INTO kb_profiles (id) VALUES ($1)").execute(pool).await.unwrap();
+}
+RS
+cat > "$FX/crates/beta/src/svc/tests/fixtures.rs" <<'RS'
+async fn f(pool: &PgPool) {
+    sqlx::query("INSERT INTO kb_teams (id) VALUES ($1)").execute(pool).await.unwrap();
+}
+RS
+rc="$(run "$FX")"
+if [[ "$rc" == "0" ]]; then
+  ok "a runtime query in a #[cfg(test)] mod NAME; file (and its children) is not a production site"
+else
+  bad "an out-of-line test module's calls must not count (got $rc)" "$LAST_OUT"
+fi
+cat >> "$FX/crates/beta/src/svc.rs" <<'RS'
+mod helpers;
+RS
+cat > "$FX/crates/beta/src/svc/helpers.rs" <<'RS'
+async fn h(pool: &PgPool) {
+    sqlx::query("SELECT id FROM kb_resources").fetch_all(pool).await.unwrap();
+}
+RS
+rc="$(run "$FX")"
+if [[ "$rc" == "1" ]]; then
+  ok "an ordinary mod NAME; beside an out-of-line test module stays production"
+else
+  bad "a non-test sibling module's runtime query must still count (got $rc)" "$LAST_OUT"
+fi
+
 # ── 6. converting a site also trips the check ─────────────────────────────────────────────────
 # A guard that only notices ADDITIONS lets the baseline drift above the truth, and an allow-list
 # larger than reality is exactly the "place to put things" this exists to prevent.

@@ -80,6 +80,45 @@ def production_files():
 
 
 CFG_TEST = re.compile(r"#\[cfg\((?:[^)]*\b)?test\b[^\]]*\]\s*(?:pub\s+)?mod\s+\w+\s*\{")
+# The out-of-line form, `#[cfg(...test...)] mod NAME;`: the whole file it declares is test code
+# (ruling R24 moves DB test modules out of production files into such sibling files).
+CFG_TEST_DECL = re.compile(
+    r"#\[cfg\((?:[^)]*\b)?test\b[^\]]*\]\s*(?:pub(?:\([a-z]+\))?\s+)?mod\s+(\w+)\s*;"
+)
+MOD_DECL = re.compile(r"(?m)^\s*(?:pub(?:\([a-z]+\))?\s+)?mod\s+(\w+)\s*;")
+
+
+def _child_module_file(parent, name):
+    """The file `mod NAME;` in `parent` resolves to, or None. `lib.rs`, `main.rs` and `mod.rs`
+    declare siblings; any other `foo.rs` declares into `foo/`."""
+    base = (
+        parent.parent if parent.name in ("lib.rs", "main.rs", "mod.rs") else parent.with_suffix("")
+    )
+    for candidate in (base / f"{name}.rs", base / name / "mod.rs"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def test_module_files(files):
+    """Every file that is wholly test code: declared by a `#[cfg(...test...)] mod NAME;`, or a module
+    such a file itself declares. A test module's children compile only when it does."""
+    tests, queue = set(), []
+    for f in files:
+        text = f.read_text(encoding="utf-8", errors="replace")
+        for m in CFG_TEST_DECL.finditer(text):
+            if (child := _child_module_file(f, m.group(1))) is not None:
+                queue.append(child)
+    while queue:
+        f = queue.pop()
+        if f in tests:
+            continue
+        tests.add(f)
+        text = f.read_text(encoding="utf-8", errors="replace")
+        for m in MOD_DECL.finditer(text):
+            if (child := _child_module_file(f, m.group(1))) is not None:
+                queue.append(child)
+    return tests
 
 
 def test_spans(text):
@@ -160,9 +199,11 @@ def runtime_calls(text):
 
 def main():
     rows = []
-    for f in production_files():
+    files = list(production_files())
+    whole_file_tests = test_module_files(files)
+    for f in files:
         text = f.read_text(encoding="utf-8", errors="replace")
-        spans = test_spans(text)
+        spans = [(0, len(text))] if f in whole_file_tests else test_spans(text)
         found = [(pos, fn, False) for pos, fn in runtime_calls(text)]
         found += [(m.start(), m.group(1), True) for m in CALL_MACRO.finditer(text)]
         for pos, fn, is_macro in found:
