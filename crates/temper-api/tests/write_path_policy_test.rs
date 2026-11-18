@@ -24,7 +24,7 @@ use uuid::Uuid;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{Backend, BodyUpdate, Surface, UpdateResource};
+use temper_workflow::operations::{BodyUpdate, Surface, UpdateResource};
 
 const TWO_SECTION: &str = "# Alpha\n\nAlpha prose.\n\n# Beta\n\nBeta prose.\n";
 const ONE_SECTION: &str = "Just some plain prose with no headings at all.\n";

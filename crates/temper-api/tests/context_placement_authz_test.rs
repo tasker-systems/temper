@@ -31,7 +31,7 @@ use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_core::types::team::{AddMemberRequest, TeamCreateRequest, TeamRole};
 use temper_services::backend::DbBackend;
 use temper_services::services::{context_service, team_service};
-use temper_workflow::operations::{Backend, CreateResource, MoveSpec, Surface, UpdateResource};
+use temper_workflow::operations::{CreateResource, MoveSpec, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

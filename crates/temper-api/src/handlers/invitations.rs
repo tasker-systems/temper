@@ -1,6 +1,6 @@
 //! Team invitation handlers — thin: extract `AuthUser`, dispatch one
 //! `invitation_service` call, return the typed row. Service-direct (no
-//! Backend-trait command, no event emission), same precedent as `teams`.
+//! `DbBackend` command, no event emission), same precedent as `teams`.
 //!
 //! Route tiers matter: `invite` / `list` are team-admin actions and live in the
 //! system-access-gated router; `accept` / `decline` live in the un-gated router

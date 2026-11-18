@@ -20,7 +20,7 @@ use temper_core::types::ids::{ContextId, EdgeId, InvocationId, ProfileId, Resour
 use temper_core::types::invocation::Disposition;
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{
-    AssertRelationship, Backend, CloseInvocation, CreateResource, DeleteResource, OpenInvocation,
+    AssertRelationship, CloseInvocation, CreateResource, DeleteResource, OpenInvocation,
     RetypeRelationship, ReweightRelationship, Surface, UpdateResource,
 };
 use temper_workflow::types::managed_meta::ManagedMeta;

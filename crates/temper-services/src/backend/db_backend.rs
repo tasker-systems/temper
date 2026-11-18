@@ -1,4 +1,4 @@
-//! `DbBackend` — the substrate backend behind the `Backend` trait (the single backend post-WS6-collapse).
+//! `DbBackend` — the server's write commands over the substrate, as its own methods.
 //!
 //! Reads delegate to `temper_substrate::readback`; writes compose `temper_substrate::writes`. The SQL is
 //! unqualified against the one schema (`public`); the connection's search_path resolves all references.
@@ -15,7 +15,6 @@ use crate::authz::{
 use crate::backend::precondition;
 use crate::backend::region_clocks;
 use crate::backend::write_floor;
-use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
 use temper_macros::act_span;
@@ -51,12 +50,12 @@ use temper_core::types::steward::AdvanceWatermarkAck;
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
-    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, Backend,
-    BodyUpdate, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
-    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, GoalPatch,
-    MaterializeOnThreshold, OpenInvocation, ReblockResources, ReconcileCognitiveMap,
-    RecordCitationAudit, RetractFacet, RetypeRelationship, ReweightRelationship, SetFacet,
-    ShowResource, StewardDispatchTick, Surface, UpdateResource,
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, BodyUpdate,
+    CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap,
+    CreateResource, DeleteResource, FoldRelationship, GoalPatch, MaterializeOnThreshold,
+    OpenInvocation, ReblockResources, ReconcileCognitiveMap, RecordCitationAudit, RetractFacet,
+    RetypeRelationship, ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, Surface,
+    UpdateResource,
 };
 
 use temper_substrate::content::PreparedBlock;
@@ -673,8 +672,8 @@ fn validate_open_meta_shape(open_meta: Option<&serde_json::Value>) -> Result<(),
     )))
 }
 
-/// The write path's readback — the resource it just wrote, as the one shape the [`Backend`] trait
-/// returns.
+/// The write path's readback — the resource it just wrote, in the one shape the write commands
+/// return.
 ///
 /// Reads through `substrate_read::show_view_select`, the same door `show` uses, so a resource's
 /// identity does not depend on whether it was just written or merely looked at. Visibility is gated
@@ -1105,7 +1104,7 @@ impl DbBackend {
     /// client sends inbound on append. `body_hash` is the resource-level merkle a caller echoes back
     /// at finalize.
     ///
-    /// Shared by `append_block`/`list_blocks` (Backend trait) and the ingest handler's
+    /// Shared by `append_block`/`list_blocks` (write commands) and the ingest handler's
     /// segmented-begin branch (reading block 0 back right after `create_resource` lands it),
     /// so the "currently landed set" projection lives in exactly one place.
     async fn landed_blocks(
@@ -1168,7 +1167,7 @@ impl DbBackend {
 
     /// Record the per-resource source-provenance row for a segmented-begin create (design §4
     /// point 4: written "at begin"). Private, and called from exactly one place —
-    /// [`Backend::begin_segmented_ingest`], which composes it with the create and the landed-set
+    /// [`Self::begin_segmented_ingest`], which composes it with the create and the landed-set
     /// read so no surface has to. It was briefly `pub` because the HTTP handler did that composition
     /// itself; MCP needing the same three steps is what made the seam obvious.
     ///
@@ -1762,7 +1761,7 @@ impl DbBackend {
     /// **The caller owns clause 1** and must have run it on the same source, on the same
     /// transaction, before calling this. Every caller runs it as [`write_floor::modify_floor_in_tx`]
     /// at the head of its transaction: the create door, which floors the resource it has just
-    /// created in the same transaction; `Backend::assert_relationship`, which
+    /// created in the same transaction; `Self::assert_relationship`, which
     /// opens its own transaction so the emitter resolves only after the floor admits; and
     /// `update_resource`'s goal-set, which floors the resource it updates — the same id this
     /// edge's source is. That floor's `FOR KEY SHARE` is held until the transaction ends, so the
@@ -2667,7 +2666,7 @@ impl DbBackend {
         Ok(())
     }
 
-    /// [`Backend::create_resource`]'s body: [`Self::create_resource_unread`], then the readback.
+    /// [`Self::create_resource`]'s body: [`Self::create_resource_unread`], then the readback.
     #[act_span]
     async fn create_resource_inner(
         &self,
@@ -2678,8 +2677,8 @@ impl DbBackend {
         Ok(CommandOutput::new(view))
     }
 
-    /// The create, without its readback — shared by [`Backend::create_resource`] (through
-    /// [`Self::create_resource_inner`], `ingestion = None`) and [`Backend::begin_segmented_ingest`]
+    /// The create, without its readback — shared by [`Self::create_resource`] (through
+    /// [`Self::create_resource_inner`], `ingestion = None`) and [`Self::begin_segmented_ingest`]
     /// (`ingestion = Some`) — the only caller that needs a resource born
     /// `ingest_state = 'in_progress'`, because its body arrives across many acts and only
     /// `resource_finalize` can say the last one landed. Returns the created id, or on an idempotent
@@ -2975,9 +2974,8 @@ impl DbBackend {
     }
 }
 
-#[async_trait]
-impl Backend for DbBackend {
-    async fn create_resource(
+impl DbBackend {
+    pub async fn create_resource(
         &self,
         cmd: CreateResource,
     ) -> Result<CommandOutput<ResourceView>, TemperError> {
@@ -2986,7 +2984,12 @@ impl Backend for DbBackend {
         self.create_resource_inner(cmd).await
     }
 
-    async fn show_resource(
+    /// Read one resource as the one shape every surface answers in.
+    ///
+    /// The open tier rides along (the `open-meta` section); `managed_meta` is not a section
+    /// and is always present. The body is not part of this shape —
+    /// `GET /api/resources/{id}/content` remains its door.
+    pub async fn show_resource(
         &self,
         cmd: ShowResource,
     ) -> Result<CommandOutput<ResourceView>, TemperError> {
@@ -3014,7 +3017,7 @@ impl Backend for DbBackend {
     }
 
     #[act_span]
-    async fn update_resource(
+    pub async fn update_resource(
         &self,
         cmd: UpdateResource,
     ) -> Result<CommandOutput<ResourceView>, TemperError> {
@@ -3470,7 +3473,10 @@ impl Backend for DbBackend {
     }
 
     #[act_span]
-    async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
+    pub async fn delete_resource(
+        &self,
+        cmd: DeleteResource,
+    ) -> Result<CommandOutput<()>, TemperError> {
         // The inbound id IS the substrate resource id (no origin_uri remap).
         let new_id = uuid::Uuid::from(cmd.resource);
         let resource = ResourceId::from(new_id);
@@ -3549,8 +3555,13 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(()))
     }
 
+    /// Attach provenance sources to an existing resource's block without a body revise (issue #355).
+    /// Records `kb_block_provenance` rows only — no re-chunk/re-embed, body_hash unchanged. Gated on
+    /// `can_modify_resource` (auth before write), like every other resource mutation. Returns the
+    /// updated resource view (the resource's own state is unchanged, but returning it keeps the
+    /// surface's response shape uniform with `update_resource`).
     #[act_span]
-    async fn annotate_resource(
+    pub async fn annotate_resource(
         &self,
         cmd: AnnotateResource,
     ) -> Result<CommandOutput<ResourceView>, TemperError> {
@@ -3602,8 +3613,12 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(view))
     }
 
+    /// Commit one data artifact to a resource. Gated on `can_modify_resource` (auth before
+    /// write). The substrate hashes the content, calls `data_artifact_commit()` SQL, and
+    /// returns the new `DataArtifactId`; the backend reads the committed artifact back as
+    /// an `ArtifactView` for the response, beside the notice an uncompilable shape in force owes.
     #[act_span]
-    async fn commit_data_artifact(
+    pub async fn commit_data_artifact(
         &self,
         cmd: CommitDataArtifact,
     ) -> Result<CommandOutput<ArtifactCommitResponse>, TemperError> {
@@ -3688,7 +3703,7 @@ impl Backend for DbBackend {
     }
 
     #[act_span]
-    async fn assert_relationship(
+    pub async fn assert_relationship(
         &self,
         cmd: AssertRelationship,
     ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
@@ -3746,7 +3761,7 @@ impl Backend for DbBackend {
     }
 
     #[act_span]
-    async fn retype_relationship(
+    pub async fn retype_relationship(
         &self,
         cmd: RetypeRelationship,
     ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
@@ -3777,7 +3792,7 @@ impl Backend for DbBackend {
     }
 
     #[act_span]
-    async fn reweight_relationship(
+    pub async fn reweight_relationship(
         &self,
         cmd: ReweightRelationship,
     ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
@@ -3805,7 +3820,7 @@ impl Backend for DbBackend {
     }
 
     #[act_span]
-    async fn fold_relationship(
+    pub async fn fold_relationship(
         &self,
         cmd: FoldRelationship,
     ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
@@ -3856,7 +3871,7 @@ impl Backend for DbBackend {
     /// 4. **Tick** — the standing memo, AFTER the write, so it recomputes over the landed audit.
     ///    Ticking earlier would refresh the pre-audit state and leave the memo stale.
     #[act_span]
-    async fn record_citation_audit(
+    pub async fn record_citation_audit(
         &self,
         cmd: RecordCitationAudit,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
@@ -3976,7 +3991,7 @@ impl Backend for DbBackend {
     /// edge-owned only. Both modes answer to the gates and the validation HERE, in the shared
     /// dispatch every skin (HTTP, MCP, CLI) reaches, so no surface can bypass them.
     #[act_span]
-    async fn set_facet(
+    pub async fn set_facet(
         &self,
         cmd: SetFacet,
     ) -> Result<CommandOutput<Vec<PropertyId>>, TemperError> {
@@ -4099,7 +4114,7 @@ impl Backend for DbBackend {
     /// the projector's own zero-rows outcome rendered `NotFound` — so the error never acts as
     /// an existence oracle over property rows.
     #[act_span]
-    async fn retract_facet(
+    pub async fn retract_facet(
         &self,
         cmd: RetractFacet,
     ) -> Result<CommandOutput<temper_core::types::ids::PropertyId>, TemperError> {
@@ -4143,7 +4158,7 @@ impl Backend for DbBackend {
     /// system-actor resolution and of the pre-flight, which reads the map's contents: a caller who
     /// may not author the map learns nothing from how its manifest would have failed.
     #[act_span]
-    async fn reconcile_cognitive_map(
+    pub async fn reconcile_cognitive_map(
         &self,
         cmd: ReconcileCognitiveMap,
     ) -> Result<CommandOutput<ReconcileOutcome>, TemperError> {
@@ -4233,7 +4248,7 @@ impl Backend for DbBackend {
     /// `cogmap_id`/`telos_resource_id` is honored only for a system-admin (else server-minted — a
     /// non-admin can never place a map at a chosen, e.g. reserved, id), and the creator is granted
     /// read+write+grant on the new map (below).
-    async fn create_cognitive_map(
+    pub async fn create_cognitive_map(
         &self,
         cmd: CreateCognitiveMap,
     ) -> Result<CommandOutput<CreateCogmapOutcome>, TemperError> {
@@ -4490,7 +4505,7 @@ impl Backend for DbBackend {
     ///
     /// Deny → 403, before any `writes::` call. The id is minted by `writes::open_invocation`
     /// (server-mint v1, never caller-supplied).
-    async fn open_invocation(
+    pub async fn open_invocation(
         &self,
         cmd: OpenInvocation,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
@@ -4527,7 +4542,7 @@ impl Backend for DbBackend {
     /// a one-shot terminal transition; a non-open envelope is a 409 (append-only — a re-close would
     /// append a second `invocation_closed` event and overwrite the terminal record). All before any
     /// `writes::` call.
-    async fn close_invocation(
+    pub async fn close_invocation(
         &self,
         cmd: CloseInvocation,
     ) -> Result<CommandOutput<()>, TemperError> {
@@ -4595,7 +4610,7 @@ impl Backend for DbBackend {
     ///
     /// Returns the cursors as stored, read back from the UPDATE — both inputs have a server-side rule
     /// applied, so echoing the request would report state that may not exist.
-    async fn advance_steward_watermark(
+    pub async fn advance_steward_watermark(
         &self,
         cmd: AdvanceStewardWatermark,
     ) -> Result<CommandOutput<AdvanceWatermarkAck>, TemperError> {
@@ -4719,7 +4734,9 @@ impl Backend for DbBackend {
         }))
     }
 
-    async fn steward_dispatch_tick(
+    /// Run one deterministic steward-dispatch pass (reap → sweep → enqueue → claim) and return the
+    /// claimed jobs for fan-out. See [`StewardDispatchTick`].
+    pub async fn steward_dispatch_tick(
         &self,
         cmd: StewardDispatchTick,
     ) -> Result<CommandOutput<Vec<temper_core::types::workflow_job::ClaimedJob>>, TemperError> {
@@ -4797,7 +4814,7 @@ impl Backend for DbBackend {
     ///
     /// Neither half subsumes the other: gate 1 stops a human running the pipeline, gate 2 stops one
     /// registered machine reading another tenant's work.
-    async fn auditor_dispatch_tick(
+    pub async fn auditor_dispatch_tick(
         &self,
         cmd: AuditorDispatchTick,
     ) -> Result<CommandOutput<Vec<temper_core::types::auditor::ClaimedAuditJob>>, TemperError> {
@@ -4888,7 +4905,7 @@ impl Backend for DbBackend {
     ///
     /// `None` therefore means "nothing of yours was in flight". Not an error: the session's written
     /// verdicts stand either way.
-    async fn complete_auditor_job(
+    pub async fn complete_auditor_job(
         &self,
         cmd: CompleteAuditorJob,
     ) -> Result<CommandOutput<Option<uuid::Uuid>>, TemperError> {
@@ -4916,7 +4933,7 @@ impl Backend for DbBackend {
     /// idempotent no-op (`materialized: false`) that never touches the substrate. At/above threshold it
     /// delegates to the existing incremental-materialize path (which fires `region_materialized` and
     /// advances `shape_materialized_event_id` via its projection); NO new clustering logic lives here.
-    async fn materialize_on_threshold(
+    pub async fn materialize_on_threshold(
         &self,
         cmd: MaterializeOnThreshold,
     ) -> Result<CommandOutput<MaterializeAck>, TemperError> {
@@ -5089,7 +5106,7 @@ impl Backend for DbBackend {
     /// over one bad row, in either arm; the row ships one bounded static sentence
     /// (`ROW_ERROR_MESSAGE`) and the real diagnostic is log-only under the batch correlation id,
     /// never raw internal error text in a 200 body.
-    async fn reblock_resources(
+    pub async fn reblock_resources(
         &self,
         cmd: ReblockResources,
     ) -> Result<CommandOutput<ReblockReceipt>, TemperError> {
@@ -5339,8 +5356,16 @@ impl Backend for DbBackend {
         }))
     }
 
+    /// Begin a segmented (multi-block) ingest: create the resource with segment 0 as its body
+    /// block, record the per-resource source-provenance row (`kb_ingestion_records`), and return
+    /// the landed set plus the live `body_hash`.
+    ///
+    /// One command per inbound call — surfaces do not compose these steps themselves. `cmd.origin`
+    /// attributes the create; `seg.total_blocks_hint` and `seg.block_budget` are recorded by the
+    /// caller's own bookkeeping and are deliberately not validated here (the budget is a client-side
+    /// determinism aid, not a server-enforced limit).
     #[act_span]
-    async fn begin_segmented_ingest(
+    pub async fn begin_segmented_ingest(
         &self,
         cmd: CreateResource,
         seg: SegmentedBegin,
@@ -5398,7 +5423,15 @@ impl Backend for DbBackend {
         }))
     }
 
-    async fn append_block(
+    /// Append one segment to a resource whose block 0 already landed. Idempotent in the substrate
+    /// on `(resource, seq, block merkle)` — re-appending an already-landed segment is a no-op that
+    /// still returns the current landed set.
+    ///
+    /// `payload.chunks_packed` may be absent, in which case the backend chunks the segment text
+    /// itself (the MCP surface has no embedder). `origin` attributes the emitted `block_created`
+    /// event to the calling surface — a parameter, not a constant, because CLI, API, and MCP all
+    /// reach this path.
+    pub async fn append_block(
         &self,
         resource: ResourceId,
         payload: AppendBlockPayload,
@@ -5494,7 +5527,10 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(landed))
     }
 
-    async fn finalize_ingest(
+    /// Declare a segmented ingest complete: validates the landed block count + body merkle
+    /// against the caller's expectation, then fires `resource_finalized`. `origin` attributes that
+    /// event to the calling surface, as on [`Self::append_block`].
+    pub async fn finalize_ingest(
         &self,
         resource: ResourceId,
         payload: FinalizePayload,
@@ -5525,7 +5561,10 @@ impl Backend for DbBackend {
         Ok(CommandOutput::new(()))
     }
 
-    async fn list_blocks(
+    /// The currently landed segment set for a resource, plus its live `body_hash` — backs the
+    /// resume/progress read `GET /api/resources/{id}/blocks`. Takes no `origin`: it emits no event,
+    /// so it resolves no emitter, and a parameter nothing consumes would be a lie.
+    pub async fn list_blocks(
         &self,
         resource: ResourceId,
     ) -> Result<CommandOutput<BlocksResponse>, TemperError> {
@@ -5538,7 +5577,7 @@ impl Backend for DbBackend {
 }
 
 impl DbBackend {
-    /// One candidate of [`Backend::reblock_resources`]'s act arm: the modify floor at the head of
+    /// One candidate of [`Self::reblock_resources`]'s act arm: the modify floor at the head of
     /// the candidate's own transaction (resource erasure spec D13), then the shipped op on that
     /// transaction, then the commit — so the check and the re-block cannot separate.
     ///
@@ -5884,13 +5923,6 @@ mod tests {
             api_err(crate::error::sqlstate_error("XX000")),
             TemperError::Api(_)
         ));
-    }
-
-    #[test]
-    fn is_object_safe() {
-        fn assert_obj(_: &dyn Backend) {}
-        let _ = assert_obj;
-        // If DbBackend were not object-safe, the boxed `dyn Backend` dispatch would not compile.
     }
 
     /// Ties [`ACT_SPAN_FIELDS`] to the attribute that actually builds the act spans.

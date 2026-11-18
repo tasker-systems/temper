@@ -29,7 +29,7 @@ class OtherAuthorEdge(BaseModel):
     An edge touching the resource whose asserting principal is not the resource's owner.
     """ # noqa: E501
     author: UUID = Field(description="The profile behind the entity that emitted the edge's asserting event.")
-    edge_id: UUID = Field(description="A `kb_edges.id` value — a declared relationship assertion.  Returned by `Backend::assert_relationship` and fed back into retype/reweight/fold. Post-WS6-flip there is a single substrate-backed backend, so this is always a real `kb_edges` row id (not a backend-opaque correlation handle).")
+    edge_id: UUID = Field(description="A `kb_edges.id` value — a declared relationship assertion.  Returned by a relationship assert and passed back to retype, reweight and fold. Always a real `kb_edges` row id.")
     folded: StrictBool = Field(description="Already folded at survey time: the act appends no fold for it, but still nulls its label and sentinels its properties (steps 9c and 9d reach live and folded edges).")
     __properties: ClassVar[List[str]] = ["author", "edge_id", "folded"]
 

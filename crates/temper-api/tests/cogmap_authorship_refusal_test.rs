@@ -29,7 +29,7 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{
-    AdvanceStewardWatermark, Backend, MaterializeOnThreshold, OpenInvocation, Surface,
+    AdvanceStewardWatermark, MaterializeOnThreshold, OpenInvocation, Surface,
 };
 
 mod common;

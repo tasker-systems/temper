@@ -65,7 +65,7 @@ pub async fn is_system_admin(pool: &PgPool, profile_id: ProfileId) -> ApiResult<
 // Access-capability grants (D3b §3.C) — the surface-facing writers of
 // `kb_access_grants`. Admin events (firewalled from cognition, memory
 // project_admin_eventsourcing_and_operating_shape): called DIRECTLY from
-// surfaces, like `cogmap_service::bind_team`, NOT via the DbBackend trait.
+// surfaces, like `cogmap_service::bind_team`, NOT via a `DbBackend` command.
 // ---------------------------------------------------------------------------
 
 /// Why a caller may administer grants on a subject — not merely *whether*. Callers need the

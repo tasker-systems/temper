@@ -13,7 +13,6 @@ name = "temper_workflow"
 
 [dependencies]
 temperkb-core.workspace = true
-async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 # Compiles only schemas shipped in this repository. `default-features = false` drops the http and
 # file resolvers: see temper-substrate's `jsonschema` line, which says why every dependency edge

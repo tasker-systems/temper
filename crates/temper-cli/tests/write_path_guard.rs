@@ -12,6 +12,9 @@
 //!   `temper-client`'s operations, like every other CLI act. A second write abstraction would
 //!   bring back the per-method stubs the first guard catches.
 //!
+//! - **No shared trait.** No crate declares `trait Backend` or implements one. `DbBackend` runs
+//!   the server's write commands as its own methods.
+//!
 //! The matcher is line-grained. A phrase split across a string continuation (`"not \` then
 //! `wired"`) is not caught. That gap favours green; the phrase list is short so it can be read.
 
@@ -148,6 +151,33 @@ fn the_cli_names_no_backend_trait() {
     assert!(
         hits.is_empty(),
         "the CLI writes through temper-client, not a Backend trait:\n{}",
+        hits.join("\n")
+    );
+}
+
+/// No crate declares or implements a shared `Backend` trait. The server's command layer is
+/// `DbBackend`'s own methods; a trait over it, with one implementation per process, is the seam a
+/// second write path would hang from.
+#[test]
+fn no_crate_declares_a_shared_backend_trait() {
+    let mut hits = Vec::new();
+    for path in src_files() {
+        let text = std::fs::read_to_string(&path).expect("read source");
+        for (n, line) in text.lines().enumerate() {
+            let words: Vec<&str> = code_part(line)
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|w| !w.is_empty())
+                .collect();
+            let declares = words.windows(2).any(|w| w == ["trait", "Backend"]);
+            let implements = words.windows(3).any(|w| w == ["impl", "Backend", "for"]);
+            if declares || implements {
+                hits.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        hits.is_empty(),
+        "a shared Backend trait is back; the server's commands are DbBackend's own methods:\n{}",
         hits.join("\n")
     );
 }

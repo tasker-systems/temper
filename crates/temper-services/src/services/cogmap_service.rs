@@ -1,9 +1,9 @@
 //! Cognitive-map ↔ team binding service over the substrate.
 //!
-//! Service-direct, NO Backend-trait command, NO event emission — a team↔cogmap
+//! Service-direct, NO `DbBackend` command, NO event emission — a team↔cogmap
 //! binding is provisioning/infrastructure, exactly like team membership
 //! (`team_service`), not knowledge-graph content (org-provisioning spec §2.6, the
-//! same precedent as `context_service`). Only cogmap *genesis* got a Backend
+//! same precedent as `context_service`). Only cogmap *genesis* got a `DbBackend`
 //! command.
 //!
 //! Bind/unbind gate is TWO-SIDED (at the TOP of each fn, BEFORE any write): `is_system_admin`, OR

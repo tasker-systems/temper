@@ -19,7 +19,7 @@ module Temper::Generated
     # A `kb_profiles.id` value.
     attr_accessor :author
 
-    # A `kb_edges.id` value — a declared relationship assertion.  Returned by `Backend::assert_relationship` and fed back into retype/reweight/fold. Post-WS6-flip there is a single substrate-backed backend, so this is always a real `kb_edges` row id (not a backend-opaque correlation handle).
+    # A `kb_edges.id` value — a declared relationship assertion.  Returned by a relationship assert and passed back to retype, reweight and fold. Always a real `kb_edges` row id.
     attr_accessor :edge_id
 
     # Already folded at survey time (the row's own fold): the act still sentinels its key and value (step 9d reaches live and folded rows).

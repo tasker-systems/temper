@@ -4,7 +4,7 @@
 //! whose principal scoping lives in SQL (`audit_drift_sweep` routes through
 //! `steward_candidate_cogmaps`, the membership set for the finding and the reading set for each cited
 //! source), and `dispatch` (POST) dispatches ONE
-//! operations command through the `Backend` trait. No persistence here.
+//! operations command through `DbBackend`. No persistence here.
 //!
 //! The auditor authenticates as its OWN registered machine principal, never the steward's — one
 //! credential is one `emitter_entity_id`, and a shared client would leave the ledger unable to tell
@@ -62,7 +62,7 @@ use temper_core::types::auditor::{
 };
 use temper_core::types::ids::{CogmapId, CorrelationId, ProfileId};
 use temper_core::types::query_params::SweepQuery;
-use temper_workflow::operations::{AuditorDispatchTick, Backend, CompleteAuditorJob};
+use temper_workflow::operations::{AuditorDispatchTick, CompleteAuditorJob};
 
 /// Refuse a non-positive `cap` as the caller fault it is.
 ///

@@ -1,4 +1,4 @@
-//! CommandOutput — the value-plus-events return shape for every Backend method.
+//! CommandOutput — the value-plus-events return shape for every `DbBackend` write command.
 
 use serde::{Deserialize, Serialize};
 

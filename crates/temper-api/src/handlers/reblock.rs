@@ -1,7 +1,7 @@
 //! `POST /api/resources/reblock` — the corpus re-blocking wire surface.
 //!
-//! One bounded, resumable re-blocking step per call, dispatched to the existing `Backend` command
-//! (`Backend::reblock_resources`): the handler authenticates, constructs the backend with the
+//! One bounded, resumable re-blocking step per call, dispatched to the existing `DbBackend` command
+//! (`DbBackend::reblock_resources`): the handler authenticates, constructs the backend with the
 //! caller's own identity, and dispatches. There is no admin gate here on purpose — the backend
 //! is the shared seam, so the deployment-wide `all` scope is `is_system_admin`-gated inside
 //! `DbBackend::reblock_resources` (a 403 surfacing through this route) while the resource and
@@ -19,7 +19,7 @@ use temper_core::types::reblock::{ReblockReceipt, ReblockRequest, DEFAULT_REBLOC
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
-use temper_workflow::operations::{Backend, ReblockResources};
+use temper_workflow::operations::ReblockResources;
 
 /// Run one bounded, resumable re-blocking step
 #[utoipa::path(
@@ -65,7 +65,7 @@ pub async fn reblock(
     Json(req): Json<ReblockRequest>,
 ) -> ApiResult<Json<ReblockReceipt>> {
     // Auth before anything else happens in the backend; the per-row gating lives there too —
-    // this handler only dispatches, exactly like its Backend-dispatching siblings.
+    // this handler only dispatches, exactly like its `DbBackend`-dispatching siblings.
     let cmd = ReblockResources {
         scope: req.scope,
         dry_run: req.dry_run,

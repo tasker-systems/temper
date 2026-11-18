@@ -3,7 +3,7 @@
 //! temper-system or the gating team, authorship for every other map.
 //!
 //! The request body is a PRE-EMBEDDED desired-state manifest (the operator CLI embeds client-side). The
-//! handler dispatches ONE operations command through the `Backend` trait, whose reconcile owns the
+//! handler dispatches ONE operations command through `DbBackend`, whose reconcile owns the
 //! write gate (Auth before writes: the map's regime, decided once) — it never calls services or
 //! `sqlx::query!` directly for the write.
 //!
@@ -33,7 +33,7 @@ use temper_core::types::reconcile::{
     CreateCogmapOutcome, CreateCogmapRequest, ReconcileCogmapRequest, ReconcileOutcome,
 };
 use temper_workflow::operations::{
-    Backend, CreateCognitiveMap, MaterializeOnThreshold, ReconcileCognitiveMap,
+    CreateCognitiveMap, MaterializeOnThreshold, ReconcileCognitiveMap,
 };
 
 /// Reconcile a cognitive map's contents

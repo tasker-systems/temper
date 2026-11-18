@@ -47,8 +47,7 @@ use temper_core::types::ids::{ContextId, EdgeId, ProfileId, ResourceId};
 use temper_core::types::property_owner::PropertyOwner;
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{
-    AssertRelationship, Backend, CreateResource, FoldRelationship, RetypeRelationship, SetFacet,
-    Surface,
+    AssertRelationship, CreateResource, FoldRelationship, RetypeRelationship, SetFacet, Surface,
 };
 use temper_workflow::types::managed_meta::ManagedMeta;
 

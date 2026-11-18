@@ -69,7 +69,7 @@ use temper_services::backend::DbBackend;
 use temper_services::services::context_graph_service::{self, ResidualMemberQuery};
 use temper_services::services::context_service::resolve_context_ref;
 use temper_services::services::{event_service, graph_service};
-use temper_workflow::operations::{Backend, ShowResource, Surface};
+use temper_workflow::operations::{ShowResource, Surface};
 
 // ── Handler-mirrored constants ─────────────────────────────────────────────────────────────────
 // These are the surface defaults, not new choices. `graph.rs` holds the originals; a divergence

@@ -22,7 +22,7 @@ use temper_core::types::reconcile::{
     ReconcileCogmapRequest, ReconcileEdge, ReconcileEntry, ReconcileTombstone,
 };
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{Backend, ReconcileCognitiveMap, Surface};
+use temper_workflow::operations::{ReconcileCognitiveMap, Surface};
 
 const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
 

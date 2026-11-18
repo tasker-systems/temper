@@ -24,7 +24,7 @@ use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
 use temper_core::types::query_params::ResourceShowQuery;
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_core::types::resource_view::ResourceView;
-use temper_workflow::operations::{Backend, CreateResource, DeleteResource};
+use temper_workflow::operations::{CreateResource, DeleteResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::{ContentResponse, DeleteResponse};
 

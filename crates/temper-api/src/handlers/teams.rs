@@ -1,5 +1,5 @@
 //! Team lifecycle handlers — thin: extract `AuthUser` (`AnyPrincipal` for the two reads a machine
-//! may take), dispatch one `team_service` call, return the typed row. Service-direct (no Backend-trait
+//! may take), dispatch one `team_service` call, return the typed row. Service-direct (no `DbBackend`
 //! command, no event emission) per org-provisioning spec §2.6.
 
 use axum::extract::{Path, Query, State};

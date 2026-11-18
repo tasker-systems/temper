@@ -20,7 +20,7 @@ use temper_core::types::ids::{ContextId, ProfileId};
 use temper_core::types::query::id_set::MAX_ID_SET_IDS;
 use temper_services::backend::{substrate_read, DbBackend};
 use temper_services::error::ApiError;
-use temper_workflow::operations::{Backend, CreateResource, Surface};
+use temper_workflow::operations::{CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::{ResourceListParams, ResourceListResponse};
 

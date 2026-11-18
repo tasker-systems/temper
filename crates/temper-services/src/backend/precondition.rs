@@ -296,7 +296,7 @@ mod db_tests {
     use temper_core::types::authorship::ActContext;
     use temper_core::types::home::HomeAnchor;
     use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-    use temper_workflow::operations::{Backend, CreateResource, Surface};
+    use temper_workflow::operations::{CreateResource, Surface};
     use temper_workflow::types::managed_meta::ManagedMeta;
 
     use super::*;

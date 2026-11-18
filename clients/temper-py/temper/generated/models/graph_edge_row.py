@@ -34,7 +34,7 @@ class GraphEdgeRow(BaseModel):
     """ # noqa: E501
     created: datetime
     direction: BlobRelationEdgeDirection = Field(description="The edge listing's own vocabulary (`outgoing` = the queried resource is the source), typed — never a bare string (C-C3, 2026-09-04 review).")
-    edge_id: UUID = Field(description="A `kb_edges.id` value — a declared relationship assertion.  Returned by `Backend::assert_relationship` and fed back into retype/reweight/fold. Post-WS6-flip there is a single substrate-backed backend, so this is always a real `kb_edges` row id (not a backend-opaque correlation handle).")
+    edge_id: UUID = Field(description="A `kb_edges.id` value — a declared relationship assertion.  Returned by a relationship assert and passed back to retype, reweight and fold. Always a real `kb_edges` row id.")
     edge_kind: EdgeKind
     label: StrictStr
     peer_id: UUID = Field(description="The peer's id — a `kb_resources.id` or a `kb_blobs.id` per `peer_table`.")

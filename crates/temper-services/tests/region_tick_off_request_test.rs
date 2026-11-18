@@ -22,7 +22,7 @@ use temper_core::types::ids::{CogmapId, ContextId, ProfileId};
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use temper_services::backend::DbBackend;
 use temper_services::services::region_service;
-use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, DeleteResource, Surface};
+use temper_workflow::operations::{BodyUpdate, CreateResource, DeleteResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Seed a profile plus its three surface emitter entities — the write path resolves

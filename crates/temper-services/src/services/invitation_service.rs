@@ -1,6 +1,6 @@
 //! Team invitation service over `kb_team_invitations`.
 //!
-//! Service-direct: no Backend-trait command, no event emission — invitations are
+//! Service-direct: no `DbBackend` command, no event emission — invitations are
 //! provisioning/infra, the same precedent as `team_service` / `context_service`.
 //! Authorization follows the rank rule (`authz::team_membership`, C16/R10): creating an
 //! invitation requires a managing authority at a role capped at the inviter's own; seeing or

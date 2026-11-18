@@ -1,0 +1,15 @@
+title    = "The EdgeId schema description no longer names a retired trait method"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "clients"]
+status   = "signal-only"
+body = '''
+Description text only. The `EdgeId` schema description in openapi.json named
+`Backend::assert_relationship`, a trait that no longer exists, and carried a historical
+aside. It now states what the value is: returned by a relationship assert, passed back to
+retype, reweight and fold, and always a real `kb_edges` row id. The regenerated SDKs
+(temper-rb, temper-ts, temper-py) and the ts-rs `EdgeId.ts` change in docstrings only.
+
+No property, type, required set, enum value or route moves in either skew direction; a client
+that reads descriptions sees new wording. Release relevance: signal-only.
+'''

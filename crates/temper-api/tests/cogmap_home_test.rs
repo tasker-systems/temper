@@ -27,7 +27,7 @@ use uuid::Uuid;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{Backend, CreateResource, Surface};
+use temper_workflow::operations::{CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 // ── helpers ───────────────────────────────────────────────────────────────────────

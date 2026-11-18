@@ -47,7 +47,7 @@ use temper_services::services::resource_erasure_service::{
     execute_resource_erasure, ResourceErasureRequest,
 };
 use temper_services::test_support;
-use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface};
+use temper_workflow::operations::{BodyUpdate, CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 use uuid::Uuid;
 

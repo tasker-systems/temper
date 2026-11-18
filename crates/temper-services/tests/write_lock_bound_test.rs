@@ -21,7 +21,7 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_services::backend::write_floor::WRITE_LOCK_TIMEOUT_MS;
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{Backend, CreateResource, Surface, UpdateResource};
+use temper_workflow::operations::{CreateResource, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Seed a substrate profile, its emitters, and a profile-owned context. Each test-target crate

@@ -13,7 +13,7 @@ use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::citation_audit_service;
 use temper_services::state::AppState;
-use temper_workflow::operations::{Backend, RecordCitationAudit};
+use temper_workflow::operations::RecordCitationAudit;
 
 // CONFORM to `handlers::edges::assert` (the sibling authored-write handler): thin — build the
 // command, dispatch it, map the error. No persistence here.

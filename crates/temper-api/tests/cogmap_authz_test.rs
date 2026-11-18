@@ -100,7 +100,7 @@ async fn a_non_root_cogmap_requires_authorship(pool: PgPool) {
 
 /// Genesis a map as `creator` (not L0, joined to no team). Returns its id.
 async fn genesis_map(pool: &PgPool, creator: Uuid, name: &str) -> Uuid {
-    use temper_workflow::operations::{Backend, CreateCognitiveMap, Surface};
+    use temper_workflow::operations::{CreateCognitiveMap, Surface};
     as_profile(pool, creator)
         .create_cognitive_map(CreateCognitiveMap {
             request: temper_core::types::reconcile::CreateCogmapRequest {
@@ -220,7 +220,6 @@ async fn author_into(
     cogmap: Uuid,
     slug: &str,
 ) -> Result<(), TemperError> {
-    use temper_workflow::operations::Backend;
     as_profile(pool, profile)
         .create_resource(CreateResource {
             idempotency_key: None,

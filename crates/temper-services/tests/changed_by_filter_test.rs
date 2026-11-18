@@ -32,7 +32,7 @@ use temper_services::services::{context_service, event_service};
 use temper_substrate::affinity::EdgeKind;
 use temper_substrate::events::{fire, EdgeHome, SeedAction};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
-use temper_workflow::operations::{Backend, CreateResource, Surface, UpdateResource};
+use temper_workflow::operations::{CreateResource, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::{
     ResourceListParams, ResourceListResponse, ResourceSortField, SortOrder,
