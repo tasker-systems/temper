@@ -20,6 +20,19 @@ pub async fn insert(pool: &PgPool, handle: &str) -> Uuid {
     .expect("insert profile")
 }
 
+/// [`insert`] with a caller-chosen id, for a test whose handle is derived from the id (a UUIDv7 is
+/// unique where a counter or a truncated id is not).
+pub async fn insert_with_id(pool: &PgPool, id: Uuid, handle: &str) {
+    sqlx::query!(
+        "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $2)",
+        id,
+        handle,
+    )
+    .execute(pool)
+    .await
+    .expect("insert profile");
+}
+
 /// The personal team every profile is born with (`kb_teams.personal_of`).
 pub async fn personal_team(pool: &PgPool, profile: Uuid) -> Uuid {
     sqlx::query_scalar!("SELECT id FROM kb_teams WHERE personal_of = $1", profile)

@@ -155,12 +155,16 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 # test modules into the sibling files `authz/audit_gate/tests.rs`, `authz/context_admin/tests.rs` and
 # `authz/machine/personal_space_tests.rs`. Each is still compiled only under
 # `#[cfg(all(test, feature = "test-db"))]`, now on the `mod …;` declaration.
+# REVIEWED 2026-11-18 (R24, backend + auth batch) — no write-site added, removed or changed. The
+# TEST-ONLY `grant_read` insert this baseline counted for `backend/write_floor.rs` moved, unedited,
+# with its test module into the sibling file `backend/write_floor/tests.rs`, still compiled only
+# under `#[cfg(all(test, feature = "test-db"))]`, now on the `mod tests;` declaration.
 read -r -d '' BASELINE <<'EOF' || true
 3 crates/temper-services/src/authz/audit_gate/tests.rs
 1 crates/temper-services/src/authz/context_admin/tests.rs
 1 crates/temper-services/src/authz/machine/personal_space_tests.rs
 1 crates/temper-services/src/backend/db_backend.rs
-1 crates/temper-services/src/backend/write_floor.rs
+1 crates/temper-services/src/backend/write_floor/tests.rs
 1 crates/temper-services/src/services/access_service.rs
 2 crates/temper-services/src/services/connection_service.rs
 1 crates/temper-services/src/services/machine_authz.rs

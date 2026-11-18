@@ -59,12 +59,7 @@ fi
 
 # Paths relative to crates/temper-services/src. Delete a line in the PR that moves its file.
 read -r -d '' BASELINE <<'EOF' || true
-auth/mod.rs
 backend/db_backend.rs
-backend/precondition.rs
-backend/region_clocks.rs
-backend/substrate_read.rs
-backend/write_floor.rs
 services/admin_directory_service.rs
 services/as_reap_service.rs
 services/auditor_service.rs
