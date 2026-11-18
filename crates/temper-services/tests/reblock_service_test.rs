@@ -35,44 +35,14 @@ const FOREIGN_BODY: &str = "# Foreign\n\nTotally different prose that chunks els
 /// minimum `resolve_emitter` + the visibility gate require. Returns (profile, context, @web
 /// entity id) — the entity doubles as the fixtures' emitter.
 async fn seed_profile_with_context(pool: &PgPool, email: &str) -> (Uuid, Uuid, Uuid) {
-    let profile_id = Uuid::now_v7();
-    let local = email.split('@').next().unwrap_or("test-user");
-    let handle = format!("{local}-{}", &profile_id.simple().to_string()[..8]);
-    sqlx::query("INSERT INTO kb_profiles (id, handle, display_name, email) VALUES ($1,$2,$3,$4)")
-        .bind(profile_id)
-        .bind(&handle)
-        .bind(email)
-        .bind(email)
-        .execute(pool)
-        .await
-        .expect("seed profile");
-    let mut web_entity = Uuid::now_v7();
-    for surface in ["web", "cli", "mcp"] {
-        let id = Uuid::now_v7();
-        if surface == "web" {
-            web_entity = id;
-        }
-        sqlx::query(
-            "INSERT INTO kb_entities (id, profile_id, name, metadata) VALUES ($1,$2,$3,'{}'::jsonb)",
-        )
-        .bind(id)
-        .bind(profile_id)
-        .bind(format!("{handle}@{surface}"))
-        .execute(pool)
-        .await
-        .expect("seed emitter entity");
-    }
-    let context_id = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES ($1,'kb_profiles',$2,'temper','temper')",
+    let c = temper_services::test_support::caller::with_context(
+        pool,
+        email,
+        &temper_services::test_support::entity::DOOR_SURFACES,
+        "temper",
     )
-    .bind(context_id)
-    .bind(profile_id)
-    .execute(pool)
-    .await
-    .expect("seed context");
-    (profile_id, context_id, web_entity)
+    .await;
+    (c.profile, c.context, c.emitters[0])
 }
 
 /// Real chunk hashes from the real chunker; the embedding is a placeholder the op never reads.

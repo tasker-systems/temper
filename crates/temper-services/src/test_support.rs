@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 /// One builder module per entity (ruling R24): a fixture that makes an entity's row lives here, once,
 /// rather than as a private copy in each test module.
+pub mod caller;
 pub mod context;
 pub mod entity;
 pub mod profile;

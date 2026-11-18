@@ -33,6 +33,29 @@ pub async fn insert_with_id(pool: &PgPool, id: Uuid, handle: &str) {
     .expect("insert profile");
 }
 
+/// A profile seeded the way the integration suites seed a door caller: a fresh UUIDv7 id, the
+/// handle `<email local part>-<first 8 hex of the id>`, and both display name and email set to
+/// `email`. Answers `(id, handle)`; the handle is what the caller's emitters are named after.
+///
+/// The 8-hex suffix is the incumbent shape, kept so a test that asserts on a handle reads the same.
+/// Two v7 ids minted in one millisecond can share it; give such profiles different emails.
+pub async fn insert_with_email(pool: &PgPool, email: &str) -> (Uuid, String) {
+    let id = Uuid::now_v7();
+    let local = email.split('@').next().unwrap_or("test-user");
+    let handle = format!("{local}-{}", &id.simple().to_string()[..8]);
+    sqlx::query!(
+        "INSERT INTO kb_profiles (id, handle, display_name, email) VALUES ($1, $2, $3, $4)",
+        id,
+        handle,
+        email,
+        email,
+    )
+    .execute(pool)
+    .await
+    .expect("insert profile");
+    (id, handle)
+}
+
 /// The personal team every profile is born with (`kb_teams.personal_of`).
 pub async fn personal_team(pool: &PgPool, profile: Uuid) -> Uuid {
     sqlx::query_scalar!("SELECT id FROM kb_teams WHERE personal_of = $1", profile)
