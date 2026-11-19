@@ -27,7 +27,8 @@ tools compose, and what a schema cannot warn you about. The server's `tools/list
 
 **Write a resource**
 - Tool: `create_resource` — a new resource in an existing context; validated, chunked and embedded in one call.
-- Tool: `update_resource` — title or content; `context_to` moves the resource to another context and `type_to` converts its doc type. Only the fields you pass change.
+- Tool: `update_resource` — title or content. Only the fields you pass change.
+  Its `context_to` moves the resource to another context, and `type_to` converts its doc type.
 - Tool: `update_resource_meta` — managed_meta and open_meta only, with no re-chunk or re-embed. Returns `{updated, id, view}`.
   Meta only, by decision: it never moves or converts a resource.
   Both meta writes take `expect` (per-key expected values; `null` is absent) and write nothing when one fails.
