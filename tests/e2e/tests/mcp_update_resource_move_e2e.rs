@@ -418,28 +418,26 @@ async fn type_to_converts_on_mcp_as_on_the_cli(pool: PgPool) {
         "the two doors converted to the same stored state"
     );
 
-    // An unknown type is refused by name on both doors, before anything is written.
-    let err = temper_mcp::tools::resources::update_resource(
+    // A type no schema knows is accepted on both doors, as a create of that type is: the
+    // caller's doc-type vocabulary is its own, and the server is the only copy that judges it.
+    temper_mcp::tools::resources::update_resource(
         &svc,
         &parts,
         input(json!({ "id": via_mcp, "type_to": "frobnicate" })),
     )
     .await
-    .expect_err("an unknown type is refused");
-    assert_eq!(err.code.0, -32602);
-    assert!(
-        err.message
-            .starts_with("type_to: unknown doctype 'frobnicate'"),
-        "{}",
-        err.message
-    );
-    let out = common::run_temper_cli(
+    .expect("an unrecognized type converts on MCP");
+    cli_ok(
         &app,
         &["resource", "update", &via_cli, "--type-to", "frobnicate"],
     )
-    .await
-    .expect("cli run");
-    assert!(!out.status.success(), "the CLI refuses it too");
-    let (still, _) = get(&svc, &parts, &via_mcp).await;
-    assert_eq!(still["doc_type_name"], "concept", "nothing was written");
+    .await;
+    let (cli_view, cli_body) = get(&svc, &parts, &via_cli).await;
+    let (mcp_view, mcp_body) = get(&svc, &parts, &via_mcp).await;
+    assert_eq!(mcp_view["doc_type_name"], "frobnicate", "{mcp_view}");
+    assert_eq!(
+        stored_state(&cli_view, &cli_body),
+        stored_state(&mcp_view, &mcp_body),
+        "the two doors converted to the same unrecognized type"
+    );
 }

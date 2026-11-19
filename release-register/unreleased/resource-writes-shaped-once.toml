@@ -1,0 +1,29 @@
+title    = "The CLI and MCP shape every resource write through one function per act, so the same inputs store the same thing through either door"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["cli-stdout", "mcp"]
+status   = "signal-only"
+body = '''
+Behavioral, both doors: create, segmented begin, update and annotate requests are shaped by
+`temper_workflow::shaping` (new, one function per act), which owns their defaults. Delete has no
+shaping; its request is the caller's act input. Stored results that change:
+- CLI create with no body stores no body. It used to store `# {title}`. Existing rows are untouched.
+- MCP create and `ingest_begin` with no `origin_uri` store `""`. They used to store
+  `mcp://agent/<random uuid>`. The `create_resource` description states the new default.
+- MCP create and `ingest_begin` with no `idempotency_key` mint one for the call, as the CLI always
+  did; the call's own transport retries now converge.
+- An update converting to a doc type no schema knows (`--type-to` / `type_to`) is accepted and
+  stored, as the server always accepted it; both doors used to refuse it before sending. The
+  `update_resource` tool and `type_to` field descriptions say so.
+
+Behavioral, CLI output: these refusals now come from the server, one round trip later and in the
+server's words: sources or `--content-block` without a body, an `--open-meta` key whose shape a
+recognized convention rejects or that is null on create, a managed flag the doc type's schema does
+not take (`--stage` on a research, `--mode frobnicate`), an empty doc type, and act authorship
+without a confidence band. The exit code is unchanged.
+
+Behavioral, MCP: sources or `content_block` without content are refused by the server (400, the
+same `invalid_params` face) instead of by the tool, with the same sentence.
+
+No HTTP route, request or response shape changes.
+'''

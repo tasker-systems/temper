@@ -2,25 +2,23 @@
 //! `temper-client`, like every other CLI act.
 //!
 //! [`connect`] builds the runtime and client a write runs on, and refuses before any network
-//! call when no credential resolves. Each write shapes its command into the wire payload (the
-//! `shaping` submodule) and calls the one client operation for its act. The server enforces
-//! everything else.
+//! call when no credential resolves. Each write shapes its request with `temper_workflow::shaping`,
+//! the one function per act MCP shapes through too, so the same inputs send the same request from
+//! either door. The server enforces everything else.
 //!
-//! The writes need the `embed` feature: a create or update embeds its body locally. A build
-//! without it refuses all four writes with the same answer, so the four answer alike.
+//! The one step the CLI adds is embedding: a create or update with a body sends the body's chunks
+//! and vectors, computed locally. So the writes need the `embed` feature; a build without it
+//! refuses all four with the same answer.
 
 use std::sync::Arc;
 
 use temper_client::TemperClient;
 use temper_core::types::resource_view::ResourceView;
-use temper_workflow::operations::{
-    AnnotateResource, CreateResource, DeleteResource, UpdateResource,
-};
+use temper_core::types::ActInput;
+use temper_workflow::shaping::{AnnotateInput, CreateInput, UpdateInput};
 use tokio::runtime::Runtime;
 
 use crate::error::{Result, TemperError};
-
-pub(crate) mod shaping;
 
 /// Build the tokio runtime and the authenticated client a CLI write dispatches through.
 ///
@@ -42,19 +40,22 @@ pub fn connect() -> Result<(Runtime, Arc<TemperClient>)> {
     Ok((runtime, Arc::new(client)))
 }
 
+/// A shaping failure, in the CLI's error vocabulary.
+#[cfg(feature = "embed")]
+pub(crate) fn shape_err(e: temper_workflow::shaping::ShapeError) -> TemperError {
+    TemperError::Project(e.to_string())
+}
+
 /// Create a resource through `POST /api/ingest`.
-///
-/// `context_ref` is sent verbatim. A bare name (no `@`/`+` sigil, no UUID) reaches the server's
-/// `parse_context_ref`, which rejects it; that server-side rejection is the refusal. A cogmap
-/// home sends `home_cogmap_id` and an empty `context_ref` (see the `shaping` submodule).
-pub async fn create(
-    client: &TemperClient,
-    cmd: &CreateResource,
-    context_ref: &str,
-) -> Result<ResourceView> {
+pub async fn create(client: &TemperClient, input: CreateInput) -> Result<ResourceView> {
     #[cfg(feature = "embed")]
     {
-        let payload = shaping::cmd_to_ingest_payload(cmd, context_ref)?;
+        let mut payload = temper_workflow::shaping::shape_create(input).map_err(shape_err)?;
+        if !payload.content.is_empty() {
+            let chunks = crate::actions::ingest::compute_body_chunks(&payload.content)?;
+            payload.content_hash = Some(chunks.content_hash);
+            payload.chunks_packed = Some(chunks.chunks_packed);
+        }
         client
             .ingest()
             .create(&payload)
@@ -63,41 +64,49 @@ pub async fn create(
     }
     #[cfg(not(feature = "embed"))]
     {
-        let _ = (client, cmd, context_ref);
+        let _ = (client, input);
         Err(embed_required())
     }
 }
 
 /// Update a resource through `PATCH /api/resources/{id}`.
-pub async fn update(client: &TemperClient, cmd: &UpdateResource) -> Result<ResourceView> {
+pub async fn update(
+    client: &TemperClient,
+    id: uuid::Uuid,
+    input: UpdateInput,
+) -> Result<ResourceView> {
     #[cfg(feature = "embed")]
     {
-        let req = shaping::cmd_to_resource_update_request(cmd)?;
+        let mut req = temper_workflow::shaping::shape_update(input).map_err(shape_err)?;
+        if let Some(content) = req.content.as_deref() {
+            let chunks = crate::actions::ingest::compute_body_chunks(content)?;
+            req.content_hash = Some(chunks.content_hash);
+            req.chunks_packed = Some(chunks.chunks_packed);
+        }
         client
             .resources()
-            .update(uuid::Uuid::from(cmd.resource), &req)
+            .update(id, &req)
             .await
             .map_err(crate::actions::runtime::client_err_to_temper)
     }
     #[cfg(not(feature = "embed"))]
     {
-        let _ = (client, cmd);
+        let _ = (client, id, input);
         Err(embed_required())
     }
 }
 
 /// Delete a resource through `DELETE /api/resources/{id}`.
 ///
-/// The command's act (correlation and authorship) travels as query parameters; the handler
-/// reassembles it. A server `SystemAccessRequired` survives `client_err_to_temper` as
+/// Delete has no shaping: its act (correlation and authorship) travels as query parameters,
+/// exactly as given. A server `SystemAccessRequired` survives `client_err_to_temper` as
 /// `TemperError::SystemAccessRequired`, so `main` can render its remedy.
-pub async fn delete(client: &TemperClient, cmd: &DeleteResource) -> Result<()> {
+pub async fn delete(client: &TemperClient, id: uuid::Uuid, act: &ActInput) -> Result<()> {
     #[cfg(feature = "embed")]
     {
-        let act: temper_core::types::ActInput = cmd.act.clone().into();
         client
             .resources()
-            .delete(uuid::Uuid::from(cmd.resource), &act)
+            .delete(id, act)
             .await
             // The CLI answers from the row it read before the delete, not from this response.
             .map(drop)
@@ -105,26 +114,30 @@ pub async fn delete(client: &TemperClient, cmd: &DeleteResource) -> Result<()> {
     }
     #[cfg(not(feature = "embed"))]
     {
-        let _ = (client, cmd);
+        let _ = (client, id, act);
         Err(embed_required())
     }
 }
 
 /// Attach provenance sources to a resource's block without a body revise, through
 /// `POST /api/resources/{id}/annotate`.
-pub async fn annotate(client: &TemperClient, cmd: &AnnotateResource) -> Result<ResourceView> {
+pub async fn annotate(
+    client: &TemperClient,
+    id: uuid::Uuid,
+    input: AnnotateInput,
+) -> Result<ResourceView> {
     #[cfg(feature = "embed")]
     {
-        let req = shaping::cmd_to_resource_annotate_request(cmd);
+        let req = temper_workflow::shaping::shape_annotate(input);
         client
             .resources()
-            .annotate(uuid::Uuid::from(cmd.resource), &req)
+            .annotate(id, &req)
             .await
             .map_err(crate::actions::runtime::client_err_to_temper)
     }
     #[cfg(not(feature = "embed"))]
     {
-        let _ = (client, cmd);
+        let _ = (client, id, input);
         Err(embed_required())
     }
 }
@@ -177,13 +190,9 @@ mod tests {
         let store = Arc::new(MemoryTokenStore::empty());
         let client = TemperClient::new("http://localhost:0", None, Surface::CliCloud, store)
             .expect("loopback test URL validates");
-        let cmd = DeleteResource {
-            resource: temper_core::types::ids::ResourceId::new(),
-            force: false,
-            act: Default::default(),
-            origin: Surface::CliCloud,
-        };
-        let err = delete(&client, &cmd).await.unwrap_err();
+        let err = delete(&client, uuid::Uuid::now_v7(), &ActInput::default())
+            .await
+            .unwrap_err();
         assert!(format!("{err:?}").contains("--features embed"));
     }
 }
