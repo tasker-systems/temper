@@ -750,17 +750,19 @@ pub struct BlobDeleted {
     pub blob_id: BlobId,
 }
 
-/// Erase one blob — the erasure act's OWN strike vocabulary, fired through the SAME
+/// Erase one blob — the erasing acts' OWN strike vocabulary, fired through the SAME
 /// `blob_delete` wrapper and `_project_blob_deleted` projector as [`BlobDeleted`] (ruled
-/// 2026-09-06: the emptying shape and the byte fate are shared, the vocabulary never is).
-/// Identity-only, the exact `BlobDeleted` shape: the envelope carries the home (producing
-/// anchor), the actor (`emitter_entity_id`), and the time (`occurred_at`).
+/// 2026-09-06: the emptying shape and the byte fate are shared, the vocabulary never is). Both
+/// erasing acts fire it: person erasure for the blobs homed in the subject's estate, resource
+/// erasure for each related blob its operator lists. Identity-only, the exact `BlobDeleted`
+/// shape: the envelope carries the home (producing anchor), the actor (`emitter_entity_id`),
+/// and the time (`occurred_at`).
 ///
 /// The row empties into the IDENTICAL D5.2 shape — there is deliberately no row-shape marker
-/// of which act emptied it, and the ledger alone tells delete from erasure. Attribution dies
-/// here (never at a delete): the pseudonym break is the erasure act's work, not this event's
-/// row write. The hash stays — it is the erased-content set's key (D4), which refuses
-/// re-admission of the erased bytes.
+/// of which act emptied it, and the ledger alone tells delete from erasure. This event's row
+/// write breaks no attribution: under person erasure the pseudonym break does that. The hash
+/// stays on the emptied row. Nothing refuses re-admission of the erased bytes: a later commit
+/// of identical bytes is an ordinary write that mints a fresh live row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct BlobErased {
@@ -1550,7 +1552,7 @@ pub struct PrincipalGovernanceChanged {
 ///
 /// The redacted set is keyed on CONTENT HASH (D2) — never row ids, which would collide with
 /// the trail functions' join-key shapes. The erased-content set (D4) rebuilds from these
-/// payloads alone.
+/// payloads alone; it is a projection the replay diffs, and no write path consults it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct PrincipalErased {
@@ -1562,8 +1564,11 @@ pub struct PrincipalErased {
     /// one would put a fabricated attribution on the ledger (the standing-event precedent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<ProfileId>,
-    /// The redacted set (D2): bare sha256 hex, exactly as `content_hash` carries it — the key
-    /// every reader already shares and no trail join-key shape can match.
+    /// The redacted set (D2): the content hashes whose projection rows this act emptied by
+    /// hash. Bare sha256 hex, exactly as `content_hash` carries it — the key every reader
+    /// already shares and no trail join-key shape can match. "Redacted" here means emptied by
+    /// hash, never a ledger rewrite: the ledger paths this act rewrote are in `redacted_fields`
+    /// below, and those of each estate resource on its own `resource_erased` record.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub redacted_hashes: Vec<String>,
     /// Per-target outcomes and the named remainder (D6's accepted-in-part arm): anything
@@ -1749,8 +1754,10 @@ pub struct BlockHistoryScrubbed {
 
 /// `resource_scrubbed` — the field scrub (field-grain scrub spec S1, S4): every prior value of a
 /// resource's title, origin URI or one property family (or every family's prior history) redacted
-/// from the ledger and the projection, on a resource that survives. With `cleared`, today's value
-/// was cleared too, by ordinary events appended before this one in the act's transaction.
+/// from the ledger and the projection, on a resource that survives. The act is field-grain
+/// despite the event's name: it never scrubs a whole resource, and never touches a block. With
+/// `cleared`, today's value was cleared too, by ordinary events appended before this one in the
+/// act's transaction.
 ///
 /// Keyed `subject_table` (`kb_resources`) / `subject_id`, never `resource_id`, and the family by
 /// `field.family`, never `event_id` (the D1 join-key rule). It never carries a top-level `owner`:

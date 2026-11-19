@@ -21617,7 +21617,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The redacted set (D2) the act would admit."
+            "description": "The redacted set (D2) the act would admit: the content hashes whose projection rows it\nwould empty by hash. It names no ledger rewrite."
           },
           "resources": {
             "type": "array",

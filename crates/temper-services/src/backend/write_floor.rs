@@ -29,7 +29,7 @@
 //! `can_modify_resource` is false, `resource_husk_held_by` is false, and the caller gets the same
 //! `Forbidden` a live resource it may not modify gets.
 //!
-//! **A tombstone is never an erasure.** A soft-deleted resource (`is_active = false`, `erased_at`
+//! **A soft delete is never an erasure.** A soft-deleted resource (`is_active = false`, `erased_at`
 //! NULL) is denied by both floors and classified `Forbidden`: `resource_husk_held_by` reads
 //! `erased_at`, never `is_active`.
 //!

@@ -13,8 +13,11 @@ by whom, and when. That event is the whole story: a second delete of the same bl
 exactly like deleting a blob that never existed (the same 404), and fires no second event.
 
 Deleting is not editing. Removing a blob's *relation* to a resource (folding the relation) is
-an edit of the relating resource — it touches neither the blob's record nor its bytes. The
-only act that empties a blob record outside a subject erasure is the delete itself.
+an edit of the relating resource — it touches neither the blob's record nor its bytes. Besides
+the delete itself, only the two erasing acts empty a blob record: a person erasure strikes the
+files homed in the subject's own contexts, and a [resource erasure](./resource-erasure.md) strikes
+the related blobs its operator lists with `--also-strike-blob`. Neither infers a strike from a
+relation.
 
 ## Who may delete — custody, and nothing else
 
@@ -47,17 +50,17 @@ nothing.
 
 ## What the ledger remembers — and what the row cannot tell you
 
-A struck row carries **no marker of which act emptied it**. An ordinary delete and a subject
-erasure leave the identical row shape; what distinguishes them is the **event** each wrote —
-`blob_deleted` for the ordinary act, the erasure event for an erasure. This is deliberate:
+A struck row carries **no marker of which act emptied it**. An ordinary delete and an erasure
+leave the identical row shape; what distinguishes them is the **event** each wrote —
+`blob_deleted` for the ordinary act, `blob_erased` for a strike made by either erasing act. This is deliberate:
 the ledger is the only place the distinction lives, and replaying the ledger reproduces
 exactly whichever act emptied the row — a re-commit of identical bytes after either act
 mints a fresh, ordinary row, never refused by and never deduplicated against the struck one.
 
-## The team-context policy (erasure's bound)
+## The team-context policy (person erasure's bound)
 
-Erasure — a subject's right to be forgotten — is bounded where the team's corpus begins: an
-erasure never strikes bytes a team context holds and never empties team-homed blob rows. In
+Person erasure — a subject's right to be forgotten — is bounded where the team's corpus begins: it
+never strikes bytes a team context holds and never empties team-homed blob rows. In
 team contexts the erasure breaks *attribution* (the pseudonym break), not the bytes. The
 delete act above is the ordinary, custodian-driven counterpart: it operates wherever custody
 resolves, including team homes through the owner role. The bound has a mirror side: content
@@ -66,6 +69,10 @@ including file rows guests uploaded there under a grant; a struck row's bytes re
 when no live record carries its hash.
 Both lines, and the terms of use they carry, are in
 [Erasure and the terms of use](./erasure-and-terms-of-use.md).
+
+Resource erasure has no such bound. It is remediation: the operator acts on one resource wherever
+it is homed, and a related blob the operator lists is struck whether a team or a person homes it.
+The bytes still release only when no live record carries their hash.
 
 ## The bytes
 
@@ -91,6 +98,7 @@ render absent because the blob is gone, not because they were ended.
 
 ## Further reading
 
+- **The erasing acts and their vocabulary:** [Erasure acts](./erasure-acts.md).
 - **Teams and the role ladder:** [Teams and roles](./teams-and-roles.md).
 - **The context model blobs are homed in:** [Contexts and Refs](./contexts-and-refs.md).
 - **The CLI commands:** [Blob reference](../reference/cli/blob.md).

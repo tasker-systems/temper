@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ResourceScrubbed",
-  "description": "`resource_scrubbed` — the field scrub (field-grain scrub spec S1, S4): every prior value of a\nresource's title, origin URI or one property family (or every family's prior history) redacted\nfrom the ledger and the projection, on a resource that survives. With `cleared`, today's value\nwas cleared too, by ordinary events appended before this one in the act's transaction.\n\nKeyed `subject_table` (`kb_resources`) / `subject_id`, never `resource_id`, and the family by\n`field.family`, never `event_id` (the D1 join-key rule). It never carries a top-level `owner`:\n`_resource_erasure_trail_scope` joins on `payload->'owner'->>'id'`. Paths only, never values or\nkey text: the record of a redaction must not carry what was redacted.",
+  "description": "`resource_scrubbed` — the field scrub (field-grain scrub spec S1, S4): every prior value of a\nresource's title, origin URI or one property family (or every family's prior history) redacted\nfrom the ledger and the projection, on a resource that survives. The act is field-grain\ndespite the event's name: it never scrubs a whole resource, and never touches a block. With\n`cleared`, today's value was cleared too, by ordinary events appended before this one in the\nact's transaction.\n\nKeyed `subject_table` (`kb_resources`) / `subject_id`, never `resource_id`, and the family by\n`field.family`, never `event_id` (the D1 join-key rule). It never carries a top-level `owner`:\n`_resource_erasure_trail_scope` joins on `payload->'owner'->>'id'`. Paths only, never values or\nkey text: the record of a redaction must not carry what was redacted.",
   "type": "object",
   "properties": {
     "actor": {
