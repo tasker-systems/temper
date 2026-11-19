@@ -13,9 +13,9 @@ use temper_core::types::ids::{DataArtifactId, ProfileId, ResourceId};
 use temper_services::backend::artifact_ask_read;
 use temper_services::backend::substrate_read::ArtifactPageFilter;
 use temper_services::backend::DbBackend;
+use temper_services::commands::CommitDataArtifact;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
-use temper_workflow::operations::CommitDataArtifact;
 
 /// List artifacts for a resource, or counts with counts=true
 ///

@@ -1,8 +1,9 @@
 use super::*;
 use crate::backend::DbBackend;
+use crate::commands::MaterializeOnThreshold;
 use sqlx::PgPool;
 use temper_core::error::TemperError;
-use temper_workflow::operations::{MaterializeOnThreshold, Surface};
+use temper_workflow::operations::Surface;
 
 /// A minimal cogmap graph: a member profile (in the team joined to the cogmap), an outsider (no
 /// access), the cogmap, and an emitter entity for synthesizing map-anchored events.

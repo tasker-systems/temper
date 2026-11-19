@@ -19,7 +19,8 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use temper_services::backend::{substrate_read, DbBackend};
-use temper_workflow::operations::{CreateResource, ShowResource, Surface};
+use temper_services::commands::{CreateResource, ShowResource};
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::ResourceListParams;
 

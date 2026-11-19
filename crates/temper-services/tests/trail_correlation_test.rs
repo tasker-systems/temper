@@ -16,12 +16,13 @@ use temper_core::types::element_trail::ElementKind;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reblock::ReblockScope;
 use temper_services::backend::DbBackend;
+use temper_services::commands::ReblockResources;
 use temper_services::services::event_service;
 use temper_substrate::content::{prepare_block_from_chunks, IncomingChunk};
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{EntityId, ProfileId as SubstrateProfileId};
 use temper_substrate::payloads::AnchorRef;
-use temper_workflow::operations::{ReblockResources, Surface};
+use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
 // ── fixtures (duplicated per file, per this suite's convention) ─────────────────────────────

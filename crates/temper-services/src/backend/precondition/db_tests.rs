@@ -4,10 +4,11 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::commands::CreateResource;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
-use temper_workflow::operations::{CreateResource, Surface};
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 use super::*;

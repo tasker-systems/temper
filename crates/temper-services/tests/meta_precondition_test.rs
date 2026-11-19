@@ -18,11 +18,12 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_core::types::precondition::{MetaExpect, PreconditionFailure, PreconditionTier};
 use temper_services::backend::{substrate_read, DbBackend};
+use temper_services::commands::{CreateResource, ShowResource, UpdateResource};
 use temper_services::services::field_scrub_service::{
     execute_field_scrub, list_field_scrub_families, FieldScrubOutcome, FieldScrubRequest,
 };
 use temper_services::test_support;
-use temper_workflow::operations::{CreateResource, ShowResource, Surface, UpdateResource};
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 use uuid::Uuid;
 
@@ -1090,7 +1091,7 @@ async fn a_guarded_goal_clear_on_a_goalless_resource_is_judged_and_records_nothi
     let be = backend(&pool, owner);
     let clear_goal = |guard: Value| UpdateResource {
         open_meta: None,
-        goal: Some(temper_workflow::operations::GoalPatch::Clear),
+        goal: Some(temper_services::commands::GoalPatch::Clear),
         ..patch_open(resource, json!({}), Some(expect(guard)))
     };
 

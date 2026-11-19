@@ -20,7 +20,8 @@ use temper_core::types::ids::{ContextId, ProfileId};
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use temper_core::types::resource_view::{ResourceSection, SectionSet};
 use temper_services::backend::{substrate_read, DbBackend};
-use temper_workflow::operations::{CreateResource, Surface};
+use temper_services::commands::CreateResource;
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 

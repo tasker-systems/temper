@@ -16,10 +16,11 @@ use temper_core::types::cognitive_maps::{
 use temper_core::types::context::ShareContextRequest;
 use temper_core::types::ids::ProfileId;
 use temper_services::backend::DbBackend;
+use temper_services::commands::CreateCognitiveMap;
 use temper_services::error::ApiError;
 use temper_services::services::{access_service, cogmap_service, context_service};
 use temper_services::test_support;
-use temper_workflow::operations::{CreateCognitiveMap, Surface};
+use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
 async fn person(pool: &PgPool, handle: &str) -> Uuid {

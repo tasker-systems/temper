@@ -11,7 +11,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::types::managed_meta::ManagedMeta;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::data_artifact::KindOwnerInput;
 use temper_core::types::home::HomeAnchor;
@@ -20,11 +19,10 @@ use temper_core::types::ids::{
 };
 use temper_core::types::property_owner::PropertyOwner;
 use temper_core::types::provenance::ProvenanceSource;
+use temper_workflow::operations::Surface;
+use temper_workflow::types::managed_meta::ManagedMeta;
 
-use super::{
-    inputs::{BodyUpdate, ListFilter, SearchQuery},
-    surface::Surface,
-};
+use super::inputs::{BodyUpdate, ListFilter, SearchQuery};
 
 /// Create a new resource. The resource's identity is specified directly
 /// (not via a `ResourceId`) since it doesn't exist yet.

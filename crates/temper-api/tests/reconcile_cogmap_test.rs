@@ -22,7 +22,8 @@ use temper_core::types::reconcile::{
     ReconcileCogmapRequest, ReconcileEdge, ReconcileEntry, ReconcileTombstone,
 };
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{ReconcileCognitiveMap, Surface};
+use temper_services::commands::ReconcileCognitiveMap;
+use temper_workflow::operations::Surface;
 
 const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
 
@@ -923,7 +924,7 @@ async fn a_fully_erased_re_delivery_converges_as_unchanged(pool: PgPool) {
 /// grant is the only grant on it. Returns its id.
 async fn ordinary_map(pool: &PgPool) -> Uuid {
     let be = backend(pool).await;
-    be.create_cognitive_map(temper_workflow::operations::CreateCognitiveMap {
+    be.create_cognitive_map(temper_services::commands::CreateCognitiveMap {
         request: temper_core::types::reconcile::CreateCogmapRequest {
             cogmap_id: None,
             telos_resource_id: None,

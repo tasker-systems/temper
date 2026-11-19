@@ -13,7 +13,8 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_core::types::ingest::{pack_chunks, AppendBlockPayload, FinalizePayload, PackedChunk};
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{CreateResource, Surface};
+use temper_services::commands::CreateResource;
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Seed a substrate profile + a profile-owned `temper` context (the minimum the write path's
@@ -90,7 +91,7 @@ async fn seed_resource_with_body(
     slug: &str,
     body: &str,
 ) -> (DbBackend, temper_core::types::ids::ResourceId) {
-    use temper_workflow::operations::BodyUpdate;
+    use temper_services::commands::BodyUpdate;
     let (profile, context) = seed_profile_with_context(pool, email).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
     // A SEGMENTED begin: an append lands on an in-progress resource. A plain one-shot create of a
@@ -225,7 +226,7 @@ async fn begin_segmented_ingest_lands_block_zero_and_records_the_source(pool: Pg
                 doctype: "research".to_string(),
                 home: HomeAnchor::Context(ContextId::from(context)),
                 title: "ZZ begin probe".to_string(),
-                body: Some(temper_workflow::operations::BodyUpdate {
+                body: Some(temper_services::commands::BodyUpdate {
                     content: "first segment".to_string(),
                     content_hash: None,
                     chunks_packed: Some(one_chunk_packed("first segment", "aa")),

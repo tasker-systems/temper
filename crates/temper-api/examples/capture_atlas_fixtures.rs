@@ -66,10 +66,11 @@ use temper_core::types::graph_territory::TerritoryOverview;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_core::types::resource_view::ResourceView;
 use temper_services::backend::DbBackend;
+use temper_services::commands::ShowResource;
 use temper_services::services::context_graph_service::{self, ResidualMemberQuery};
 use temper_services::services::context_service::resolve_context_ref;
 use temper_services::services::{event_service, graph_service};
-use temper_workflow::operations::{ShowResource, Surface};
+use temper_workflow::operations::Surface;
 
 // ── Handler-mirrored constants ─────────────────────────────────────────────────────────────────
 // These are the surface defaults, not new choices. `graph.rs` holds the originals; a divergence

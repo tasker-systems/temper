@@ -29,10 +29,11 @@ use temper_core::types::ids::{BlockId, CogmapId, EntityId, ProfileId, ResourceId
 use temper_core::types::provenance::ProvenanceSource;
 use temper_services::auth::Caller;
 use temper_services::backend::DbBackend;
+use temper_services::commands::RecordCitationAudit;
 use temper_substrate::payloads::{AnchorRef, Incorporation};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{self, AppendParams, CreateMode, CreateParams, FinalizeParams};
-use temper_workflow::operations::{RecordCitationAudit, Surface};
+use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
 const SECTION_A: &str = "# Alpha\n\nAlpha body paragraph.\n";
@@ -260,7 +261,7 @@ async fn seed_auditor_job(pool: &PgPool, auditor_profile: ProfileId) -> CogmapId
 /// either spelling from widening or demoting the gate's answer for this caller.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn proof_holding_and_bare_spellings_complete_the_same_auditor_job(pool: sqlx::PgPool) {
-    use temper_workflow::operations::CompleteAuditorJob;
+    use temper_services::commands::CompleteAuditorJob;
 
     bootseed::seed_system(&pool).await.unwrap();
     let auditor = seeded_authed(&pool, "routing-job-auditor").await;
