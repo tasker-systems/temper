@@ -1,0 +1,29 @@
+title    = "A server BAD_REQUEST reaches the CLI as `bad-request`, with the server's sentence"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+Behavioral: temper-client now types a 400 whose body carries code `BAD_REQUEST` and a message as
+`ClientError::BadRequest`, and the CLI's lifter (`client_err_to_temper`) lifts it to
+`TemperError::BadRequest`. Every command that relays such a refusal changes its stdout error
+payload.
+
+Before: code `api`, message `API error: server error (400): Bad request: <cause>`. After: code
+`bad-request`, message `Bad request: <cause>`, the HTTP door's sentence exactly. The exit code is 1
+before and after.
+
+Unchanged: a 400 the client cannot read as a `BAD_REQUEST` refusal (a body that is not the error
+envelope, no code, no message, or a 400 code no arm owns, such as `PRECONDITION_NOT_HONOURED`)
+still reads `api`. The 400 codes with typed arms keep their mapping: `PLAN_REFUSED`,
+`UNREADABLE_PLAN` and `DATA_ARTIFACT_REFUSAL`. The MCP door answers as before: every tool mapper
+that matched an untyped 400 also matches the new variant.
+
+Additive (clients): temperkb-client's `ClientError` (`#[non_exhaustive]`) gains `BadRequest {
+message }`. Behavioral (clients): a readable `BAD_REQUEST` that arrived as `Server { status: 400 }`
+now arrives as `BadRequest`, so a Rust consumer that matched the former for an ordinary caller error
+must also match the latter.
+
+Observed by CLI callers that branch on the error payload's `code`, and by Rust consumers of
+temperkb-client. No HTTP, MCP-tool or schema change.
+'''
