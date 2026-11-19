@@ -1,0 +1,15 @@
+title    = "The person-erasure survey says redacted_hashes means rows emptied by hash, never a ledger rewrite"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "clients"]
+status   = "signal-only"
+body = '''
+The description of `redacted_hashes` on the person-erasure survey answer
+(`POST /api/admin/erasure/survey`) now says what the set is: the content hashes whose projection
+rows the act would empty by hash. It names no ledger rewrite. The text moved in openapi.json and
+in the generated Ruby, TypeScript and Python SDKs.
+
+What the server does is unchanged, and so is every request and answer shape. Only description
+text moved, so a client on either side of the change sees the same behaviour. Release relevance:
+signal-only.
+'''
