@@ -50,14 +50,17 @@ determination. In one server-side transaction it:
 
 - Erases everything homed in the subject's **estate**: their own personal (`@me`) contexts
   **and their personal team's contexts** — **whoever authored or uploaded it**. Each
-  resource there goes through the same act that erases a single resource: its text,
+  resource there, except a cognitive map's charter, goes through the same act that erases a
+  single [resource](./resource-erasure.md): its text,
   structured content, embeddings, search data, title, origin, properties and history are
   emptied or replaced by placeholders, in the projections **and in the event ledger**, and
   it remains only as a **husk**, an empty record marked erased. Every relationship touching
   it is ended and its label cleared, including relationships from a team's content into the
   estate.
   Content a guest wrote there under line 2 dies with it, files included; the bytes are
-  released only when no live record carries the same content hash.
+  released only when no live record carries the same content hash. A charter's text is
+  emptied, and the charter is held, not erased, until map-grain erasure exists; the record
+  lists it.
 - Removes the subject's identity fields: handle, display name, email, linked provider
   identifiers. The profile is then **tombstoned**: its id stays, as a pseudonym.
   Attribution to them anywhere else breaks because their profile stops resolving to a

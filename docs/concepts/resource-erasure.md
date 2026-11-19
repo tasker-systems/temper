@@ -33,8 +33,10 @@ acting on the resource, not on a person, so no team boundary applies.
 ## What it erases
 
 The resource becomes a **husk**: the row stays, marked erased, with placeholder title and origin.
-A husk answers `410 Gone` to those who could have read it in full, and the same not-found an
-unknown id gets to everyone else. Nothing can write to it afterwards.
+A husk answers `410 Gone` to those who held it directly: the owner of its home, or a holder of a
+read grant on the resource itself. Everyone else, including those who read it only through its
+context or a cognitive map, gets the same not-found an unknown id gets. Nothing can write to it
+afterwards.
 
 In one transaction the act empties, or replaces with placeholders:
 
@@ -45,7 +47,8 @@ In one transaction the act empties, or replaces with placeholders:
 - every relationship touching it, whoever authored it: each is folded and its label cleared;
 - citation-audit reasons on its blocks, the remote sources its blocks cite, its ingestion record
   and its workflow jobs;
-- its share of derived vectors in its current home's regions and telos snapshot.
+- derived vectors: every region holding the resource is recomputed without it, or zeroed if the
+  region is folded, and its current home context's telos snapshot is cleared.
 
 **The ledger is rewritten too.** Every event in the resource's trail has its copies of that text
 replaced by placeholders, agent reasoning included, so replaying the ledger cannot bring the

@@ -26,9 +26,9 @@ and `POST /api/admin/resources/field-scrub`. No request, answer or record carrie
 value. The act is refused for an erased resource and for a cognitive map's charter.
 
 **Today's value is kept by default.** Only the values the field held before are redacted. When
-today's value is part of the leak, `--clear` replaces it first, with a placeholder title or
-origin, or by unsetting the family, through ordinary events, and then redacts every value the
-field held. `--field properties` cannot be cleared.
+today's value is part of the leak, `--clear` replaces it first, through ordinary events: a
+placeholder title or origin, or the family unset. A resource always has a type, so its type family
+gets a placeholder value instead. Then the act redacts every value the field held. `--field properties` cannot be cleared.
 
 ## What it changes
 

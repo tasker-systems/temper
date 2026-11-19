@@ -29,13 +29,15 @@ show, wherever the act's reach includes the ledger.
 
 | Act | Command | Purpose | Unit | The resource afterwards |
 |---|---|---|---|---|
-| [Person erasure](./erasure-and-terms-of-use.md) | `temper admin erasure principal` | (a) | a person and their own contexts | each resource in their contexts is erased by resource erasure |
+| [Person erasure](./erasure-and-terms-of-use.md) | `temper admin erasure principal` | (a) | a person and their own contexts | each resource in their contexts is erased by resource erasure, except a map's charter |
 | [Resource erasure](./resource-erasure.md) | `temper admin erasure resource` | (b), the whole resource | one resource | a husk |
 | [Block history scrub](./block-erasure-and-history-scrub.md) | `temper admin erasure block-history` | (b), one block | the history of named blocks | live; each live block keeps its current text |
 | [Field scrub](./field-scrub.md) | `temper admin erasure field` | (b), metadata only | the history of one field | live; today's value kept unless `--clear` |
 
 Person erasure is built on resource erasure: the same act runs over every resource in the
-person's own contexts, and the person act adds the identity steps and the pseudonym break.
+person's own contexts, and the person act adds the identity steps and the pseudonym break. The
+one exception is a cognitive map's charter: its text is emptied, and it is held, not erased, until
+map-grain erasure exists. The record lists it among the charters held.
 
 These are **not** erasure, and none of them removes content from the ledger:
 
@@ -59,8 +61,9 @@ records a whole-resource scrub, and never a block.
 
 **Husk** means a resource with `erased_at` set. Only resource erasure makes one, whether an
 operator runs it on one resource or person erasure runs it across an estate. A husk answers
-`410 Gone` to those who could have read it in full, and the same not-found an unknown id gets to
-everyone else.
+`410 Gone` to those who held it directly: the owner of its home, or a holder of a read grant on
+the resource itself. Everyone else, including those who read it only through its context or a
+cognitive map, gets the same not-found an unknown id gets.
 
 **Soft-deleted** means a resource deleted the ordinary way: it stops reading as live, and its
 content and its ledger history stay. A soft-deleted resource is not a husk. It can be erased, and
@@ -71,8 +74,8 @@ id stays, as the pseudonym, and its identifiers are gone.
 
 **Redact** means rewriting paths on the ledger to placeholders. A record's `redacted_fields`
 lists the paths an act rewrote. The one exception is the person erasure record's
-`redacted_hashes`: it lists content hashes whose rows the act **emptied by hash**, and names no
-ledger rewrite.
+`redacted_hashes`: it lists content hashes whose rows the act **emptied by hash**, such as a
+held charter's text, and names no ledger rewrite.
 
 **Empty** means a content row's text set to empty (or `{}` for structured content), with the row
 kept. For a blob it means its pathname, type and bytes are gone.
