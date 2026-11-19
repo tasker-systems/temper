@@ -570,9 +570,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         .map(|raw| parse_open_meta_flag("--open-meta", raw))
         .transpose()?;
     if let Some(om) = &open_meta_value {
-        for warning in temper_workflow::schema::check_discouraged_open_meta_keys(om) {
-            output::warning(&warning.message);
-        }
+        warn_discouraged_open_meta_keys(om);
     }
 
     // Resolve --sources refs → provenance records for the body block. A ref that fails to parse is
@@ -2280,37 +2278,17 @@ pub fn citation_audits(r#ref: &str, format: crate::format::OutputFormat) -> Resu
     })
 }
 
-/// Send-side gate for the open (caller-defined) frontmatter tier (create + update), the twin of the
-/// server's `validate_open_meta_shape` (symmetric defense — both ends inject/validate from the same
-/// schema so a mis-shaped recognized key never reaches storage). Hard-errors on a recognized key
-/// carrying the wrong shape (e.g. `descriptor: 42`, a malformed `date`) — for the FTS-indexed keys a
-/// wrong shape stores-but-does-not-index, a silent search miss. Unrecognized keys always pass (the tier
-/// is open), so version skew never hard-fails. Discouraged keys (bare `slug`/`title`, whose canonical
-/// home is `temper-slug`/`temper-title`) surface as a non-blocking stderr warning — the write proceeds.
-fn validate_open_meta_send_side(open_meta: &serde_json::Value) -> Result<()> {
-    let issues = temper_workflow::schema::validate_open_meta(open_meta)?;
-    if !issues.is_empty() {
-        let detail = issues
-            .iter()
-            .map(|i| {
-                let where_ = if i.path.is_empty() {
-                    "open_meta"
-                } else {
-                    &i.path
-                };
-                format!("{where_}: {}", i.message)
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(TemperError::BadRequest(format!(
-            "invalid --open-meta shape: {detail}. Run `temper resource describe-open-meta` for the \
-             recognized conventions"
-        )));
-    }
+/// The CLI's one open-tier check: discouraged keys (bare `slug`/`title`, whose canonical home is the
+/// managed identity fields) surface as a non-blocking stderr warning, and the write proceeds.
+///
+/// It is advice, never enforcement. Shape is the server's to refuse (ruling R8: the server is the
+/// only enforcing copy of request shaping): `DbBackend`'s `validate_open_meta_shape` refuses a
+/// recognized key carrying the wrong shape on create, on update's SET half and on the
+/// `open_meta_add` union, and the CLI renders that refusal as it renders any other.
+fn warn_discouraged_open_meta_keys(open_meta: &serde_json::Value) {
     for warning in temper_workflow::schema::check_discouraged_open_meta_keys(open_meta) {
         output::warning(&warning.message);
     }
-    Ok(())
 }
 
 /// The update surface's REPLACE channel: the explicit `--open-meta` JSON object.
@@ -2329,17 +2307,16 @@ fn build_open_meta_for_update(params: &UpdateParams<'_>) -> Result<Option<serde_
         return Ok(None);
     };
     let parsed = parse_open_meta_flag("--open-meta", raw)?;
-    // Shape hard-error + discouraged-key warning, send-side; the server re-enforces it.
-    // The gate runs on the SET half only: a null value is the delete verb, not a value,
-    // so a recognized key deleted via null (e.g. {"tags":null}) must not fail the
-    // "tags must be an array" check. The verbs ride the wire intact for the server to fold.
-    validate_open_meta_send_side(&strip_open_meta_nulls(&parsed))?;
+    // The discouraged-key warning reads the SET half only: a null value is the delete verb, so
+    // deleting a bare `slug` must not warn about writing one. The verbs ride the wire intact for
+    // the server to fold, and shape is the server's to refuse.
+    warn_discouraged_open_meta_keys(&strip_open_meta_nulls(&parsed));
     Ok(Some(parsed))
 }
 
 /// The SET half of an open_meta object: the null-valued entries (the delete verbs)
-/// removed, the rest in stored order. A non-object passes through untouched — the shape
-/// gate refuses it at the root path.
+/// removed, the rest in stored order, for the discouraged-key warning to read. A non-object
+/// passes through untouched; the server refuses it.
 fn strip_open_meta_nulls(parsed: &serde_json::Value) -> serde_json::Value {
     match parsed.as_object() {
         Some(obj) => serde_json::Value::Object(
@@ -2369,8 +2346,9 @@ fn strip_open_meta_nulls(parsed: &serde_json::Value) -> serde_json::Value {
 ///
 /// Both inputs feed the single `open_meta_add` wire field, so where they name the same key
 /// the two sets UNION — the channel's own semantics applied to its own two doors, and the
-/// server unions over the stored value on top of that. Validation runs once, on the merged
-/// object, so a discouraged key named by both warns once rather than twice.
+/// server unions over the stored value on top of that. The discouraged-key warning runs once, on
+/// the merged object, so a key named by both warns once rather than twice. Shape is the server's
+/// to judge, on the union it resolves.
 ///
 /// Returns `None` when neither door was used, so a frontmatter-only update PATCHes nothing
 /// on the open tier.
@@ -2383,7 +2361,7 @@ fn build_open_meta_add_for_update(params: &UpdateParams<'_>) -> Result<Option<se
     let Some(merged) = union_open_meta_patches(named, generic) else {
         return Ok(None);
     };
-    validate_open_meta_send_side(&merged)?;
+    warn_discouraged_open_meta_keys(&merged);
     Ok(Some(merged))
 }
 
@@ -3375,41 +3353,18 @@ mod build_helpers_tests {
         assert_eq!(v.get("n"), Some(&serde_json::json!(1)));
     }
 
+    /// The CLI does not judge open-tier shape on update: a mis-shaped recognized key rides the
+    /// wire as typed, for the server's `validate_open_meta_shape` to refuse (ruling R8). The
+    /// refusal itself is witnessed through the binary in the e2e suite
+    /// (`open_meta_shape_refusal_doors_test`).
     #[test]
-    fn validate_open_meta_send_side_passes_wellshaped_and_unknown_keys() {
-        // Recognized keys with correct shapes + an unknown key (open tier stays open) all pass.
-        let om = serde_json::json!({
-            "tags": ["release", "infra"],
-            "descriptor": "the full section descriptor",
-            "date": "2026-07-11",
-            "some_future_convention": {"nested": true}
-        });
-        assert!(validate_open_meta_send_side(&om).is_ok());
-    }
-
-    #[test]
-    fn validate_open_meta_send_side_hard_errors_on_misshaped_recognized_key() {
-        // descriptor must be a string; a number is a shape violation → hard error.
-        assert!(validate_open_meta_send_side(&serde_json::json!({"descriptor": 42})).is_err());
-        // date must match YYYY-MM-DD.
-        assert!(validate_open_meta_send_side(&serde_json::json!({"date": "July 11"})).is_err());
-        // tags items must be strings.
-        assert!(validate_open_meta_send_side(&serde_json::json!({"tags": [1, 2]})).is_err());
-    }
-
-    #[test]
-    fn validate_open_meta_send_side_warns_but_passes_on_discouraged_keys() {
-        // A bare `slug` is discouraged (canonical home is temper-slug) but not a shape error, so the
-        // write proceeds (warning goes to stderr).
-        assert!(validate_open_meta_send_side(&serde_json::json!({"slug": "my-thing"})).is_ok());
-    }
-
-    #[test]
-    fn build_open_meta_for_update_rejects_misshaped_merged_open_meta() {
-        // A mis-shaped recognized key in the --open-meta blob is caught at merge time.
+    fn a_misshaped_recognized_key_rides_the_update_wire_unjudged() {
         let mut params = empty_update_params("foo");
         params.open_meta = Some(r#"{"descriptor": 42}"#);
-        assert!(build_open_meta_for_update(&params).is_err());
+        assert_eq!(
+            build_open_meta_for_update(&params).expect("the CLI does not refuse shape"),
+            Some(serde_json::json!({"descriptor": 42}))
+        );
     }
 
     #[test]
@@ -3422,17 +3377,16 @@ mod build_helpers_tests {
     }
 
     #[test]
-    fn a_null_valued_key_passes_the_update_send_side_gate_as_a_delete_verb() {
-        // {"tags":null} on UPDATE is the delete verb, not a non-array value — the shape
-        // gate must judge the SET half, so the recognized-key check cannot refuse it,
-        // and the verb rides the wire intact for the server to fold.
+    fn a_null_valued_key_rides_the_update_wire_as_a_delete_verb() {
+        // {"tags":null} on UPDATE is the delete verb, not a non-array value: it rides the
+        // wire intact for the server to fold.
         let mut params = empty_update_params("foo");
         params.open_meta = Some(r#"{"tags":null}"#);
-        let built = build_open_meta_for_update(&params).expect("delete verb passes the gate");
+        let built = build_open_meta_for_update(&params).expect("the delete verb is sent");
         assert_eq!(
             built,
             Some(serde_json::json!({"tags": null})),
-            "the verb rides the wire intact, un-refused by the recognized-key shape check"
+            "the verb rides the wire intact"
         );
     }
 
@@ -3448,7 +3402,7 @@ mod build_helpers_tests {
             serde_json::json!({ "marker": "keep" }),
             "nulls dropped, set values kept in order"
         );
-        // A non-object passes through for the shape gate to refuse at the root.
+        // A non-object passes through untouched.
         assert_eq!(
             strip_open_meta_nulls(&serde_json::json!("[1]")),
             serde_json::json!("[1]")
@@ -3627,13 +3581,16 @@ mod build_helpers_tests {
         );
     }
 
-    /// The send-side shape gate covers the generic door too — it runs on the MERGED patch,
-    /// so a key arriving that way is held to the same schema as one arriving by flag.
+    /// The add channel does not judge shape either: the server shape-gates the union it
+    /// resolves, so a mis-shaped recognized key arriving by the generic door is sent as typed.
     #[test]
-    fn build_open_meta_add_rejects_a_misshaped_recognized_key() {
+    fn a_misshaped_recognized_key_rides_the_add_wire_unjudged() {
         let mut params = empty_update_params("foo");
         params.open_meta_add = Some(r#"{"tags":[1,2]}"#);
-        assert!(build_open_meta_add_for_update(&params).is_err());
+        assert_eq!(
+            build_open_meta_add_for_update(&params).expect("the CLI does not refuse shape"),
+            Some(serde_json::json!({"tags": [1, 2]}))
+        );
     }
 
     #[test]
