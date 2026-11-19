@@ -539,8 +539,8 @@ pub struct ResourceUpdateRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clear_goal: Option<bool>,
     /// Block-provenance sources this body was distilled from — recorded against the
-    /// resource's body block, position → accretion `seq`. Resource refs only in T7b;
-    /// URL/`remote` sources are T7c.
+    /// resource's body block, position → accretion `seq`. Sent without `content`, they are
+    /// refused with 400: there is no body revise to attribute.
     ///
     /// `ts(skip)`-ped: `ProvenanceSource` is a `{kind,value}`-tagged enum with no ts-rs
     /// `export_to`, and the SvelteKit UI never sends provenance (this is a CLI/agent
@@ -553,6 +553,8 @@ pub struct ResourceUpdateRequest {
     /// Which content block the body revise + `sources` target. `None` → the resource's sole
     /// non-folded body block (today's default); `Some(id)` addresses that block explicitly (must
     /// belong to the resource and be non-folded). Also the escape hatch for a multi-block resource.
+    /// Sent without `content`, it is refused with 400, as `sources` is: there is no body revise to
+    /// address.
     ///
     /// `ts(skip)`-ped for the same reason as `sources`/`act`: per-block addressing is a CLI/agent
     /// write path the SvelteKit UI never exercises, so the generated TS omits it.

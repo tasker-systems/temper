@@ -44,14 +44,14 @@ class IngestPayload(BaseModel):
     context_ref: StrictStr = Field(description="Context **ref** (UUID or `@owner/slug`), resolved server-side. Bare names (no `@` prefix, not a UUID) are rejected with 400.")
     doc_type_name: StrictStr
     goal: Optional[UUID] = Field(default=None, description="First-class goal link: the resolved `ResourceId` (as UUID) of the goal this resource advances. The CLI/MCP resolve the caller's `--goal <ref>` client-side (trailing-UUID-only); the ingest handler projects it to a live `advances`→goal edge (`EdgeKind::LeadsTo`, `label=\"advances\"`) after create. `None` = no goal.")
-    home_cogmap_id: Optional[UUID] = Field(default=None, description="When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`) and `context_ref` is ignored. Resolved client-side (cogmap refs are trailing-UUID-only).")
+    home_cogmap_id: Optional[UUID] = Field(default=None, description="When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`), and `context_ref` must be empty: a payload naming both homes is refused with 400. Resolved client-side (cogmap refs are trailing-UUID-only).")
     idempotency_key: Optional[UUID] = Field(default=None, description="Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by convention): a retried create carrying the same key converges on the already-committed resource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary, non-idempotent create. The server mints the resource id; the key never supplies one.")
     managed_meta: Optional[Any] = None
     metadata: Optional[Any] = None
     open_meta: Optional[Any] = None
     origin_uri: StrictStr
     segmented: Optional[SegmentedBegin] = Field(default=None, description="When set, this create is the **begin** of a segmented (multi-block) ingest: `content` carries only segment 0's text, and the ingest handler returns a [`SegmentedBeginResponse`] instead of the one-shot `ResourceView`. `None` (the default) is the unchanged one-shot path — every existing small-body caller is unaffected.")
-    sources: Optional[List[ProvenanceSource]] = Field(default=None, description="Block-provenance sources this body was distilled from — recorded against the created resource's body block, position → accretion `seq`. Resource refs only in T7b; URL/`remote` sources are T7c.")
+    sources: Optional[List[ProvenanceSource]] = Field(default=None, description="Block-provenance sources this body was distilled from — recorded against the created resource's body block, position → accretion `seq`. Sent with an empty `content`, they are refused with 400: an empty body is no body, so there is no block to attribute.")
     title: StrictStr
     __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "chunks_packed", "content", "content_hash", "context_ref", "doc_type_name", "goal", "home_cogmap_id", "idempotency_key", "managed_meta", "metadata", "open_meta", "origin_uri", "segmented", "sources", "title"]
 

@@ -583,6 +583,13 @@ fn open_meta_add_properties(
     Ok(out)
 }
 
+/// Refuse an empty doc-type name by name. Any non-empty name is accepted: an unrecognized one is
+/// an open-tail type with no schema.
+fn require_doc_type(doc_type: &str) -> Result<(), TemperError> {
+    temper_workflow::operations::validate_doctype(doc_type)
+        .map_err(|e| TemperError::BadRequest(e.to_string()))
+}
+
 /// Parameters for [`validate_managed_meta_pipeline`] — the shared create/update validation gate.
 struct ManagedValidationParams<'a> {
     /// The caller-supplied managed_meta as a JSON value (pre-strip).
@@ -2696,6 +2703,9 @@ impl DbBackend {
         ingestion: Option<IngestionSource<'_>>,
     ) -> Result<ResourceId, TemperError> {
         let segmented = ingestion.is_some();
+        // A doc type is a free string (an unrecognized one is an open-tail type), but never an
+        // empty one: refused here, before any read, on every door that creates.
+        require_doc_type(&cmd.doctype)?;
         // Resolve the caller's synthesized identity (natural-key).
         // `cmd.home` is a pre-resolved HomeAnchor — surfaces parse+resolve the ref
         // before building the command, so no `writes::resolve_context` call is needed here.
@@ -3024,6 +3034,10 @@ impl DbBackend {
         // The inbound id IS the substrate resource id (native-id addressing — synthesis carries
         // resource ids verbatim, so no origin_uri remap).
         let new_id = uuid::Uuid::from(cmd.resource);
+        // A conversion takes any doc-type name, as create does, but never an empty one.
+        if let Some(type_to) = cmd.move_to.as_ref().and_then(|m| m.type_to.as_deref()) {
+            require_doc_type(type_to)?;
+        }
         // Auth before any write (WS2): the caller must be able to modify this resource. This is
         // the write floor's pool-side fast-fail (`modify_floor_fast_fail`), kept because the door
         // reads the resource before its transaction opens — `native_resource_identity` and

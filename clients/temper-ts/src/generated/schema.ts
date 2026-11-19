@@ -7855,8 +7855,9 @@ export interface components {
             goal?: string | null;
             /**
              * Format: uuid
-             * @description When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`)
-             *     and `context_ref` is ignored. Resolved client-side (cogmap refs are trailing-UUID-only).
+             * @description When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`), and
+             *     `context_ref` must be empty: a payload naming both homes is refused with 400. Resolved
+             *     client-side (cogmap refs are trailing-UUID-only).
              */
             home_cogmap_id?: string | null;
             /**
@@ -7876,8 +7877,8 @@ export interface components {
             segmented?: components["schemas"]["SegmentedBegin"] | null;
             /**
              * @description Block-provenance sources this body was distilled from — recorded against the
-             *     created resource's body block, position → accretion `seq`. Resource refs only
-             *     in T7b; URL/`remote` sources are T7c.
+             *     created resource's body block, position → accretion `seq`. Sent with an empty `content`,
+             *     they are refused with 400: an empty body is no body, so there is no block to attribute.
              */
             sources?: components["schemas"]["ProvenanceSource"][];
             title: string;
@@ -10772,6 +10773,8 @@ export interface components {
              * @description Which content block the body revise + `sources` target. `None` → the resource's sole
              *     non-folded body block (today's default); `Some(id)` addresses that block explicitly (must
              *     belong to the resource and be non-folded). Also the escape hatch for a multi-block resource.
+             *     Sent without `content`, it is refused with 400, as `sources` is: there is no body revise to
+             *     address.
              *
              *     `ts(skip)`-ped for the same reason as `sources`/`act`: per-block addressing is a CLI/agent
              *     write path the SvelteKit UI never exercises, so the generated TS omits it.
@@ -10821,8 +10824,8 @@ export interface components {
             open_meta_add?: unknown;
             /**
              * @description Block-provenance sources this body was distilled from — recorded against the
-             *     resource's body block, position → accretion `seq`. Resource refs only in T7b;
-             *     URL/`remote` sources are T7c.
+             *     resource's body block, position → accretion `seq`. Sent without `content`, they are
+             *     refused with 400: there is no body revise to attribute.
              *
              *     `ts(skip)`-ped: `ProvenanceSource` is a `{kind,value}`-tagged enum with no ts-rs
              *     `export_to`, and the SvelteKit UI never sends provenance (this is a CLI/agent

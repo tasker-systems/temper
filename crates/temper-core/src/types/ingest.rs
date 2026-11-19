@@ -19,8 +19,9 @@ pub struct IngestPayload {
     /// Context **ref** (UUID or `@owner/slug`), resolved server-side.
     /// Bare names (no `@` prefix, not a UUID) are rejected with 400.
     pub context_ref: String,
-    /// When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`)
-    /// and `context_ref` is ignored. Resolved client-side (cogmap refs are trailing-UUID-only).
+    /// When set, the resource is homed in this cognitive map (`anchor_table='kb_cogmaps'`), and
+    /// `context_ref` must be empty: a payload naming both homes is refused with 400. Resolved
+    /// client-side (cogmap refs are trailing-UUID-only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home_cogmap_id: Option<uuid::Uuid>,
     pub doc_type_name: String,
@@ -54,8 +55,8 @@ pub struct IngestPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunks_packed: Option<String>,
     /// Block-provenance sources this body was distilled from — recorded against the
-    /// created resource's body block, position → accretion `seq`. Resource refs only
-    /// in T7b; URL/`remote` sources are T7c.
+    /// created resource's body block, position → accretion `seq`. Sent with an empty `content`,
+    /// they are refused with 400: an empty body is no body, so there is no block to attribute.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<crate::types::provenance::ProvenanceSource>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship for the create act.
