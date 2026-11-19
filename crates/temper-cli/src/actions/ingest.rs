@@ -57,8 +57,7 @@ pub struct BodyChunks {
 
 /// Compute (content_hash, chunks_packed) from raw markdown without
 /// vault/manifest side effects. Single source of truth for chunk + hash
-/// extraction; used by `cmd_to_ingest_payload` (cloud create) and the
-/// update path in `actions/resource_write/shaping.rs`.
+/// extraction; used by the create and update writes in `actions/resource_write.rs`.
 #[cfg(feature = "embed")]
 pub fn compute_body_chunks(content: &str) -> Result<BodyChunks> {
     use temper_core::types::ingest::pack_chunks;
@@ -245,18 +244,14 @@ impl StageTiming {
     }
 }
 
-/// Parameters for [`run_segmented_create`], bundled per the >5-domain-params rule. Everything
-/// the segmented orchestration needs beyond the CLI's already-built `CreateResource` command:
-/// the client to dispatch through, the vault root for the resume manifest, the resolved
-/// context ref (the one `resource_write::create` takes; forwarded verbatim to the shaper,
-/// which empties it for a cogmap home exactly like the one-shot path), and the segment
-/// budget.
+/// Parameters for [`run_segmented_create`], bundled per the >5-domain-params rule: the client to
+/// dispatch through, the vault root for the resume manifest, the create as every door expresses
+/// it (its `content` is the whole body; segment 0 is cut from it here), and the segment budget.
 #[cfg(feature = "embed")]
 pub struct SegmentedCreateParams<'a> {
     pub client: &'a temper_client::TemperClient,
     pub vault_root: &'a std::path::Path,
-    pub cmd: &'a temper_workflow::operations::CreateResource,
-    pub context_ref: &'a str,
+    pub input: &'a temper_workflow::shaping::CreateInput,
     pub budget: usize,
 }
 
@@ -264,8 +259,7 @@ pub struct SegmentedCreateParams<'a> {
 #[cfg(feature = "embed")]
 struct BeginAttempt<'a> {
     client: &'a temper_client::TemperClient,
-    cmd: &'a temper_workflow::operations::CreateResource,
-    context_ref: &'a str,
+    input: &'a temper_workflow::shaping::CreateInput,
     /// Segment 0's raw text (the create-path body block).
     seg0_text: String,
     /// Segment 0's already-chunked `ChunkData`, embedded + packed inside the call.
@@ -274,7 +268,7 @@ struct BeginAttempt<'a> {
     total_segments: usize,
     budget: usize,
     source_hash: &'a str,
-    /// The key to send — the command's freshly-minted one on a fresh session, or the manifest's
+    /// The key to send — this attempt's freshly-minted one on a fresh session, or the manifest's
     /// PERSISTED one on a resume-replay (they can differ; the persisted one is what converges).
     key: uuid::Uuid,
 }
@@ -307,14 +301,14 @@ async fn begin_segmented_attempt(
         block_budget: p.budget as u32,
         source_hash: Some(p.source_hash.to_string()),
     };
-    let mut payload = crate::actions::resource_write::shaping::cmd_to_segmented_begin_payload(
-        p.cmd,
-        p.context_ref,
-        p.seg0_text,
-        chunks_packed,
-        segmented,
-    )?;
-    payload.idempotency_key = Some(p.key);
+    // Shaped exactly as MCP's segmented begin is; only the content is segment 0's, the key is
+    // this attempt's, and the chunks are the ones embedded just above.
+    let mut input = p.input.clone();
+    input.content = Some(p.seg0_text);
+    input.idempotency_key = Some(p.key);
+    let mut payload = temper_workflow::shaping::shape_segmented_begin(input, segmented)
+        .map_err(crate::actions::resource_write::shape_err)?;
+    payload.chunks_packed = Some(chunks_packed);
 
     let upload_start = std::time::Instant::now();
     let response = p
@@ -369,7 +363,7 @@ fn ended_ingest_error(
     )))
 }
 
-/// Stream a large body (`cmd.body` over `budget` bytes) through the segmented ingest
+/// Stream a large body (`input.content` over `budget` bytes) through the segmented ingest
 /// endpoints: segment 0 lands via `begin_segmented` (the create path), segments `1..N` via
 /// `append_block`, then `finalize`. Writes the `.temper/` resume manifest after every landed
 /// segment.
@@ -397,8 +391,7 @@ pub async fn run_segmented_create(
     let SegmentedCreateParams {
         client,
         vault_root,
-        cmd,
-        context_ref,
+        input,
         budget,
     } = params;
 
@@ -415,11 +408,7 @@ pub async fn run_segmented_create(
         c.fetch_add(d.as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
-    let content = cmd
-        .body
-        .as_ref()
-        .map(|b| b.content.as_str())
-        .unwrap_or_default();
+    let content = input.content.as_deref().unwrap_or_default();
     let source_hash = temper_core::hash::sha256_hex(content.as_bytes());
 
     let SegmentPlan {
@@ -439,10 +428,10 @@ pub async fn run_segmented_create(
         content.len() / 1024
     ));
 
-    // The client key for THIS attempt (issue #581 rung 3-C): the one `commands::resource` minted
-    // onto the command, with a defensive fresh mint if a caller ever built the command without one.
-    // A resume overrides it with the key the interrupted attempt persisted.
-    let attempt_key = cmd.idempotency_key.unwrap_or_else(uuid::Uuid::now_v7);
+    // The client key for THIS attempt (issue #581 rung 3-C): minted here, before begin, because the
+    // pending manifest records it first. A resume overrides it with the key the interrupted
+    // attempt persisted.
+    let attempt_key = input.idempotency_key.unwrap_or_else(uuid::Uuid::now_v7);
 
     let existing =
         crate::actions::ingest_manifest::find_resumable(vault_root, &source_hash, budget as u32)?;
@@ -474,8 +463,7 @@ pub async fn run_segmented_create(
                     );
                     let (response, embed_d, upload_d) = begin_segmented_attempt(BeginAttempt {
                         client,
-                        cmd,
-                        context_ref,
+                        input,
                         seg0_text: segments[0].text.clone(),
                         seg0_chunks: &chunked[0],
                         total_segments: segments.len(),
@@ -534,8 +522,7 @@ pub async fn run_segmented_create(
 
             let (response, embed_d, upload_d) = begin_segmented_attempt(BeginAttempt {
                 client,
-                cmd,
-                context_ref,
+                input,
                 seg0_text: segments[0].text.clone(),
                 seg0_chunks: &chunked[0],
                 total_segments: segments.len(),
@@ -636,7 +623,7 @@ pub async fn run_segmented_create(
             {
                 Ok(response) => response,
                 Err(e) => {
-                    return Err(ended_ingest_error(&e, &manifest_path, &cmd.title)
+                    return Err(ended_ingest_error(&e, &manifest_path, &input.title)
                         .unwrap_or_else(|| crate::actions::runtime::client_err_to_temper(e)))
                 }
             };
@@ -693,10 +680,10 @@ pub async fn run_segmented_create(
                 "upload integrity check failed for {:?}: {message}. The stored bytes do not match \
                  your source (corruption in transit or storage). The incomplete upload has been \
                  discarded — re-run the same command to retry with a fresh upload.",
-                cmd.title
+                input.title
             )));
         }
-        if let Some(ended) = ended_ingest_error(&e, &manifest_path, &cmd.title) {
+        if let Some(ended) = ended_ingest_error(&e, &manifest_path, &input.title) {
             return Err(ended);
         }
         return Err(crate::actions::runtime::client_err_to_temper(e));

@@ -149,17 +149,8 @@ pub fn extract_wikilinks(content: &str) -> Vec<String> {
     links
 }
 
-/// Slug generation from a title.
-///
-/// Delegates to the canonical [`temper_workflow::operations::sluggify`] — the one
-/// slug generator, shared with server-side create derivation and decorated-ref
-/// decoration. This is deliberate: the client-side `validate_create` slug check
-/// must use the *same* generator the request path validates against, so a
-/// title-derived slug can never pass here and be rejected server-side (or vice
-/// versa). It also inherits the NFKD ASCII transliteration (issue #320), so a
-/// title with superscript footnotes or accented letters slugs to valid ASCII
-/// rather than tripping the validator (the old local copy used Unicode-aware
-/// `char::is_alphanumeric`, which kept `⁷`/`é` and produced invalid slugs).
+/// Slug generation from a title: the canonical [`temper_workflow::operations::sluggify`], the one
+/// slug generator the server derives create slugs with too.
 pub fn slugify(title: &str) -> String {
     temper_workflow::operations::sluggify(title)
 }

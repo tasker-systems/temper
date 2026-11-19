@@ -13,5 +13,6 @@ pub mod frontmatter;
 pub mod hash;
 pub mod operations;
 pub mod schema;
+pub mod shaping;
 pub mod types;
 pub mod vault;

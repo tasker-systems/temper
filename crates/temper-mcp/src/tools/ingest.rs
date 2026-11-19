@@ -170,26 +170,14 @@ pub struct IngestBlocksInput {
 // the surface-side hash check on segment 0 (declared below, MCP-local), and the
 // `Surface::Mcp` stamp the direct command carried (now the carrier).
 
-/// The wire `IngestPayload` for a begin call: the create fields, the segment's raw
-/// text, and the segmented-begin discriminator. The direct binding's home refusals
-/// are carried MCP-local (the `build_create_command` shape they came from): exactly
-/// one of `context_ref` / `cogmap`, the goal ref's parse failure a hard error, the
-/// sources' classifier failure a hard error ("never a silent drop"), and a
-/// managed_meta serialization failure an internal error — none silently defaulted.
+/// The wire `IngestPayload` for a begin call, shaped by `temper_workflow::shaping` exactly as the
+/// CLI's segmented begin is. The door keeps only its parse errors: exactly one of `context_ref` /
+/// `cogmap`, and a goal ref or source value that does not parse.
 fn wire_begin(input: IngestBeginInput) -> Result<IngestPayload, rmcp::ErrorData> {
+    use temper_workflow::shaping::{shape_segmented_begin, CreateInput, Home};
+
     let create = input.create;
-    let home_cogmap_id = create
-        .cogmap
-        .as_deref()
-        .map(|r| {
-            temper_workflow::operations::parse_ref(r)
-                .map(|p| p.uuid())
-                .map_err(|e| {
-                    rmcp::ErrorData::invalid_params(format!("invalid cogmap ref: {e}"), None)
-                })
-        })
-        .transpose()?;
-    match (&create.context_ref, home_cogmap_id) {
+    let home = match (create.context_ref, create.cogmap.as_deref()) {
         (Some(_), Some(_)) => {
             return Err(rmcp::ErrorData::invalid_params(
                 "context_ref and cogmap are mutually exclusive; supply exactly one home"
@@ -197,14 +185,21 @@ fn wire_begin(input: IngestBeginInput) -> Result<IngestPayload, rmcp::ErrorData>
                 None,
             ));
         }
+        (None, Some(r)) => Home::Cogmap(
+            temper_workflow::operations::parse_ref(r)
+                .map(|p| p.uuid())
+                .map_err(|e| {
+                    rmcp::ErrorData::invalid_params(format!("invalid cogmap ref: {e}"), None)
+                })?,
+        ),
+        (Some(context_ref), None) => Home::Context(context_ref),
         (None, None) => {
             return Err(rmcp::ErrorData::invalid_params(
                 "no home specified — supply exactly one of context_ref or cogmap".to_string(),
                 None,
             ));
         }
-        _ => {}
-    }
+    };
     let goal = create
         .goal
         .as_deref()
@@ -216,13 +211,6 @@ fn wire_begin(input: IngestBeginInput) -> Result<IngestPayload, rmcp::ErrorData>
                 })
         })
         .transpose()?;
-    let managed_meta = create
-        .managed_meta
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("managed_meta serialization failed: {e}"), None)
-        })?;
     let sources = create
         .sources
         .unwrap_or_default()
@@ -232,30 +220,27 @@ fn wire_begin(input: IngestBeginInput) -> Result<IngestPayload, rmcp::ErrorData>
         .map_err(|e| {
             rmcp::ErrorData::invalid_params(format!("invalid sources value: {e}"), None)
         })?;
-    Ok(IngestPayload {
-        title: create.title,
-        origin_uri: create
-            .origin_uri
-            .unwrap_or_else(|| format!("mcp://agent/{}", Uuid::new_v4())),
-        context_ref: create.context_ref.unwrap_or_default(),
-        home_cogmap_id,
-        doc_type_name: create.doc_type_name,
-        goal,
-        content_hash: None,
-        idempotency_key: create.idempotency_key,
-        content: create.content.unwrap_or_default(),
-        metadata: None,
-        managed_meta,
-        open_meta: create.open_meta,
-        chunks_packed: None,
-        sources,
-        act: create.act,
-        segmented: Some(SegmentedBegin {
+    shape_segmented_begin(
+        CreateInput {
+            title: create.title,
+            doc_type: create.doc_type_name,
+            home,
+            content: create.content,
+            sources,
+            managed_meta: create.managed_meta,
+            open_meta: create.open_meta,
+            goal,
+            origin_uri: create.origin_uri,
+            idempotency_key: create.idempotency_key,
+            act: create.act,
+        },
+        SegmentedBegin {
             total_blocks_hint: input.total_blocks_hint,
             block_budget: input.block_budget.unwrap_or(DEFAULT_BLOCK_BUDGET),
             source_hash: input.source_hash,
-        }),
-    })
+        },
+    )
+    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))
 }
 
 // ── Tool handlers ──────────────────────────────────────────────────────────────

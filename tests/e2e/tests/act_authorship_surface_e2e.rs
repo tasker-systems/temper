@@ -5,10 +5,8 @@
 //! with `kb_events.invocation_id` set and the authorship serialized into `kb_events.metadata`.
 //!
 //! Both paths here are embed-free: resource creates send empty content (handler builds no body, so
-//! no chunk/embed work), and edge asserts carry no body at all. The CLI **create** path always
-//! embeds (its translator synthesizes a placeholder body), so the CLI vertical is proven via
-//! `edge assert` — the embedding create path is covered by the MCP/API proofs here plus the embed
-//! CI job.
+//! no chunk/embed work), and edge asserts carry no body at all. The CLI vertical is proven via
+//! `edge assert`; the CLI create path is covered by the MCP/API proofs here plus the embed CI job.
 
 mod common;
 
