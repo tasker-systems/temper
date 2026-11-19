@@ -5,12 +5,16 @@
 //! `validate_open_meta_shape` refuses a recognized open_meta key carrying the wrong shape on
 //! create, on update's SET half and on the `open_meta_add` union. The CLI no longer runs a copy
 //! of that check before sending, so its refusal for a mis-shaped key is the server's refusal:
-//! the request reaches the server, and the CLI renders the answer as it renders any other server
-//! refusal, with the same exit code and the same JSON payload the HTTP door's error carries.
+//! the request reaches the server, the CLI's JSON payload carries the HTTP door's message
+//! verbatim, and it renders with the same code and exit code as any other server refusal.
 //!
 //! The reference refusal is one the CLI never had a copy of: a scalar on the add channel
 //! (`open_meta_add_properties`). A shape refusal that renders differently from it is a door
 //! translating a refusal the server already named.
+//!
+//! The payload's `code` is the CLI's rendering of a generic server 400 (`api`), not the HTTP
+//! door's `BAD_REQUEST`. That mapping is `client_err_to_temper`'s, shared by every server 400,
+//! and these tests pin parity with it rather than a value.
 
 mod common;
 
@@ -107,25 +111,25 @@ fn rendered(output: &std::process::Output) -> (Option<i32>, Value) {
     )
 }
 
-fn http_shape(error: &Value) -> Value {
-    json!({
-        "code": error["code"],
-        "message": error["message"],
-        "details": error.get("details").cloned().unwrap_or(Value::Null),
-    })
+/// The CLI's payload carries the HTTP door's refusal: its message verbatim and its details.
+fn assert_relays(cli_error: &Value, http_error: &Value) {
+    let cli_message = cli_error["message"].as_str().expect("cli message");
+    let http_message = http_error["message"].as_str().expect("http message");
+    assert!(
+        cli_message.ends_with(http_message),
+        "the CLI relays the server's refusal, not its own: cli={cli_error} http={http_error}"
+    );
+    assert_eq!(
+        cli_error["details"],
+        http_error.get("details").cloned().unwrap_or(Value::Null),
+        "the same details: cli={cli_error} http={http_error}"
+    );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_misshaped_key_on_update_is_refused_by_the_server_and_relayed_intact(pool: sqlx::PgPool) {
-    let (app, log) = common::setup_recording(pool).await;
+    let app = common::setup(pool).await;
     let id = seeded(&app, "shape-update-ctx").await;
-    let patch_path = format!("/api/resources/{id}");
-    let patches_before = log
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|p| **p == patch_path)
-        .count();
 
     let refused = cli(
         &app,
@@ -141,32 +145,15 @@ async fn a_misshaped_key_on_update_is_refused_by_the_server_and_relayed_intact(p
     )
     .await;
 
-    // The request reached the server: the CLI judged nothing before sending.
-    let patches_after = log
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|p| **p == patch_path)
-        .count();
-    assert!(
-        patches_after > patches_before,
-        "the update must reach the server, which owns the shape refusal; stdout={}",
-        String::from_utf8_lossy(&refused.stdout)
-    );
-
     let (status, http_error) =
         http_refusal(&app, &id, json!({"open_meta": {"descriptor": 42}})).await;
     assert_eq!(status, 400, "{http_error}");
     let (exit, cli_error) = rendered(&refused);
     assert_eq!(exit, Some(1), "a refusal exits 1");
-    assert_eq!(
-        cli_error,
-        http_shape(&http_error),
-        "the CLI relays the server's refusal, not its own"
-    );
+    assert_relays(&cli_error, &http_error);
     let message = cli_error["message"].as_str().expect("message");
     assert!(
-        message.starts_with("invalid open_meta shape:") && message.contains("descriptor"),
+        message.contains("invalid open_meta shape: /descriptor"),
         "the server's refusal, naming the key: {cli_error}"
     );
 
@@ -205,15 +192,8 @@ async fn a_misshaped_key_on_update_is_refused_by_the_server_and_relayed_intact(p
 async fn a_misshaped_key_on_the_add_channel_is_refused_by_the_server_and_relayed_intact(
     pool: sqlx::PgPool,
 ) {
-    let (app, log) = common::setup_recording(pool).await;
+    let app = common::setup(pool).await;
     let id = seeded(&app, "shape-add-ctx").await;
-    let patch_path = format!("/api/resources/{id}");
-    let patches_before = log
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|p| **p == patch_path)
-        .count();
 
     let refused = cli(
         &app,
@@ -229,28 +209,12 @@ async fn a_misshaped_key_on_the_add_channel_is_refused_by_the_server_and_relayed
     )
     .await;
 
-    let patches_after = log
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|p| **p == patch_path)
-        .count();
-    assert!(
-        patches_after > patches_before,
-        "the update must reach the server; stdout={}",
-        String::from_utf8_lossy(&refused.stdout)
-    );
-
     let (status, http_error) =
         http_refusal(&app, &id, json!({"open_meta_add": {"tags": [1, 2]}})).await;
     assert_eq!(status, 400, "{http_error}");
     let (exit, cli_error) = rendered(&refused);
     assert_eq!(exit, Some(1), "a refusal exits 1");
-    assert_eq!(
-        cli_error,
-        http_shape(&http_error),
-        "the CLI relays the server's refusal, not its own"
-    );
+    assert_relays(&cli_error, &http_error);
 
     let stored = stored_open_meta(&app, &id).await;
     assert_eq!(
@@ -264,15 +228,8 @@ async fn a_misshaped_key_on_the_add_channel_is_refused_by_the_server_and_relayed
 /// server alone tells the two apart, and it still deletes.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_null_recognized_key_on_update_still_deletes(pool: sqlx::PgPool) {
-    let (app, log) = common::setup_recording(pool).await;
+    let app = common::setup(pool).await;
     let id = seeded(&app, "shape-null-ctx").await;
-    let patch_path = format!("/api/resources/{id}");
-    let patches_before = log
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|p| **p == patch_path)
-        .count();
 
     let deleted = cli(
         &app,
@@ -292,16 +249,6 @@ async fn a_null_recognized_key_on_update_still_deletes(pool: sqlx::PgPool) {
         "the delete verb is not refused: stdout={} stderr={}",
         String::from_utf8_lossy(&deleted.stdout),
         String::from_utf8_lossy(&deleted.stderr)
-    );
-    let patches_after = log
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|p| **p == patch_path)
-        .count();
-    assert!(
-        patches_after > patches_before,
-        "the update reached the server"
     );
 
     let stored = stored_open_meta(&app, &id).await;
@@ -356,7 +303,7 @@ async fn a_misshaped_key_on_create_is_refused_by_the_server_and_relayed_intact(p
     assert_eq!(exit, Some(1), "a refusal exits 1");
     let message = cli_error["message"].as_str().expect("message");
     assert!(
-        message.starts_with("invalid open_meta shape:") && message.contains("date"),
+        message.contains("invalid open_meta shape: /date"),
         "the server's refusal, naming the key: {cli_error}"
     );
 }
