@@ -26,51 +26,19 @@ use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
 async fn person(pool: &PgPool, handle: &str) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("seed profile");
-    for surface in Surface::ALL {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
-        )
-        .bind(id)
-        .bind(format!("{handle}@{}", surface.marker()))
-        .execute(pool)
-        .await
-        .expect("seed emitter");
-    }
+    let id = temper_services::test_support::profile::insert(pool, handle).await;
+    let surfaces: Vec<&str> = Surface::ALL.iter().map(|s| s.marker()).collect();
+    temper_services::test_support::entity::insert_surfaces(pool, id, handle, &surfaces).await;
     test_support::approve(pool, id).await;
     id
 }
 
 async fn join(pool: &PgPool, team_id: Uuid, who: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role) \
-         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(team_id)
-    .bind(who)
-    .bind(role)
-    .execute(pool)
-    .await
-    .unwrap();
+    temper_services::test_support::team::set_member(pool, team_id, who, role).await;
 }
 
 async fn team_context(pool: &PgPool, owner_team: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES (uuid_generate_v7(), 'kb_teams', $1, $2, $2) RETURNING id",
-    )
-    .bind(owner_team)
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .unwrap()
+    temper_services::test_support::context::insert_team(pool, owner_team, slug, slug).await
 }
 
 async fn reads_context(pool: &PgPool, who: Uuid, context: Uuid) -> bool {

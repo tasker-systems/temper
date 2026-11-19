@@ -16,3 +16,21 @@ pub async fn insert(pool: &PgPool, profile: Uuid, name: &str) -> Uuid {
     .await
     .expect("insert entity")
 }
+
+/// The surfaces a door caller acts through, in the order the suites seed them.
+pub const DOOR_SURFACES: [&str; 3] = ["web", "cli", "mcp"];
+
+/// One emitter per surface, named `<handle>@<surface>`, in `surfaces` order. Answers their ids in
+/// the same order.
+pub async fn insert_surfaces(
+    pool: &PgPool,
+    profile: Uuid,
+    handle: &str,
+    surfaces: &[&str],
+) -> Vec<Uuid> {
+    let mut ids = Vec::with_capacity(surfaces.len());
+    for surface in surfaces {
+        ids.push(insert(pool, profile, &format!("{handle}@{surface}")).await);
+    }
+    ids
+}

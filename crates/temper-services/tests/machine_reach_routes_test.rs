@@ -32,24 +32,9 @@ use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
 async fn person(pool: &PgPool, handle: &str) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("seed profile");
-    for surface in Surface::ALL {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
-        )
-        .bind(id)
-        .bind(format!("{handle}@{}", surface.marker()))
-        .execute(pool)
-        .await
-        .expect("seed emitter");
-    }
+    let id = temper_services::test_support::profile::insert(pool, handle).await;
+    let surfaces: Vec<&str> = Surface::ALL.iter().map(|s| s.marker()).collect();
+    temper_services::test_support::entity::insert_surfaces(pool, id, handle, &surfaces).await;
     test_support::approve(pool, id).await;
     id
 }
@@ -66,16 +51,7 @@ async fn team(pool: &PgPool, slug: &str) -> Uuid {
 }
 
 async fn join(pool: &PgPool, team: Uuid, profile: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::text::team_role) \
-         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(team)
-    .bind(profile)
-    .bind(role)
-    .execute(pool)
-    .await
-    .expect("seed membership");
+    temper_services::test_support::team::set_member(pool, team, profile, role).await;
 }
 
 async fn drop_member(pool: &PgPool, team: Uuid, profile: Uuid) {

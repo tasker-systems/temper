@@ -22,47 +22,19 @@ use uuid::Uuid;
 /// A profile with its per-surface emitter entities: `resolve_emitter` creates none lazily, so a
 /// profile without them cannot author a grant, a revoke or a retirement.
 async fn profile_with_emitters(pool: &PgPool, handle: &str) -> Uuid {
-    let profile_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("seed profile");
-    for surface in Surface::ALL {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
-        )
-        .bind(profile_id)
-        .bind(format!("{handle}@{}", surface.marker()))
-        .execute(pool)
-        .await
-        .expect("seed emitter entity");
-    }
+    let profile_id = temper_services::test_support::profile::insert(pool, handle).await;
+    let surfaces: Vec<&str> = Surface::ALL.iter().map(|s| s.marker()).collect();
+    temper_services::test_support::entity::insert_surfaces(pool, profile_id, handle, &surfaces)
+        .await;
     profile_id
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_teams (id, slug, name) VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("seed team")
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 async fn team_context(pool: &PgPool, team_id: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES (uuid_generate_v7(), 'kb_teams', $1, $2, $2) RETURNING id",
-    )
-    .bind(team_id)
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("seed context")
+    temper_services::test_support::context::insert_team(pool, team_id, slug, slug).await
 }
 
 fn grant_req(context: Uuid, team: Uuid) -> GrantCapabilityRequest {

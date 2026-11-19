@@ -93,13 +93,7 @@ struct AdminFixture {
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_teams (id, slug, name) VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("seed team")
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 /// A profile **with its per-surface emitter entities**, which is the whole point.
@@ -114,36 +108,17 @@ async fn team(pool: &PgPool, slug: &str) -> Uuid {
 /// `pub(crate)`, hence unreachable from this integration test, and it does not create the profile
 /// row either; `Surface::ALL` is the reachable half of its contract.)
 async fn profile_with_emitters(pool: &PgPool, handle: &str) -> (ProfileId, Uuid) {
-    let profile_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("seed profile");
-
-    let mut api_emitter = None;
-    for surface in Surface::ALL {
-        let entity_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO kb_entities (profile_id, name, metadata) \
-             VALUES ($1, $2, '{}'::jsonb) RETURNING id",
-        )
-        .bind(profile_id)
-        .bind(format!("{handle}@{}", surface.marker()))
-        .fetch_one(pool)
-        .await
-        .expect("seed emitter entity");
-        // `ApiHttp` is the surface whose marker is `web` — the emitter these tests author through.
-        if surface == Surface::ApiHttp {
-            api_emitter = Some(entity_id);
-        }
-    }
-
-    (
-        ProfileId::from(profile_id),
-        api_emitter.expect("Surface::ALL must contain ApiHttp"),
-    )
+    let profile_id = temper_services::test_support::profile::insert(pool, handle).await;
+    let surfaces: Vec<&str> = Surface::ALL.iter().map(|s| s.marker()).collect();
+    let emitters =
+        temper_services::test_support::entity::insert_surfaces(pool, profile_id, handle, &surfaces)
+            .await;
+    // `ApiHttp` is the surface whose marker is `web` — the emitter these tests author through.
+    let api = Surface::ALL
+        .iter()
+        .position(|s| *s == Surface::ApiHttp)
+        .expect("Surface::ALL must contain ApiHttp");
+    (ProfileId::from(profile_id), emitters[api])
 }
 
 async fn context_owned_by(pool: &PgPool, owner_table: &str, owner_id: Uuid, slug: &str) -> Uuid {

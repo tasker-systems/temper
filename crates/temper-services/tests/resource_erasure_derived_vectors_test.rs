@@ -55,34 +55,17 @@ const MOVED: f64 = 1e-3;
 async fn principal(pool: &PgPool) -> (ProfileId, EntityId) {
     let id = Uuid::now_v7();
     let handle = format!("user-{id}");
-    sqlx::query("INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $2)")
-        .bind(id)
-        .bind(&handle)
-        .execute(pool)
-        .await
-        .expect("seed profile");
-    let emitter: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(id)
-    .bind(format!("{handle}@web"))
-    .fetch_one(pool)
-    .await
-    .expect("seed emitter entity");
+    temper_services::test_support::profile::insert_with_id(pool, id, &handle).await;
+    let emitter =
+        temper_services::test_support::entity::insert(pool, id, &format!("{handle}@web")).await;
     (ProfileId::from(id), EntityId::from(emitter))
 }
 
 async fn context(pool: &PgPool, owner: ProfileId, slug: &str) -> ContextId {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-         VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
+    ContextId::from(
+        temper_services::test_support::context::insert_personal(pool, owner.uuid(), slug, slug)
+            .await,
     )
-    .bind(owner.uuid())
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("seed context");
-    ContextId::from(id)
 }
 
 /// A unit 768-dim vector along axis `d`.

@@ -26,11 +26,7 @@ use temper_services::services::{access_service, standing_service};
 use temper_services::test_support;
 
 async fn a_profile(pool: &PgPool, handle: &str) -> uuid::Uuid {
-    sqlx::query_scalar("INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$1) RETURNING id")
-        .bind(handle)
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    temper_services::test_support::profile::insert(pool, handle).await
 }
 
 /// An admin who can act on the inbox.

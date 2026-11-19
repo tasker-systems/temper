@@ -39,12 +39,7 @@ struct World {
 }
 
 async fn team(pool: &PgPool, slug: &str, parent: Option<Uuid>) -> Uuid {
-    let id: Uuid =
-        sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
-            .bind(slug)
-            .fetch_one(pool)
-            .await
-            .expect("team");
+    let id = temper_services::test_support::team::insert(pool, slug).await;
     if let Some(p) = parent {
         sqlx::query("INSERT INTO kb_teams_parents (parent_id, child_id) VALUES ($1, $2)")
             .bind(p)

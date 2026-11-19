@@ -91,15 +91,7 @@ async fn insert_profile(pool: &PgPool) -> (Uuid, String) {
 /// A governed (personal) context owned by `subject` — the erasure act's governed home.
 async fn insert_personal_context(pool: &PgPool, subject: Uuid, slug: &str) -> ContextId {
     ContextId::from(
-        sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-                 VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
-        )
-        .bind(subject)
-        .bind(slug)
-        .fetch_one(pool)
-        .await
-        .expect("seed personal context"),
+        temper_services::test_support::context::insert_personal(pool, subject, slug, slug).await,
     )
 }
 

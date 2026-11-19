@@ -40,40 +40,16 @@ const ROLES: [&str; 4] = ["owner", "maintainer", "member", "watcher"];
 const ROSTERED: [&str; 4] = ["org", "eng", "eng-web", "side"];
 
 async fn person(pool: &PgPool, handle: &str) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("seed profile");
-    for surface in Surface::ALL {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
-        )
-        .bind(id)
-        .bind(format!("{handle}@{}", surface.marker()))
-        .execute(pool)
-        .await
-        .expect("seed emitter");
-    }
+    let id = temper_services::test_support::profile::insert(pool, handle).await;
+    let surfaces: Vec<&str> = Surface::ALL.iter().map(|s| s.marker()).collect();
+    temper_services::test_support::entity::insert_surfaces(pool, id, handle, &surfaces).await;
     test_support::approve(pool, id).await;
     id
 }
 
 /// Put `who` on `team` at `role`, overwriting any row (the creator's `owner` row included).
 async fn join(pool: &PgPool, team: Uuid, who: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role) \
-         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(team)
-    .bind(who)
-    .bind(role)
-    .execute(pool)
-    .await
-    .expect("seed member");
+    temper_services::test_support::team::set_member(pool, team, who, role).await;
 }
 
 async fn create(

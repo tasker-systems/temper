@@ -42,38 +42,14 @@ use temper_workflow::operations::Surface;
 /// Seed a substrate profile + the emitter entities the write path resolves + a
 /// profile-owned context (the `blob_surface_emitter_test` shape).
 async fn seed_profile_with_context(pool: &PgPool, email: &str) -> (Uuid, Uuid, String) {
-    let profile_id = Uuid::now_v7();
-    let local = email.split('@').next().unwrap_or("test-user");
-    let handle = format!("{local}-{}", &profile_id.simple().to_string()[..8]);
-    sqlx::query("INSERT INTO kb_profiles (id, handle, display_name, email) VALUES ($1,$2,$3,$4)")
-        .bind(profile_id)
-        .bind(&handle)
-        .bind(email)
-        .bind(email)
-        .execute(pool)
-        .await
-        .expect("seed profile");
-    for surface in ["web", "cli", "mcp"] {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1,$2,'{}'::jsonb)",
-        )
-        .bind(profile_id)
-        .bind(format!("{handle}@{surface}"))
-        .execute(pool)
-        .await
-        .expect("seed emitter entity");
-    }
-    let context_id = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES ($1,'kb_profiles',$2,'temper','temper')",
+    let c = temper_services::test_support::caller::with_context(
+        pool,
+        email,
+        &temper_services::test_support::entity::DOOR_SURFACES,
+        "temper",
     )
-    .bind(context_id)
-    .bind(profile_id)
-    .execute(pool)
-    .await
-    .expect("seed context");
-    (profile_id, context_id, handle)
+    .await;
+    (c.profile, c.context, c.handle)
 }
 
 /// A team + a team-owned context, with `members` joined DIRECTLY at the given roles —

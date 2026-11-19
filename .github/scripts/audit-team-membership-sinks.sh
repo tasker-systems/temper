@@ -96,10 +96,14 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 #   test_support/team.rs — test-only, for the same reason: `team::set_member`, the shared
 #     membership builder every test module uses (R24), under `test_support`'s
 #     `#[cfg(feature = "test-db")]` gate in `lib.rs`.
+#
+# REVIEWED 2026-11-18 (R24 integration-fixture collapse) — test_support/team.rs 1 -> 2:
+# `team::add_member`, the plain-insert sibling of `set_member` for tests whose seat must not
+# already exist. Test-only under the same gate; no production write moved.
 read -r -d '' BASELINE <<'EOF' || true
 1 crates/temper-services/src/services/access_service.rs
 2 crates/temper-services/src/services/subscription_test_support.rs
-1 crates/temper-services/src/test_support/team.rs
+2 crates/temper-services/src/test_support/team.rs
 1 crates/temper-substrate/src/scenario/access/loader.rs
 EOF
 

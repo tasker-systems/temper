@@ -38,24 +38,9 @@ use uuid::Uuid;
 // ── Fixture ───────────────────────────────────────────────────────────────────────────────────────
 
 async fn profile(pool: &PgPool, handle: &str) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("seed profile");
-    for surface in Surface::ALL {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
-        )
-        .bind(id)
-        .bind(format!("{handle}@{}", surface.marker()))
-        .execute(pool)
-        .await
-        .expect("seed emitter");
-    }
+    let id = temper_services::test_support::profile::insert(pool, handle).await;
+    let surfaces: Vec<&str> = Surface::ALL.iter().map(|s| s.marker()).collect();
+    temper_services::test_support::entity::insert_surfaces(pool, id, handle, &surfaces).await;
     id
 }
 
@@ -67,11 +52,7 @@ async fn admin(pool: &PgPool) -> Uuid {
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
-        .bind(slug)
-        .fetch_one(pool)
-        .await
-        .expect("team")
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 async fn link(pool: &PgPool, parent: Uuid, child: Uuid) {
@@ -586,16 +567,7 @@ async fn a_revoke_of_the_reviewer_and_the_decision_never_deadlock(pool: PgPool) 
 // ── The fallbacks and the manager re-checks ───────────────────────────────────────────────────────
 
 async fn join(pool: &PgPool, team: Uuid, who: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role) \
-         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(team)
-    .bind(who)
-    .bind(role)
-    .execute(pool)
-    .await
-    .expect("seed member");
+    temper_services::test_support::team::set_member(pool, team, who, role).await;
 }
 
 /// A membership change in a transaction left open, under the team's row lock (the lock every

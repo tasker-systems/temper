@@ -25,38 +25,15 @@ use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
 async fn person(pool: &PgPool, handle: &str) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("seed profile");
-    for surface in Surface::ALL {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
-        )
-        .bind(id)
-        .bind(format!("{handle}@{}", surface.marker()))
-        .execute(pool)
-        .await
-        .expect("seed emitter");
-    }
+    let id = temper_services::test_support::profile::insert(pool, handle).await;
+    let surfaces: Vec<&str> = Surface::ALL.iter().map(|s| s.marker()).collect();
+    temper_services::test_support::entity::insert_surfaces(pool, id, handle, &surfaces).await;
     test_support::approve(pool, id).await;
     id
 }
 
 async fn join(pool: &PgPool, team_id: Uuid, who: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role)",
-    )
-    .bind(team_id)
-    .bind(who)
-    .bind(role)
-    .execute(pool)
-    .await
-    .expect("seed member");
+    temper_services::test_support::team::add_member(pool, team_id, who, role).await;
 }
 
 async fn create_team(pool: &PgPool, creator: Uuid, slug: &str) -> Uuid {

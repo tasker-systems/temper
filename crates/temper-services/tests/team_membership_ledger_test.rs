@@ -18,41 +18,18 @@ use uuid::Uuid;
 
 /// An approved profile with its `<handle>@web` emitter — it can act, and it can read its own acts.
 async fn person(pool: &PgPool, handle: &str) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2 || '@web')")
-        .bind(id)
-        .bind(handle)
-        .execute(pool)
-        .await
-        .unwrap();
+    let id = test_support::profile::insert(pool, handle).await;
+    test_support::entity::insert(pool, id, &format!("{handle}@web")).await;
     test_support::approve(pool, id).await;
     id
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
-        .bind(slug)
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 async fn seat(pool: &PgPool, team: Uuid, profile: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role)",
-    )
-    .bind(team)
-    .bind(profile)
-    .bind(role)
-    .execute(pool)
-    .await
-    .unwrap();
+    temper_services::test_support::team::add_member(pool, team, profile, role).await;
 }
 
 fn team_subject(id: Uuid) -> RefTarget {

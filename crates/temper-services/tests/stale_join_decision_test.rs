@@ -24,11 +24,7 @@ use temper_services::test_support;
 use uuid::Uuid;
 
 async fn a_profile(pool: &PgPool, handle: &str) -> Uuid {
-    sqlx::query_scalar("INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$1) RETURNING id")
-        .bind(handle)
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    temper_services::test_support::profile::insert(pool, handle).await
 }
 
 async fn an_admin(pool: &PgPool) -> (Uuid, SystemAdmin) {

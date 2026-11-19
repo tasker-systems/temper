@@ -34,19 +34,8 @@ use uuid::Uuid;
 // ── Fixture ───────────────────────────────────────────────────────────────────────────────────────
 
 async fn profile(pool: &PgPool, handle: &str) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("seed profile");
-    sqlx::query("INSERT INTO kb_entities (name, profile_id) VALUES ($1 || '@web', $2)")
-        .bind(handle)
-        .bind(id)
-        .execute(pool)
-        .await
-        .expect("seed emitter");
+    let id = temper_services::test_support::profile::insert(pool, handle).await;
+    temper_services::test_support::entity::insert(pool, id, &format!("{handle}@web")).await;
     id
 }
 
@@ -64,23 +53,11 @@ async fn context(pool: &PgPool, slug: &str, owner_table: &str, owner: Uuid) -> U
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
-        .bind(slug)
-        .fetch_one(pool)
-        .await
-        .expect("seed team")
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 async fn member(pool: &PgPool, team: Uuid, who: Uuid, role: &str) {
-    sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role)",
-    )
-    .bind(team)
-    .bind(who)
-    .bind(role)
-    .execute(pool)
-    .await
-    .expect("seed member");
+    temper_services::test_support::team::add_member(pool, team, who, role).await;
 }
 
 async fn resource_in(pool: &PgPool, ctx: Uuid, owner: Uuid) -> Uuid {

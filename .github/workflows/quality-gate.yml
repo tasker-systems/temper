@@ -187,6 +187,12 @@ jobs:
       - name: Structure tripwire — no inline DB test module in temper-services
         run: bash .github/scripts/audit-inline-db-tests.sh
 
+      # Ruling R24: fixtures come from test_support. No new helper fn in temper-services tests/
+      # inserts kb_profiles / kb_teams / kb_contexts by hand; the baseline holds the genuinely
+      # different seeders and only shrinks. Inline inserts in test bodies are not read.
+      - name: Structure tripwire — no new hand-rolled seeder in temper-services tests
+        run: bash .github/scripts/audit-test-seeders.sh
+
       # Not a security tripwire — a CONTRACT one, and it exists to keep an argument honest.
       # Not a baseline tripwire either: it reads build-cli-binaries.yml directly. Deleting the
       # `.manifest.json` line from the attestation's `subject-path` is a silent one-line edit —
@@ -792,6 +798,9 @@ jobs:
 
       - name: Guard test — audit-inline-db-tests
         run: bash .github/scripts/test-audit-inline-db-tests.sh
+
+      - name: Guard test — audit-test-seeders
+        run: bash .github/scripts/test-audit-test-seeders.sh
 
   # The tasker-systems conventions baseline, as this repository is pinned to it
   # (.conventions/consumer.toml; doctrine in .conventions/baseline/doctrine/consuming.md).

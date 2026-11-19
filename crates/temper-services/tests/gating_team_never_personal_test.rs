@@ -13,13 +13,7 @@ use uuid::Uuid;
 
 /// A profile, and the personal team genesis made for it.
 async fn person_with_personal_team(pool: &PgPool, handle: &str) -> (Uuid, String) {
-    let profile: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("insert profile");
+    let profile = temper_services::test_support::profile::insert(pool, handle).await;
     let slug: String = sqlx::query_scalar("SELECT slug FROM kb_teams WHERE personal_of = $1")
         .bind(profile)
         .fetch_one(pool)

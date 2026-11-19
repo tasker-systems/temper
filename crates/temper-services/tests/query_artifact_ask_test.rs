@@ -392,15 +392,9 @@ async fn declare_kind(
 
 /// A context owned by `owner`, as a home.
 async fn context_home(pool: &PgPool, owner: ProfileId, slug: &str) -> AnchorRef {
-    let context: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-         VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
-    )
-    .bind(owner.uuid())
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .unwrap();
+    let context =
+        temper_services::test_support::context::insert_personal(pool, owner.uuid(), slug, slug)
+            .await;
     AnchorRef::context(ContextId::from(context))
 }
 

@@ -55,16 +55,10 @@ async fn system_actor(pool: &PgPool) -> (ProfileId, EntityId) {
 }
 
 async fn make_home(pool: &PgPool, owner: ProfileId, slug: &str) -> AnchorRef {
-    let ctx: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-         VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
-    )
-    .bind(owner.uuid())
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    AnchorRef::context(temper_core::types::ids::ContextId::from(ctx))
+    let context =
+        temper_services::test_support::context::insert_personal(pool, owner.uuid(), slug, slug)
+            .await;
+    AnchorRef::context(temper_core::types::ids::ContextId::from(context))
 }
 
 async fn create_two_block(
@@ -313,24 +307,15 @@ async fn proof_holding_and_bare_spellings_complete_the_same_auditor_job(pool: sq
 /// Mint a real classified caller for a seeded profile — the exact thing `with_proof` accepts and
 /// the HTTP middleware produces. Same shape as `system_admin_proof_test.rs`'s helper.
 async fn seeded_authed(pool: &PgPool, handle: &str) -> Caller {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .unwrap();
+    let id = temper_services::test_support::profile::insert(pool, handle).await;
     // The surface emitter entities the audit write's resolve_emitter resolves.
-    for surface in ["web", "cli", "mcp"] {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
-        )
-        .bind(id)
-        .bind(format!("{handle}@{surface}"))
-        .execute(pool)
-        .await
-        .unwrap();
-    }
+    temper_services::test_support::entity::insert_surfaces(
+        pool,
+        id,
+        handle,
+        &temper_services::test_support::entity::DOOR_SURFACES,
+    )
+    .await;
     temper_services::test_support::caller_for(pool, id).await
 }
 

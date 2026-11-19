@@ -60,26 +60,17 @@ async fn seed_commit_fixture(pool: &sqlx::PgPool) -> (Uuid, Uuid) {
         .execute(pool)
         .await
         .expect("seed profile");
-    for surface in ["web", "cli", "mcp"] {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1,$2,'{}'::jsonb)",
-        )
-        .bind(profile_id)
-        .bind(format!("{handle}@{surface}"))
-        .execute(pool)
-        .await
-        .expect("seed emitter entity");
-    }
-    let context_id = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES ($1,'kb_profiles',$2,'temper','temper')",
+    temper_services::test_support::entity::insert_surfaces(
+        pool,
+        profile_id,
+        &handle,
+        &temper_services::test_support::entity::DOOR_SURFACES,
     )
-    .bind(context_id)
-    .bind(profile_id)
-    .execute(pool)
-    .await
-    .expect("seed context");
+    .await;
+    let context_id = temper_services::test_support::context::insert_personal(
+        pool, profile_id, "temper", "temper",
+    )
+    .await;
     (profile_id, context_id)
 }
 

@@ -51,24 +51,9 @@ use uuid::Uuid;
 // ── Fixture ───────────────────────────────────────────────────────────────────────────────────────
 
 async fn profile(pool: &PgPool, handle: &str) -> Uuid {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_profiles (id, handle, display_name) \
-         VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
-    )
-    .bind(handle)
-    .fetch_one(pool)
-    .await
-    .expect("seed profile");
-    for surface in Surface::ALL {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, $2, '{}'::jsonb)",
-        )
-        .bind(id)
-        .bind(format!("{handle}@{}", surface.marker()))
-        .execute(pool)
-        .await
-        .expect("seed emitter");
-    }
+    let id = temper_services::test_support::profile::insert(pool, handle).await;
+    let surfaces: Vec<&str> = Surface::ALL.iter().map(|s| s.marker()).collect();
+    temper_services::test_support::entity::insert_surfaces(pool, id, handle, &surfaces).await;
     id
 }
 
@@ -79,23 +64,11 @@ async fn an_admin(pool: &PgPool, handle: &str) -> Uuid {
 }
 
 async fn team(pool: &PgPool, slug: &str) -> Uuid {
-    sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
-        .bind(slug)
-        .fetch_one(pool)
-        .await
-        .expect("team")
+    temper_services::test_support::team::insert(pool, slug).await
 }
 
 async fn team_context(pool: &PgPool, team: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES (uuid_generate_v7(), 'kb_teams', $1, $2, $2) RETURNING id",
-    )
-    .bind(team)
-    .bind(slug)
-    .fetch_one(pool)
-    .await
-    .expect("context")
+    temper_services::test_support::context::insert_team(pool, team, slug, slug).await
 }
 
 async fn grant_rows(pool: &PgPool, subject: Uuid, team: Uuid) -> i64 {

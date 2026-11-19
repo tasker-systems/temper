@@ -75,6 +75,9 @@ EOF
 pub async fn set_member() {
     sqlx::query!("INSERT INTO kb_team_members (team_id, profile_id, role, source) VALUES ($1, $2, $3, 'native')");
 }
+pub async fn add_member() {
+    sqlx::query!("INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3)");
+}
 EOF
     cat > "$d/crates/temper-services/src/services/team_service.rs" <<'EOF'
 pub(crate) struct GenesisToken {

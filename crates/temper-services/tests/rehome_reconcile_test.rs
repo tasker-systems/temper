@@ -19,43 +19,20 @@ use temper_workflow::operations::{BodyUpdate, CreateResource, MoveSpec, Surface,
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 async fn seed_profile(pool: &PgPool, email: &str) -> uuid::Uuid {
-    let profile_id = uuid::Uuid::now_v7();
-    let local = email.split('@').next().unwrap_or("test-user");
-    let handle = format!("{local}-{}", &profile_id.simple().to_string()[..8]);
-    sqlx::query("INSERT INTO kb_profiles (id, handle, display_name, email) VALUES ($1,$2,$3,$4)")
-        .bind(profile_id)
-        .bind(&handle)
-        .bind(email)
-        .bind(email)
-        .execute(pool)
-        .await
-        .expect("seed profile");
-    for surface in ["web", "cli", "mcp"] {
-        sqlx::query(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1,$2,'{}'::jsonb)",
-        )
-        .bind(profile_id)
-        .bind(format!("{handle}@{surface}"))
-        .execute(pool)
-        .await
-        .expect("seed emitter entity");
-    }
+    let (profile_id, handle) =
+        temper_services::test_support::profile::insert_with_email(pool, email).await;
+    temper_services::test_support::entity::insert_surfaces(
+        pool,
+        profile_id,
+        &handle,
+        &temper_services::test_support::entity::DOOR_SURFACES,
+    )
+    .await;
     profile_id
 }
 
 async fn seed_context(pool: &PgPool, owner: uuid::Uuid, slug: &str) -> uuid::Uuid {
-    let context_id = uuid::Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-         VALUES ($1,'kb_profiles',$2,$3,$3)",
-    )
-    .bind(context_id)
-    .bind(owner)
-    .bind(slug)
-    .execute(pool)
-    .await
-    .expect("seed context");
-    context_id
+    temper_services::test_support::context::insert_personal(pool, owner, slug, slug).await
 }
 
 fn create_cmd(home: HomeAnchor, slug: &str) -> CreateResource {
