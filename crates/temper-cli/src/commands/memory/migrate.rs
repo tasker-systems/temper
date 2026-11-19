@@ -952,7 +952,7 @@ Never ship code with \"for now\".
     }
 
     /// The write must not carry `title` or `slug` in the open tier — canonical identity lives in
-    /// the managed fields, and `validate_open_meta_send_side` warns on a bare copy. Sixty-nine
+    /// the managed fields, and `resource`'s discouraged-key warning fires on a bare copy. Sixty-nine
     /// writes each emitting a warning is how a real warning gets trained out of being read.
     #[test]
     fn open_meta_carries_no_discouraged_identity_keys() {
@@ -965,7 +965,7 @@ Never ship code with \"for now\".
     }
 
     #[test]
-    fn open_meta_passes_the_send_side_shape_validation() {
+    fn open_meta_passes_the_open_tier_shape_validation() {
         let om = proposal_open_meta(&proposal());
         let issues =
             temper_workflow::schema::validate_open_meta(&om).expect("validation must not error");

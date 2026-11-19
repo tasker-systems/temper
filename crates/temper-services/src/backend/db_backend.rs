@@ -645,13 +645,13 @@ fn validate_managed_meta_pipeline(
 }
 
 /// Receive-side shape gate for the open (caller-defined) frontmatter tier, shared by BOTH
-/// `create_resource` and `update_resource` — the server twin of the CLI send-side check
-/// (symmetric defense). A *recognized* open_meta key carrying a wrong shape (e.g. `descriptor: 42`,
+/// `create_resource` and `update_resource`, and the only enforcing copy: no door checks open-tier
+/// shape before sending (ruling R8). A *recognized* open_meta key carrying a wrong shape (e.g. `descriptor: 42`,
 /// a malformed `date`) is a genuine bug: for the FTS-indexed keys it silently stores-but-does-not-index
 /// (a search miss), which is exactly what this catches. Unrecognized keys always pass — the tier is
 /// `additionalProperties: true`, so a newer convention key reaching an older server never hard-fails
 /// and version skew stays additive-safe. Discouraged keys (bare slug/title) are deliberately NOT gated
-/// here: they are a soft send-side (CLI) warning, not a wire rejection. Shape issues surface as a typed
+/// here: they are a soft CLI warning, not a wire rejection. Shape issues surface as a typed
 /// `BadRequest` (→ 400); a schema-compile failure is a programming error and stays `Config` (→ 500).
 fn validate_open_meta_shape(open_meta: Option<&serde_json::Value>) -> Result<(), TemperError> {
     let Some(value) = open_meta else {
@@ -3103,7 +3103,7 @@ impl DbBackend {
         // column on any PATCH, independent of whether managed_meta is present (a §7-Die key,
         // never a property).
         let title: Option<String> = cmd.title.clone();
-        // Receive-side symmetric-defense gate (twin of create's): reject a recognized open_meta key
+        // The open-tier shape gate (the same as create's): reject a recognized open_meta key
         // carrying the wrong shape before it lands as a property row. Auth ran above; this is the
         // validate-before-write step. Covers both the managed+open and open-only branches below.
         // Runs on the SET half only: a null-valued key is a delete verb, not a value, so
