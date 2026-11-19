@@ -343,7 +343,8 @@ fn assert_same_refusal(act: &str, mcp: &rmcp::ErrorData, http: ClientError) {
         | ClientError::Server {
             status: 400,
             message,
-        } => {
+        }
+        | ClientError::BadRequest { message } => {
             // The tool passes the API's cause through without its status label.
             let cause = message
                 .split_once(": ")

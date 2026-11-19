@@ -44,10 +44,13 @@ use crate::error::{Result, TemperError};
 ///    `api`. Every 401 shape lifts to [`TemperError::Unauthorized`] keeping the
 ///    client's own sentence. What has no twin — a rate limit, a status the
 ///    client did not classify, a 5xx, a local IO or config failure — stays
-///    [`TemperError::Api`]. That includes an untyped `400`: the client sends
-///    every ordinary caller error there, but also a refusal body it could not
-///    parse, which is a contract mismatch and not the caller's fault, so the
-///    lifter cannot call it a bad request.
+///    [`TemperError::Api`]. A *readable* `BAD_REQUEST` arrives typed as
+///    [`ClientError::BadRequest`] and lifts to [`TemperError::BadRequest`]
+///    (`bad-request`), carrying the server's sentence unchanged. An unreadable
+///    `400` (no body the client could read, no code, or a code no arm owns)
+///    arrives as `Server { status: 400 }` and stays `api`: it may be a
+///    contract mismatch rather than the caller's fault, so the lifter does not
+///    call it a bad request.
 ///
 /// There is exactly one lifter. With two, the guidance a user got would depend
 /// on which helper a call site imported, and a lifter that dropped (1) would
@@ -65,6 +68,13 @@ pub fn client_err_to_temper(e: ClientError) -> TemperError {
         ClientError::Forbidden => TemperError::Forbidden,
         ClientError::ForbiddenDetail { message } => TemperError::ForbiddenDetail(message),
         ClientError::Conflict { message } => TemperError::Conflict(message),
+        // The server's sentence already reads `Bad request: <cause>`, and core's variant renders
+        // that prefix itself, so it is stripped once here: the CLI's message is the server's.
+        ClientError::BadRequest { message } => TemperError::BadRequest(
+            message
+                .strip_prefix("Bad request: ")
+                .map_or_else(|| message.clone(), ToOwned::to_owned),
+        ),
         ClientError::IngestEnded { message } => TemperError::IngestEnded(message),
         ClientError::ContentIntegrity { message } => TemperError::ContentIntegrity(message),
         // Core's variant carries a fixed sentence that says the same thing: nothing was applied.
@@ -557,6 +567,20 @@ mod tests {
         );
     }
 
+    /// A readable `BAD_REQUEST` lifts to `BadRequest`, and the payload's message is the server's
+    /// sentence exactly: the prefix the server wrote is not doubled by core's `Display`. FAILS IF
+    /// the arm is removed (the refusal surfaces as `api`, the flattening this arm ends).
+    #[test]
+    fn a_readable_bad_request_lifts_to_bad_request_with_the_servers_sentence() {
+        let sentence =
+            "Bad request: invalid open_meta shape: /descriptor: 42 is not of type \"string\"";
+        let lifted = client_err_to_temper(ClientError::BadRequest {
+            message: sentence.into(),
+        });
+        assert_eq!(payload_code(&lifted), "bad-request", "{lifted:?}");
+        assert_eq!(lifted.to_string(), sentence);
+    }
+
     /// Every 401 shape lifts to `Unauthorized` and keeps the client's sentence, so the remedy it
     /// names still reaches the caller. FAILS IF a 401 arm is removed (it would surface as `api`) or
     /// the lift swaps in a sentence of its own.
@@ -580,8 +604,8 @@ mod tests {
         }
     }
 
-    /// What has no twin stays `Api`: a rate limit, an untyped 400 (which the client also uses for a
-    /// refusal body it could not parse) and a server fault. FAILS IF any is lifted to a refusal kind
+    /// What has no twin stays `Api`: a rate limit, an untyped 400 (a body the client could not read
+    /// as a `BAD_REQUEST` refusal) and a server fault. FAILS IF any is lifted to a refusal kind
     /// it is not — a contract mismatch or a 5xx reported as the caller's error.
     #[test]
     fn a_rate_limit_an_untyped_400_and_a_server_fault_stay_api() {

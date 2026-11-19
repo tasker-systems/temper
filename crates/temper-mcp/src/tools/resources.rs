@@ -694,7 +694,10 @@ fn map_create_err(e: ClientError) -> rmcp::ErrorData {
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => {
             rmcp::ErrorData::internal_error(format!("Failed to create resource: {other}"), None)
         }
@@ -977,7 +980,10 @@ pub async fn list_resources(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+            }
+            | ClientError::BadRequest { message } => {
+                rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+            }
             ClientError::NotFound { message } => {
                 rmcp::ErrorData::invalid_params(format!("unknown filter: {message}"), None)
             }
@@ -1111,7 +1117,10 @@ pub async fn update_resource(
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => {
             rmcp::ErrorData::internal_error(format!("Failed to update resource: {other}"), None)
         }
@@ -1166,7 +1175,10 @@ pub async fn annotate_resource(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+            }
+            | ClientError::BadRequest { message } => {
+                rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+            }
             other => rmcp::ErrorData::internal_error(
                 format!("Failed to annotate resource: {other}"),
                 None,
@@ -1239,7 +1251,10 @@ pub async fn update_resource_meta(
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => rmcp::ErrorData::internal_error(
             format!("Failed to update resource meta: {other}"),
             None,
@@ -1294,7 +1309,10 @@ pub async fn delete_resource(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+            }
+            | ClientError::BadRequest { message } => {
+                rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+            }
             other => {
                 rmcp::ErrorData::internal_error(format!("Failed to delete resource: {other}"), None)
             }

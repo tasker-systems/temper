@@ -50,7 +50,10 @@ fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         // A refusal that named the capability it withheld — carry the gate's own sentence,
         // under the direct binding's prefix and kind.
         ClientError::ForbiddenDetail { message } => rmcp::ErrorData::new(
