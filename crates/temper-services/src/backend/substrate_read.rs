@@ -948,7 +948,7 @@ pub async fn get_content_select(
 /// decided when the read happens, not frozen at the act (spec D6): a profile that joins a granted
 /// team after the erasure, by a roster change, auto-join enrolment or a team re-parent, gets the
 /// `410`, as one of the population that could read the resource in full if it still existed. A
-/// tombstone (soft-deleted, not erased) is not a husk and keeps its `404`.
+/// soft-deleted resource (not erased) is not a husk and keeps its `404`.
 ///
 /// The write side classifies its deny through the same probe
 /// (`backend::write_floor`), so a read and a write of one husk name the same population.

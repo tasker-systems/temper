@@ -23,7 +23,7 @@ module Temper::Generated
     # The estate's size by disposition: the subject's @me and personal-team contexts' resources.
     attr_accessor :estate
 
-    # The redacted set (D2) the act would admit.
+    # The redacted set (D2) the act would admit: the content hashes whose projection rows it would empty by hash. It names no ledger rewrite.
     attr_accessor :redacted_hashes
 
     # Every estate resource, in the order the act would take it.

@@ -35,7 +35,7 @@ class ErasureSurveyResponse(BaseModel):
     already_erased: StrictBool
     blob_strikes: List[BlobStrikeView]
     estate: Optional[EstateCounts] = Field(default=None, description="The estate's size by disposition: the subject's @me and personal-team contexts' resources.")
-    redacted_hashes: List[StrictStr] = Field(description="The redacted set (D2) the act would admit.")
+    redacted_hashes: List[StrictStr] = Field(description="The redacted set (D2) the act would admit: the content hashes whose projection rows it would empty by hash. It names no ledger rewrite.")
     resources: Optional[List[EstateResourcePlan]] = Field(default=None, description="Every estate resource, in the order the act would take it.")
     subject: UUID
     targets: List[ErasureTargetOutcome] = Field(description="Per-target outcomes and the named remainder, exactly as the record would carry them.")

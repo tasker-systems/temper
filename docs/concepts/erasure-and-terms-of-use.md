@@ -53,14 +53,16 @@ determination. In one server-side transaction it:
   resource there goes through the same act that erases a single resource: its text,
   structured content, embeddings, search data, title, origin, properties and history are
   emptied or replaced by placeholders, in the projections **and in the event ledger**, and
-  it remains only as an empty record marked erased. Every relationship touching it is ended
-  and its label cleared, including relationships from a team's content into the estate.
+  it remains only as a **husk**, an empty record marked erased. Every relationship touching
+  it is ended and its label cleared, including relationships from a team's content into the
+  estate.
   Content a guest wrote there under line 2 dies with it, files included; the bytes are
   released only when no live record carries the same content hash.
-- Scrubs the subject's identity fields: handle, display name, email, linked provider
-  identifiers. Attribution to them anywhere else breaks because their profile stops
-  resolving to a person (the pseudonym break) — their past contributions to team contexts
-  are never edited to hide them.
+- Removes the subject's identity fields: handle, display name, email, linked provider
+  identifiers. The profile is then **tombstoned**: its id stays, as a pseudonym.
+  Attribution to them anywhere else breaks because their profile stops resolving to a
+  person (the pseudonym break) — their past contributions to team contexts are never
+  edited to hide them.
 - **Erases the estate's contexts themselves** in the same transaction: each is retired, and its
   name and address are replaced by placeholders, in the projections and in every earlier event
   that recorded them (a rename, a retirement, a restoration). Retirement is what makes line 2
@@ -132,6 +134,8 @@ and nothing treats it as a violation by whoever wrote it.
 
 ## Further reading
 
+- **The other erasing and scrubbing acts, and what each word in a record means:**
+  [Erasure acts](./erasure-acts.md).
 - **The delete act erasure is bounded by — custody, the ledger, and bytes:**
   [Deleting a blob](./blob-delete-and-erasure.md).
 - **The departure runbook erasure is deliberately not part of (reversible acts only):**

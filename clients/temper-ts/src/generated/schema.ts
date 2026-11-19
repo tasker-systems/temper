@@ -7050,7 +7050,10 @@ export interface components {
             blob_strikes: components["schemas"]["BlobStrikeView"][];
             /** @description The estate's size by disposition: the subject's @me and personal-team contexts' resources. */
             estate?: components["schemas"]["EstateCounts"];
-            /** @description The redacted set (D2) the act would admit. */
+            /**
+             * @description The redacted set (D2) the act would admit: the content hashes whose projection rows it
+             *     would empty by hash. It names no ledger rewrite.
+             */
             redacted_hashes: string[];
             /** @description Every estate resource, in the order the act would take it. */
             resources?: components["schemas"]["EstateResourcePlan"][];

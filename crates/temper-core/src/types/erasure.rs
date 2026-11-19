@@ -555,7 +555,8 @@ pub struct ErasureExecuteRequest {
 pub struct ErasureSurveyResponse {
     pub subject: Uuid,
     pub already_erased: bool,
-    /// The redacted set (D2) the act would admit.
+    /// The redacted set (D2) the act would admit: the content hashes whose projection rows it
+    /// would empty by hash. It names no ledger rewrite.
     pub redacted_hashes: Vec<String>,
     /// Per-target outcomes and the named remainder, exactly as the record would carry them.
     pub targets: Vec<ErasureTargetOutcome>,
