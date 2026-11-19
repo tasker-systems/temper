@@ -40,7 +40,7 @@ mod tests {
 
     #[test]
     fn with_events_keeps_events() {
-        use crate::operations::events::PushDeferReason;
+        use crate::commands::events::PushDeferReason;
         let events = vec![DomainEvent::PushDeferred {
             reason: PushDeferReason::Offline,
         }];

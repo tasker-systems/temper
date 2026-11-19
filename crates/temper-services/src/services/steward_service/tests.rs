@@ -1,8 +1,9 @@
 use super::*;
 use crate::backend::DbBackend;
+use crate::commands::AdvanceStewardWatermark;
 use sqlx::PgPool;
 use temper_core::error::TemperError;
-use temper_workflow::operations::{AdvanceStewardWatermark, Surface};
+use temper_workflow::operations::Surface;
 
 /// A minimal team-self-cognition graph: a member profile (in the team joined to the cogmap), an
 /// outsider (no access), the cogmap, the team-owned context (the ingest source), and an unrelated

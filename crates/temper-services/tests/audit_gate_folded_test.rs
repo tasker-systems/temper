@@ -24,6 +24,7 @@ use sqlx::PgPool;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::ids::{BlockId, EntityId, ProfileId, ResourceId};
 use temper_core::types::provenance::ProvenanceSource;
+use temper_services::commands::RecordCitationAudit;
 use temper_services::error::ApiError;
 use temper_services::services::citation_audit_service;
 use temper_substrate::payloads::{AnchorRef, Incorporation};
@@ -31,7 +32,7 @@ use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{
     self, AppendParams, CreateMode, CreateParams, FinalizeParams, UpdateParams,
 };
-use temper_workflow::operations::{RecordCitationAudit, Surface};
+use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
 const SECTION_A: &str = "# Alpha\n\nAlpha body paragraph.\n";

@@ -39,6 +39,7 @@ use temper_core::types::graph::{EdgeKind as WireEdgeKind, Polarity};
 use temper_core::types::ids::{BlockId, ProfileId};
 use temper_core::types::provenance::ProvenanceSource;
 use temper_services::backend::DbBackend;
+use temper_services::commands::{AssertRelationship, RecordCitationAudit};
 use temper_services::config::{BlobConfig, BlobCredentialMode};
 use temper_services::services::{access_service, blob_service, context_service};
 use temper_services::test_support;
@@ -49,7 +50,7 @@ use temper_substrate::events::EventContext;
 use temper_substrate::ids::{ContextId, EntityId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
 use temper_substrate::writes::{self, CreateParams};
-use temper_workflow::operations::{AssertRelationship, RecordCitationAudit, Surface};
+use temper_workflow::operations::Surface;
 
 // =================================================================================================
 // Fixture helpers
@@ -1465,7 +1466,7 @@ async fn a_person_references_t_from_their_own_home(pool: PgPool) {
         let edge = backend.assert_relationship(assert_cmd(source, w.r_t)).await;
         // A goal link (advances) to a T resource.
         let goal = backend
-            .update_resource(temper_workflow::operations::UpdateResource {
+            .update_resource(temper_services::commands::UpdateResource {
                 if_match: None,
                 expect: None,
                 resource: ResourceId::from(source),
@@ -1475,9 +1476,9 @@ async fn a_person_references_t_from_their_own_home(pool: PgPool) {
                 managed_meta: None,
                 open_meta: None,
                 open_meta_add: None,
-                goal: Some(temper_workflow::operations::GoalPatch::Set(
-                    ResourceId::from(w.r_t2),
-                )),
+                goal: Some(temper_services::commands::GoalPatch::Set(ResourceId::from(
+                    w.r_t2,
+                ))),
                 move_to: None,
                 context_ref: None,
                 act: ActContext::default(),

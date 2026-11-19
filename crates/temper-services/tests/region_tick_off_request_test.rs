@@ -21,8 +21,9 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, ProfileId};
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use temper_services::backend::DbBackend;
+use temper_services::commands::{BodyUpdate, CreateResource, DeleteResource};
 use temper_services::services::region_service;
-use temper_workflow::operations::{BodyUpdate, CreateResource, DeleteResource, Surface};
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Seed a profile plus its three surface emitter entities — the write path resolves
@@ -650,7 +651,7 @@ async fn a_move_out_settles_the_home_it_left_as_a_delete_does(pool: PgPool) {
         ..ActContext::default()
     };
     backend
-        .update_resource(temper_workflow::operations::UpdateResource {
+        .update_resource(temper_services::commands::UpdateResource {
             expect: None,
             if_match: None,
             open_meta_add: None,
@@ -661,7 +662,7 @@ async fn a_move_out_settles_the_home_it_left_as_a_delete_does(pool: PgPool) {
             managed_meta: None,
             open_meta: None,
             goal: None,
-            move_to: Some(temper_workflow::operations::MoveSpec {
+            move_to: Some(temper_services::commands::MoveSpec {
                 context_to: Some(ContextId::from(destination)),
                 type_to: None,
             }),

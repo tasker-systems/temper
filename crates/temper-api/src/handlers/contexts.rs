@@ -15,6 +15,7 @@ use temper_core::types::query_params::{
     ContextMaterializeDeltaQuery, ContextShapeQuery, ListContextsQuery, ResolveContextQuery,
 };
 use temper_services::backend::DbBackend;
+use temper_services::commands::MaterializeOnThreshold;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::context_service::{
     self, ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
@@ -23,7 +24,6 @@ use temper_services::services::context_service::{
 };
 use temper_services::services::materialize_service;
 use temper_services::state::AppState;
-use temper_workflow::operations::MaterializeOnThreshold;
 
 /// List contexts you can see
 #[utoipa::path(

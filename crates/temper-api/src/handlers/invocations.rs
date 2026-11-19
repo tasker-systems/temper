@@ -27,7 +27,7 @@ use temper_core::types::invocation_requests::{
     CloseInvocationRequest, InvocationAck, OpenInvocationRequest,
 };
 use temper_core::types::query_params::InvocationListQuery as ListQuery;
-use temper_workflow::operations::{CloseInvocation, OpenInvocation};
+use temper_services::commands::{CloseInvocation, OpenInvocation};
 
 /// Open an invocation
 #[utoipa::path(

@@ -17,9 +17,9 @@ use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::reblock::{ReblockReceipt, ReblockRequest, DEFAULT_REBLOCK_LIMIT};
 use temper_services::backend::DbBackend;
+use temper_services::commands::ReblockResources;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
-use temper_workflow::operations::ReblockResources;
 
 /// Run one bounded, resumable re-blocking step
 #[utoipa::path(

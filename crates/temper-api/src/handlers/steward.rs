@@ -24,7 +24,7 @@ use temper_core::types::steward::{
     AdvanceWatermarkAck, AdvanceWatermarkRequest, DispatchTickRequest, DispatchTickResponse,
     DriftSweepRow, IngestDelta,
 };
-use temper_workflow::operations::{AdvanceStewardWatermark, StewardDispatchTick};
+use temper_services::commands::{AdvanceStewardWatermark, StewardDispatchTick};
 
 /// Read a map's ingest delta
 #[utoipa::path(

@@ -17,9 +17,10 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, InvocationId, ProfileId};
 use temper_core::types::invocation::Disposition;
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{
-    AssertRelationship, CloseInvocation, CreateResource, OpenInvocation, Surface,
+use temper_services::commands::{
+    AssertRelationship, CloseInvocation, CreateResource, OpenInvocation,
 };
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 mod common;

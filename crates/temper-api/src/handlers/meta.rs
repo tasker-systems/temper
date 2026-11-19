@@ -10,7 +10,7 @@ use temper_services::state::AppState;
 
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::resource_view::ResourceView;
-use temper_workflow::operations::UpdateResource;
+use temper_services::commands::UpdateResource;
 use temper_workflow::types::managed_meta::MetaUpdatePayload;
 
 /// Read a resource's frontmatter

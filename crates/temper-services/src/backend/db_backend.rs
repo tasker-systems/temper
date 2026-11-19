@@ -19,6 +19,14 @@ use chrono::Utc;
 use sqlx::PgPool;
 use temper_macros::act_span;
 
+use crate::commands::{
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, BodyUpdate,
+    CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap,
+    CreateResource, DeleteResource, FoldRelationship, GoalPatch, MaterializeOnThreshold,
+    OpenInvocation, ReblockResources, ReconcileCognitiveMap, RecordCitationAudit, RetractFacet,
+    RetypeRelationship, ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick,
+    UpdateResource,
+};
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::data_artifact::{
@@ -49,14 +57,7 @@ use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSe
 use temper_core::types::steward::AdvanceWatermarkAck;
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
-use temper_workflow::operations::{
-    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, BodyUpdate,
-    CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap,
-    CreateResource, DeleteResource, FoldRelationship, GoalPatch, MaterializeOnThreshold,
-    OpenInvocation, ReblockResources, ReconcileCognitiveMap, RecordCitationAudit, RetractFacet,
-    RetypeRelationship, ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, Surface,
-    UpdateResource,
-};
+use temper_workflow::operations::Surface;
 
 use temper_substrate::content::PreparedBlock;
 use temper_substrate::events::{fire_with, EventContext, SeedAction};

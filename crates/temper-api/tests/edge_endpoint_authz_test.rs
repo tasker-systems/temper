@@ -46,9 +46,10 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, EdgeId, ProfileId, ResourceId};
 use temper_core::types::property_owner::PropertyOwner;
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{
-    AssertRelationship, CreateResource, FoldRelationship, RetypeRelationship, SetFacet, Surface,
+use temper_services::commands::{
+    AssertRelationship, CreateResource, FoldRelationship, RetypeRelationship, SetFacet,
 };
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

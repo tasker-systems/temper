@@ -23,9 +23,10 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_core::types::property_owner::PropertyOwner;
 use temper_services::backend::DbBackend;
+use temper_services::commands::{CreateResource, SetFacet};
 use temper_services::error::ApiError;
 use temper_services::services::{access_service, facet_service};
-use temper_workflow::operations::{CreateResource, SetFacet, Surface};
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 mod common;

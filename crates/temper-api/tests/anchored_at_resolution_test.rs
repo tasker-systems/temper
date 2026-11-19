@@ -28,10 +28,11 @@ use temper_core::types::ids::{ContextId, EdgeId, ProfileId, ResourceId};
 use temper_core::types::property_owner::PropertyOwner;
 use temper_core::types::provenance::{BlockFoldDisposition, ProvenanceSource};
 use temper_services::backend::DbBackend;
-use temper_services::services::edge_service::list_edge_facets;
-use temper_workflow::operations::{
-    AssertRelationship, BodyUpdate, CreateResource, SetFacet, Surface, UpdateResource,
+use temper_services::commands::{
+    AssertRelationship, BodyUpdate, CreateResource, SetFacet, UpdateResource,
 };
+use temper_services::services::edge_service::list_edge_facets;
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 // ─── fixtures ────────────────────────────────────────────────────────────────

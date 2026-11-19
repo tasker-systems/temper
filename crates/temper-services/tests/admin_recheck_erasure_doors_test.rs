@@ -36,6 +36,7 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_services::auth::SystemAdmin;
 use temper_services::backend::DbBackend;
+use temper_services::commands::{BodyUpdate, CreateResource};
 use temper_services::error::ApiError;
 use temper_services::services::block_history_scrub_service::{
     execute_block_history_scrub, BlockHistoryScrubRequest,
@@ -47,7 +48,7 @@ use temper_services::services::resource_erasure_service::{
     execute_resource_erasure, ResourceErasureRequest,
 };
 use temper_services::test_support;
-use temper_workflow::operations::{BodyUpdate, CreateResource, Surface};
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 use uuid::Uuid;
 
