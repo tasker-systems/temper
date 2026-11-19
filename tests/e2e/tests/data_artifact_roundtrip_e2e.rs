@@ -601,7 +601,13 @@ async fn a_limit_of_zero_or_above_the_ceiling_is_refused_by_name(pool: PgPool) {
             .await
             .expect_err("an out-of-range limit must be refused, not clamped");
         let said = refused.to_string();
-        assert!(said.contains("400"), "a 400-class refusal, got: {said}");
+        assert!(
+            matches!(
+                refused,
+                temper_client::error::ClientError::BadRequest { .. }
+            ),
+            "a caller-fixable 400 refusal, got: {refused:?}"
+        );
         assert!(
             said.contains(named),
             "the refusal names {named}, got: {said}"
