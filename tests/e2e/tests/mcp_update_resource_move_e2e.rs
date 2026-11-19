@@ -13,8 +13,8 @@
 //! 3. **Refusals** — a destination the caller can read but not write is refused with the kind the
 //!    tool gives every other `403`, HTTP answers it `403`, and the sentence names the destination;
 //!    a bare context name is refused by name.
-//! 4. **Type conversion** — `type_to` converts on MCP as `--type-to` does on the CLI, and an
-//!    unknown type is refused by name on both doors.
+//! 4. **Type conversion** — `type_to` converts on MCP as `--type-to` does on the CLI, and a type
+//!    no schema knows is accepted on both doors and converts to the same stored state.
 
 mod common;
 

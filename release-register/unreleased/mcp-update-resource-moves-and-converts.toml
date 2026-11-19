@@ -12,9 +12,9 @@ Before, the tool sent both as None, so a move or a conversion asked through MCP 
 Refusals: a bare context name is the server's 400, naming the input. A destination the caller can
 read but not write is the server's 403, which this tool renders as invalid_params, the kind it gives
 every 403. When the call carried context_to, that refusal's sentence also names the destination as a
-possible cause. Without context_to, the sentence is unchanged. An unknown type_to is refused before
-the write with the CLI's own parse ("type_to: unknown doctype ..."). update_resource_meta stays
-meta-only, as its description now says.
+possible cause. Without context_to, the sentence is unchanged. A type_to no schema knows is accepted
+and converts the resource to that unschematized type, as a create of that type does; only an empty
+type_to is refused. update_resource_meta stays meta-only, as its description now says.
 
 Who observes: MCP callers that send context_to or type_to. Before, those fields were ignored with no
 error; now they act. Witnesses, each failing on the prior main:
