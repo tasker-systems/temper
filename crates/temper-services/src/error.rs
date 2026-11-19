@@ -363,7 +363,10 @@ impl IntoResponse for ApiError {
             ApiError::SystemAccessRequired { .. } => {
                 (StatusCode::FORBIDDEN, "SYSTEM_ACCESS_REQUIRED")
             }
-            ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BAD_REQUEST"),
+            ApiError::BadRequest(_) => (
+                StatusCode::BAD_REQUEST,
+                temper_core::error::BAD_REQUEST_CODE,
+            ),
             ApiError::PreconditionNotHonoured(_) => (
                 StatusCode::BAD_REQUEST,
                 temper_core::error::PRECONDITION_NOT_HONOURED_CODE,

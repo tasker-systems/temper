@@ -112,7 +112,10 @@ fn map_api_error(context: &str, rule: ForbiddenRule, err: ClientError) -> rmcp::
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
     }
 }
@@ -171,7 +174,10 @@ fn map_create_err(err: ClientError) -> rmcp::ErrorData {
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => rmcp::ErrorData::internal_error(format!("create_context failed: {other}"), None),
     }
 }
@@ -476,7 +482,10 @@ async fn context_changes(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+            }
+            | ClientError::BadRequest { message } => {
+                rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+            }
             other => rmcp::ErrorData::internal_error(format!("changes failed: {other}"), None),
         })?;
     Ok(CallToolResult::success(vec![

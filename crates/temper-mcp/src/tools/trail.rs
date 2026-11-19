@@ -71,7 +71,10 @@ fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => rmcp::ErrorData::internal_error(format!("{action}: {other}"), None),
     }
 }

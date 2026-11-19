@@ -9,6 +9,14 @@ use thiserror::Error;
 /// and the consumer each name independently is a wire contract nothing checks.
 pub const FORBIDDEN_DETAIL_CODE: &str = "FORBIDDEN_DETAIL";
 
+/// The wire `error.code` an ordinary caller-fixable refusal travels under: a `400` whose message
+/// names the input to correct, and whose body carries nothing else a client must read.
+///
+/// Spelled here for the same reason as [`FORBIDDEN_DETAIL_CODE`]: the producer (`temper-services`'
+/// `IntoResponse` for `ApiError::BadRequest`) and the consumer (`temper-client`'s status mapper,
+/// which lifts it to `ClientError::BadRequest`) name one constant rather than two literals.
+pub const BAD_REQUEST_CODE: &str = "BAD_REQUEST";
+
 /// The wire `error.code` a refused composition travels under — a `400` whose `details` carry
 /// [`crate::types::error_details::PlanRefusalDetails`], every static refusal at once.
 ///
