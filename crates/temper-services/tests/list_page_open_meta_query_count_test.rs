@@ -27,7 +27,8 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_core::types::resource_view::ResourceSection;
 use temper_services::backend::{substrate_read, DbBackend};
-use temper_workflow::operations::{CreateResource, Surface};
+use temper_services::commands::CreateResource;
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::ResourceListParams;
 

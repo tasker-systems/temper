@@ -28,9 +28,8 @@ use temper_core::error::TemperError;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{
-    AdvanceStewardWatermark, MaterializeOnThreshold, OpenInvocation, Surface,
-};
+use temper_services::commands::{AdvanceStewardWatermark, MaterializeOnThreshold, OpenInvocation};
+use temper_workflow::operations::Surface;
 
 mod common;
 

@@ -30,10 +30,11 @@ use temper_core::types::property_owner::PropertyOwner;
 use temper_core::types::provenance::{BlockProvenanceRow, ProvenanceSource};
 use temper_services::backend::substrate_read::resource_block_provenance_select;
 use temper_services::backend::DbBackend;
-use temper_services::services::edge_service::list_edge_facets;
-use temper_workflow::operations::{
-    AssertRelationship, BodyUpdate, CreateResource, FoldRelationship, SetFacet, Surface,
+use temper_services::commands::{
+    AssertRelationship, BodyUpdate, CreateResource, FoldRelationship, SetFacet,
 };
+use temper_services::services::edge_service::list_edge_facets;
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 // ─── fixtures ────────────────────────────────────────────────────────────────

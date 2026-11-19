@@ -20,10 +20,9 @@ use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_core::types::precondition::{PreconditionFailure, PreconditionTier, ResourceExpect};
 use temper_core::types::resource_view::{ResourceSection, SectionSet};
 use temper_services::backend::{substrate_read, DbBackend};
+use temper_services::commands::{BodyUpdate, CreateResource, ShowResource, UpdateResource};
 use temper_services::test_support;
-use temper_workflow::operations::{
-    BodyUpdate, CreateResource, ShowResource, Surface, UpdateResource,
-};
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 use uuid::Uuid;
 
@@ -656,7 +655,7 @@ async fn the_token_holds_across_writes_that_keep_the_bytes(pool: PgPool) {
         "a meta write"
     );
 
-    be.assert_relationship(temper_workflow::operations::AssertRelationship {
+    be.assert_relationship(temper_services::commands::AssertRelationship {
         source: resource,
         target: other,
         target_table: temper_core::types::relationship_requests::RelationshipTarget::Resource,

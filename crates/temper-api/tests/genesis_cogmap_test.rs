@@ -26,7 +26,8 @@ use temper_core::types::reconcile::{
     ReconcileTelosBlock,
 };
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{CreateCognitiveMap, ReconcileCognitiveMap, Surface};
+use temper_services::commands::{CreateCognitiveMap, ReconcileCognitiveMap};
+use temper_workflow::operations::Surface;
 
 // ── builders ────────────────────────────────────────────────────────────────────
 

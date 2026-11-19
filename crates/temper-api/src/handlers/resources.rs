@@ -24,7 +24,7 @@ use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
 use temper_core::types::query_params::ResourceShowQuery;
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_core::types::resource_view::ResourceView;
-use temper_workflow::operations::{CreateResource, DeleteResource};
+use temper_services::commands::{CreateResource, DeleteResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::{ContentResponse, DeleteResponse};
 
@@ -286,7 +286,7 @@ pub async fn annotate(
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceAnnotateRequest>,
 ) -> ApiResult<Json<ResourceView>> {
-    use temper_workflow::operations::AnnotateResource;
+    use temper_services::commands::AnnotateResource;
 
     let act = req.act.into_act_context().map_err(ApiError::from)?;
     let cmd = AnnotateResource {
@@ -402,7 +402,7 @@ pub async fn update(
 ) -> ApiResult<Json<ResourceView>> {
     use temper_core::context_ref::parse_context_ref;
     use temper_core::types::ids::ResourceId;
-    use temper_workflow::operations::{BodyUpdate, GoalPatch, MoveSpec, UpdateResource};
+    use temper_services::commands::{BodyUpdate, GoalPatch, MoveSpec, UpdateResource};
 
     temper_services::backend::write_request::check_update_request(&req)?;
 

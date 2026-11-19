@@ -62,7 +62,7 @@ use temper_core::types::auditor::{
 };
 use temper_core::types::ids::{CogmapId, CorrelationId, ProfileId};
 use temper_core::types::query_params::SweepQuery;
-use temper_workflow::operations::{AuditorDispatchTick, CompleteAuditorJob};
+use temper_services::commands::{AuditorDispatchTick, CompleteAuditorJob};
 
 /// Refuse a non-positive `cap` as the caller fault it is.
 ///

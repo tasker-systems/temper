@@ -18,6 +18,7 @@ pub mod auth_config;
 mod authz;
 pub mod backend;
 pub mod broker;
+pub mod commands;
 pub mod config;
 pub mod cors;
 /// The erasure policy in force: the `policy/erasure/` manifest, embedded and parsed once

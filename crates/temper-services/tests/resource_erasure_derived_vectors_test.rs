@@ -28,6 +28,7 @@ use uuid::Uuid;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::materialize::default_lens_for;
 use temper_services::backend::{region_clocks, DbBackend};
+use temper_services::commands::MaterializeOnThreshold;
 use temper_services::services::region_service;
 use temper_services::services::resource_erasure_service::{
     execute_resource_erasure, ResourceErasureCompletion, ResourceErasureOutcome,
@@ -41,7 +42,7 @@ use temper_substrate::ids::{ContextId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
 use temper_substrate::writes::{self, CreateParams};
 use temper_substrate::{substrate, write};
-use temper_workflow::operations::{MaterializeOnThreshold, Surface};
+use temper_workflow::operations::Surface;
 
 /// Distances below this are "the same vector" (pgvector stores float4).
 const SAME: f64 = 1e-5;

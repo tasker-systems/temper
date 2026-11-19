@@ -1,0 +1,19 @@
+title    = "The server's write-command vocabulary is server-only: temperkb-workflow no longer publishes it"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+What changed: the server's write commands (`CreateResource`, `UpdateResource`, `DeleteResource`,
+`AnnotateResource` and the other `DbBackend` commands), their inputs (`BodyUpdate`, `ListFilter`,
+`SearchQuery`), `CommandOutput` and `DomainEvent` moved from `temper_workflow::operations` to
+`temper_services::commands`. `validate_create` and `validate_update` are deleted: nothing called
+them once the CLI stopped building commands, and the server's create and update paths enforce the
+same rules.
+
+Who observes it: a Rust project importing those items from the published `temperkb-workflow`
+crate. Under R25 a temperkb crate's Rust API carries no compatibility promise (the JSON wire is the
+contract), and no known dependent uses them: every caller was in this workspace. No route, request
+or response shape, status code, refusal text, MCP tool, CLI output or schema description changes.
+Release relevance: signal-only.
+'''

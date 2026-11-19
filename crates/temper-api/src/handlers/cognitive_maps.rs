@@ -32,7 +32,7 @@ use temper_core::types::query_params::{MaterializeDeltaQuery, ShapeQuery};
 use temper_core::types::reconcile::{
     CreateCogmapOutcome, CreateCogmapRequest, ReconcileCogmapRequest, ReconcileOutcome,
 };
-use temper_workflow::operations::{
+use temper_services::commands::{
     CreateCognitiveMap, MaterializeOnThreshold, ReconcileCognitiveMap,
 };
 
