@@ -393,7 +393,12 @@ async fn ingest(
         goal: None,
         title: title.to_string(),
         origin_uri: format!("test://ledger-graph-parity/{title}"),
-        context_ref: "@me/default".to_string(),
+        // Exactly one home: a cogmap home sends an empty `context_ref`.
+        context_ref: if cogmap.is_some() {
+            String::new()
+        } else {
+            "@me/default".to_string()
+        },
         home_cogmap_id: cogmap,
         doc_type_name: "research".to_string(),
         content_hash: content.map(|c| temper_core::hash::sha256_hex(c.as_bytes())),
