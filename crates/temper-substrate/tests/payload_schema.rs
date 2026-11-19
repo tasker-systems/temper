@@ -131,7 +131,7 @@ fn the_migration_literal_matches_the_committed_fixture() {
             &[
                 SUPERSEDED, // principal_erased: 20261002000020
                 SUPERSEDED, // principal_erasure_refused: 20260930000050
-                "blob_erased.v1.schema.json",
+                SUPERSEDED, // blob_erased: 20261130000010
             ],
         ),
         (
@@ -170,7 +170,7 @@ fn the_migration_literal_matches_the_committed_fixture() {
         (
             "20261018100010_ledger_exception_second_authority.sql",
             &[
-                "resource_scrubbed.v1.schema.json",
+                SUPERSEDED, // resource_scrubbed: 20261130000010
                 "resource_erasure_refused.v1.schema.json",
             ],
         ),
@@ -184,7 +184,7 @@ fn the_migration_literal_matches_the_committed_fixture() {
         ),
         (
             "20261023100000_person_erasure_identifiers_and_credentials.sql",
-            &["principal_erased.v1.schema.json"],
+            &[SUPERSEDED], // principal_erased: 20261130000010
         ),
         (
             "20261101200000_team_membership_changed.sql",
@@ -212,6 +212,14 @@ fn the_migration_literal_matches_the_committed_fixture() {
                 "team_public_within_changed.v1.schema.json",
                 "public_within_effect_changed.v1.schema.json",
                 "public_within_policy_changed.v1.schema.json",
+            ],
+        ),
+        (
+            "20261130000010_erasure_payload_vocabulary_wording.sql",
+            &[
+                "blob_erased.v1.schema.json",
+                "principal_erased.v1.schema.json",
+                "resource_scrubbed.v1.schema.json",
             ],
         ),
     ] {
