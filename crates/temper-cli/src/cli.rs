@@ -1693,6 +1693,8 @@ pub enum AuthAction {
     /// Clear stored credentials
     Logout,
     /// Show current auth status
+    ///
+    /// Reports `api_url` — where this CLI sends requests and presents any grant it holds (`TEMPER_API_URL`, else `[cloud] api_url`) — whether or not you are signed in.
     Status,
     /// Export a refreshed access token.
     ///

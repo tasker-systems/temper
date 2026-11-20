@@ -886,8 +886,9 @@ fn remove_admin_files(skill_dir: &Path, shipped: &[&str]) -> Result<Vec<String>>
 /// made by an earlier release is recognized as ours to retract. Editing `admin.md` fails
 /// `the_current_admin_revision_is_in_its_table` until its new hash is added here. Recompute a
 /// path's history with `git log --follow --name-only` and `git show <commit>:<path> | shasum -a 256`.
-const ADMIN_SHIPPED_REVISIONS: [&str; 13] = [
+const ADMIN_SHIPPED_REVISIONS: [&str; 14] = [
     "08954f96db388ac317a13874ba5bb83cddfc51c7fbae3cef5cb3b19b16772eaf",
+    "1073ee05358c78b3f19b7adb62e1f5d808d8420ee870c698d98b26d0cf1c6d31",
     "1f39616f4d83f59be3c9d069a297d1b4d2ea5111b681964e190e258c84e91535",
     "2ac330c734c447eb7670c3c0a2182cd4dcf9f7cd44ef26e2cac93dc0e39dcd93",
     "2db09a7648f824d0483087bc6886816b4f1d92ade99680d157bd60b655e9d309",
