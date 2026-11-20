@@ -192,7 +192,10 @@ fn map_api_error(action: &str, err: ClientError) -> rmcp::ErrorData {
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         ClientError::Conflict { message } => {
             rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
         }

@@ -105,8 +105,8 @@ impl ScopedAuthority for GrantAuthority {
 /// The admin arm's subject-liveness floor. A `kb_resources` subject must be live
 /// (`kb_resources.is_active`), asked through the write floor's own liveness check
 /// ([`write_floor::liveness_floor_in_tx`], the one the reassign doors call) rather than a restated
-/// predicate. Either of that floor's refusals — a tombstone or an erased husk — reads "not live";
-/// its classification is the door's to render, not this authority's. On a bare pool connection
+/// predicate. Either of that floor's refusals — a soft-deleted resource or an erased husk —
+/// reads "not live"; its classification is the door's to render, not this authority's. On a bare pool connection
 /// the floor's row lock is released at once: this is an authority probe, not a write's floor.
 ///
 /// Other subject kinds pass here. `can()`'s floor (migration `20260902000010`) also covers

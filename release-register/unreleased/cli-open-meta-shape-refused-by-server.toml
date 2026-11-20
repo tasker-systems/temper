@@ -1,0 +1,22 @@
+title    = "A mis-shaped open-meta key on `resource update` is refused by the server, and the CLI relays its refusal"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+Behavioral: `resource update` no longer checks open-meta shape before sending (ruling R8: the server
+is the only enforcing copy of request shaping). A recognized open-meta key carrying the wrong shape,
+on `resource update --open-meta` or `--open-meta-add` (or a named add flag such as `--tags`), now
+reaches the server, whose `validate_open_meta_shape` refuses it, as `resource create` already did.
+Nothing is written, before or after, and the exit code stays 1.
+
+The stdout error payload changes. Before: code `bad-request`, message `Bad request: invalid
+--open-meta shape: /descriptor: 42 is not of type "string". Run ...`. After: code `api`, message
+`API error: server error (400): Bad request: invalid open_meta shape: /descriptor: 42 is not of type
+"string". A recognized open_meta key carries the wrong shape; run ...`, which is how the CLI renders
+every untyped server 400. A caller branching on `bad-request` for this refusal now sees `api`.
+
+Unchanged: `{"tags":null}` on update still deletes the key; the discouraged-key warning (a bare
+`slug` or `title`) still prints on stderr. Observed by CLI callers that send a mis-shaped recognized
+open-meta key. No HTTP, MCP-tool or schema change.
+'''

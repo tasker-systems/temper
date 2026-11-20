@@ -8,7 +8,7 @@ What follows is temper's own.
 
 - **Writes come in two families; reads stay service-direct.** Resource writes go through
   `DbBackend`, the server's command layer: a handler builds a backend per request and runs one
-  operations command per call. Governance and estate acts (team, context, grant, connection,
+  command (`temper_services::commands`) per call. Governance and estate acts (team, context, grant, connection,
   machine, reassign, blob, subscription, erasure) are service-direct writes through
   `temper-services`. In neither family does a handler call `temper-substrate` write persistence
   or inline `sqlx::query!()`; MCP tools and the CLI reach the handlers over HTTP. *Why:* each act

@@ -101,7 +101,10 @@ fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         // The door's 409 is caller-actionable — the direct catch-all rendered it
         // internal_error (the family's declared delta).
         ClientError::Conflict { message } => {

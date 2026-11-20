@@ -24,6 +24,10 @@ use temper_core::types::query::id_set::MAX_ID_SET_IDS;
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 #[cfg(test)]
 use temper_core::types::workflow_job::EmbeddingStatus;
+use temper_workflow::shaping::{
+    shape_annotate, shape_create, shape_update, AnnotateInput, CreateInput, GoalChange, Home,
+    UpdateInput,
+};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
@@ -97,9 +101,9 @@ pub struct CreateResourceInput {
     /// metadata — first-class here, never a `managed_meta` key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<String>,
-    /// Optional origin URI. Defaults to `mcp://agent/{uuid}`. An external (http/https) origin URI
-    /// with `content` but no explicit `sources` seeds a Remote block-provenance record pointing at
-    /// it (issue #352), so a resource distilled from a URL is citation-grade by default.
+    /// Optional origin URI. Absent: the resource has none (`""`). An external (http/https) origin
+    /// URI with `content` but no explicit `sources` seeds a Remote block-provenance record pointing
+    /// at it, so a resource distilled from a URL is citation-grade by default.
     pub origin_uri: Option<String>,
     /// Optional owner (defaults to @me). Reserved for future team scoping.
     pub owner: Option<String>,
@@ -120,8 +124,9 @@ pub struct CreateResourceInput {
     pub open_meta: Option<serde_json::Value>,
     /// Owner-scoped create idempotency key (issue #581). A client-minted opaque token (a UUIDv7 by
     /// convention): a retried create carrying the same key converges on the already-committed
-    /// resource instead of minting a duplicate, deduped on `(owner, key)`. `None` = an ordinary,
-    /// non-idempotent create. The server mints the resource id; the key never supplies one.
+    /// resource instead of minting a duplicate, deduped on `(owner, key)`. Absent: one is minted
+    /// for this call, so the call's own transport retries converge, but a re-issued call is a new
+    /// create. The server mints the resource id; the key never supplies one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<uuid::Uuid>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship
@@ -271,8 +276,9 @@ pub struct UpdateResourceInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_to: Option<String>,
     /// Convert the resource to another doc type, by name (`task`, `research`, `concept`, …; see
-    /// `describe_schema` with `view: doc_types`). An unknown name is refused before the write.
-    /// The resource keeps its id, body and home. A `managed_meta` or `title` sent in the same call
+    /// `describe_schema` with `view: doc_types`). A name no schema knows is accepted, as a create
+    /// of that type is: the resource becomes that unschematized type. The resource keeps its id,
+    /// body and home. A `managed_meta` or `title` sent in the same call
     /// is validated against the new type, so a value the new type does not take is refused. The
     /// CLI's `--type-to`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -572,52 +578,6 @@ fn resolve_sources(sources: Option<Vec<String>>) -> Result<Vec<ProvenanceSource>
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid sources value: {e}"), None))
 }
 
-/// The body-write pieces the PATCH-shaped update needs, in the door's flat form.
-struct BodyParts {
-    content: Option<String>,
-    sources: Vec<ProvenanceSource>,
-    content_block: Option<Uuid>,
-}
-
-/// The body-write guard, flat-field form for the door's PATCH shape: content and the
-/// provenance fields travel separately on `ResourceUpdateRequest`, so the
-/// sources/content_block-without-content refusals fire here, at the tool, exactly as
-/// they did in the direct binding.
-fn provenance_parts(
-    content: Option<String>,
-    sources: Option<Vec<String>>,
-    content_block: Option<Uuid>,
-) -> Result<BodyParts, rmcp::ErrorData> {
-    match content {
-        Some(content) if !content.is_empty() => Ok(BodyParts {
-            content: Some(content),
-            sources: resolve_sources(sources)?,
-            content_block,
-        }),
-        _ => {
-            if sources.as_ref().is_some_and(|s| !s.is_empty()) {
-                return Err(rmcp::ErrorData::invalid_params(
-                    "sources supplied without content — there is no body block to attribute"
-                        .to_owned(),
-                    None,
-                ));
-            }
-            if content_block.is_some() {
-                return Err(rmcp::ErrorData::invalid_params(
-                    "content_block supplied without content — there is no body revise to address"
-                        .to_owned(),
-                    None,
-                ));
-            }
-            Ok(BodyParts {
-                content: None,
-                sources: Vec::new(),
-                content_block: None,
-            })
-        }
-    }
-}
-
 // ── Tool handlers ──────────────────────────────────────────────────
 
 pub async fn create_resource(
@@ -637,69 +597,41 @@ pub async fn create_resource(
         }
     }
 
-    // Exactly one home, both expressed on the payload; precedence (cogmap beats
-    // context_ref) and bare-name rejection are the ingest handler's, word for word.
-    let home_cogmap_id = match input.cogmap.as_deref() {
-        Some(cogmap_ref) => {
-            if input.context_ref.is_some() {
-                return Err(rmcp::ErrorData::invalid_params(
-                    "context_ref and cogmap are mutually exclusive; supply exactly one home"
-                        .to_string(),
-                    None,
-                ));
-            }
-            Some(
-                temper_workflow::operations::parse_ref(cogmap_ref)
-                    .map_err(|e| {
-                        rmcp::ErrorData::invalid_params(format!("invalid cogmap ref: {e}"), None)
-                    })?
-                    .0,
-            )
+    // Exactly one home: a parse error, so the door's. Everything else the create needs is
+    // shaped by `temper_workflow::shaping`, the same function the CLI shapes through, and judged by
+    // the server.
+    let home = match (input.cogmap.as_deref(), input.context_ref) {
+        (Some(_), Some(_)) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                "context_ref and cogmap are mutually exclusive; supply exactly one home"
+                    .to_string(),
+                None,
+            ));
         }
-        None => {
-            if input.context_ref.is_none() {
-                return Err(rmcp::ErrorData::invalid_params(
-                    "no home specified — supply exactly one of context_ref or cogmap".to_string(),
-                    None,
-                ));
-            }
-            None
+        (Some(cogmap_ref), None) => Home::Cogmap(
+            temper_workflow::operations::parse_ref(cogmap_ref)
+                .map_err(|e| {
+                    rmcp::ErrorData::invalid_params(format!("invalid cogmap ref: {e}"), None)
+                })?
+                .0,
+        ),
+        (None, Some(context_ref)) => Home::Context(context_ref),
+        (None, None) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                "no home specified — supply exactly one of context_ref or cogmap".to_string(),
+                None,
+            ));
         }
     };
 
-    // Slug is §7-dissolved — the ingest door derives it from the title server-side.
-    // The `mcp://agent/{uuid}` origin default stays MCP-local (request shaping).
-    let origin_uri = input
-        .origin_uri
-        .unwrap_or_else(|| format!("mcp://agent/{}", Uuid::new_v4()));
-
-    let content = input.content.unwrap_or_default();
-    let sources = resolve_sources(input.sources)?;
-    // The sources-without-body guard, carried over from the direct binding — and it
-    // must fire HERE: the ingest door carries sources only inside `BodyUpdate`, so an
-    // empty body would silently DROP them instead of refusing.
-    if content.is_empty() && !sources.is_empty() {
-        return Err(rmcp::ErrorData::invalid_params(
-            "sources supplied without content — there is no body block to attribute".to_owned(),
-            None,
-        ));
-    }
-
-    // The caller-supplied managed_meta is a typed input; the wire payload carries the
-    // JSON value the ingest door re-parses server-side (typed at both ends).
-    let managed_meta = match input.managed_meta {
-        Some(m) => Some(serde_json::to_value(m).map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("managed_meta failed to serialize: {e}"), None)
-        })?),
-        None => None,
-    };
-
-    let payload = temper_core::types::ingest::IngestPayload {
+    let payload = shape_create(CreateInput {
         title: input.title,
-        origin_uri,
-        context_ref: input.context_ref.unwrap_or_default(),
-        home_cogmap_id,
-        doc_type_name: input.doc_type_name,
+        doc_type: input.doc_type_name,
+        home,
+        content: input.content,
+        sources: resolve_sources(input.sources)?,
+        managed_meta: input.managed_meta,
+        open_meta: input.open_meta,
         goal: input
             .goal
             .as_deref()
@@ -709,17 +641,11 @@ pub async fn create_resource(
                     .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))
             })
             .transpose()?,
-        content_hash: None,
+        origin_uri: input.origin_uri,
         idempotency_key: input.idempotency_key,
-        content,
-        metadata: None,
-        managed_meta,
-        open_meta: input.open_meta,
-        chunks_packed: None,
-        sources,
         act: input.act,
-        segmented: None,
-    };
+    })
+    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
     let view = client
         .ingest()
@@ -768,7 +694,10 @@ fn map_create_err(e: ClientError) -> rmcp::ErrorData {
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => {
             rmcp::ErrorData::internal_error(format!("Failed to create resource: {other}"), None)
         }
@@ -1051,7 +980,10 @@ pub async fn list_resources(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+            }
+            | ClientError::BadRequest { message } => {
+                rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+            }
             ClientError::NotFound { message } => {
                 rmcp::ErrorData::invalid_params(format!("unknown filter: {message}"), None)
             }
@@ -1109,37 +1041,17 @@ pub async fn update_resource(
     input: UpdateResourceInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let client = svc.relay_client(parts)?;
-    // The caller-supplied managed_meta passes through untouched — identity injection and
-    // slug derivation stay the door's business (the backend validation pipeline).
-    let managed_meta = input.managed_meta.unwrap_or_default();
-    let body = provenance_parts(input.content, input.sources, input.content_block)?;
     // Goal patch is tri-state: `goal` (set/replace, ref resolved client-side) wins over
     // `clear_goal` (retract); absent leaves the goal edge untouched.
-    let (goal, clear_goal) = match (input.goal.as_deref(), input.clear_goal) {
-        (Some(r), _) => (
-            Some(
-                temper_workflow::operations::parse_ref(r)
-                    .map(|parsed| parsed.0)
-                    .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?,
-            ),
-            None,
-        ),
-        (None, Some(true)) => (None, Some(true)),
-        _ => (None, None),
+    let goal = match (input.goal.as_deref(), input.clear_goal) {
+        (Some(r), _) => Some(GoalChange::Set(
+            temper_workflow::operations::parse_ref(r)
+                .map(|parsed| parsed.0)
+                .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?,
+        )),
+        (None, Some(true)) => Some(GoalChange::Clear),
+        _ => None,
     };
-    // The CLI refuses an unknown `--type-to` before it sends anything, with this parse; the
-    // server takes any name. Refusing here too keeps the two doors converting to the same set.
-    if let Some(type_to) = input.type_to.as_deref() {
-        type_to
-            .parse::<temper_core::types::doc_type::DocType>()
-            .map_err(|e| {
-                let cause = match e {
-                    temper_core::error::TemperError::Config(cause) => cause,
-                    other => other.to_string(),
-                };
-                rmcp::ErrorData::invalid_params(format!("type_to: {cause}"), None)
-            })?;
-    }
     // A move adds a second thing `Forbidden` can be about: the destination. The server's refusal
     // is the same bare 403 for both, so the sentence names both rather than send the agent to
     // re-check the wrong one.
@@ -1160,25 +1072,23 @@ pub async fn update_resource(
             ..meta.map(Into::into).unwrap_or_default()
         }),
     };
-    let request = temper_workflow::types::resource::ResourceUpdateRequest {
-        expect,
+    let request = shape_update(UpdateInput {
         title: input.title.clone(),
-        managed_meta: Some(managed_meta),
+        managed_meta: input.managed_meta,
         open_meta: input.open_meta,
         open_meta_add: input.open_meta_add,
-        content: body.content,
-        content_hash: None,
-        chunks_packed: None,
-        // Forwarded verbatim, as the CLI forwards its flags: the server parses and resolves the
-        // ref (a bare name is a 400 naming it) and gates the destination for write.
+        content: input.content,
+        sources: resolve_sources(input.sources)?,
+        content_block: input.content_block,
+        // Sent as written: the server parses and resolves the ref (a bare name is a 400 naming
+        // it) and gates the destination for write.
         context_to: input.context_to.clone(),
         type_to: input.type_to.clone(),
         goal,
-        clear_goal,
-        sources: body.sources,
-        content_block: body.content_block,
+        expect,
         act: input.act,
-    };
+    })
+    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
     // A failed guard is answered as a tool result, never through `across_auth`'s JSON-RPC
     // errors (see `refusals::precondition_failed`).
@@ -1207,7 +1117,10 @@ pub async fn update_resource(
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => {
             rmcp::ErrorData::internal_error(format!("Failed to update resource: {other}"), None)
         }
@@ -1234,11 +1147,11 @@ pub async fn annotate_resource(
     // Classify each source (http/https URL → Remote, else ref → Resource) with the shared resolver;
     // an unparseable value is a hard error, never a silent drop.
     let sources = resolve_sources(Some(input.sources))?;
-    let request = temper_workflow::types::resource::ResourceAnnotateRequest {
+    let request = shape_annotate(AnnotateInput {
         sources,
         content_block: input.content_block,
         act: input.act,
-    };
+    });
 
     client
         .resources()
@@ -1262,7 +1175,10 @@ pub async fn annotate_resource(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+            }
+            | ClientError::BadRequest { message } => {
+                rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+            }
             other => rmcp::ErrorData::internal_error(
                 format!("Failed to annotate resource: {other}"),
                 None,
@@ -1335,7 +1251,10 @@ pub async fn update_resource_meta(
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => rmcp::ErrorData::internal_error(
             format!("Failed to update resource meta: {other}"),
             None,
@@ -1390,7 +1309,10 @@ pub async fn delete_resource(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+            }
+            | ClientError::BadRequest { message } => {
+                rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+            }
             other => {
                 rmcp::ErrorData::internal_error(format!("Failed to delete resource: {other}"), None)
             }

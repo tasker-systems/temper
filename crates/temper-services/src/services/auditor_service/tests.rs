@@ -1,7 +1,8 @@
 use super::*;
+use crate::commands::AuditorDispatchTick;
 use crate::services::workflow_job_service;
 use temper_core::types::workflow_job::{DispatchType, Persona};
-use temper_workflow::operations::{AuditorDispatchTick, Surface};
+use temper_workflow::operations::Surface;
 
 use crate::backend::DbBackend;
 

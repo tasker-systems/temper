@@ -19,6 +19,14 @@ use chrono::Utc;
 use sqlx::PgPool;
 use temper_macros::act_span;
 
+use crate::commands::{
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, BodyUpdate,
+    CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap,
+    CreateResource, DeleteResource, FoldRelationship, GoalPatch, MaterializeOnThreshold,
+    OpenInvocation, ReblockResources, ReconcileCognitiveMap, RecordCitationAudit, RetractFacet,
+    RetypeRelationship, ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick,
+    UpdateResource,
+};
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::data_artifact::{
@@ -49,14 +57,7 @@ use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSe
 use temper_core::types::steward::AdvanceWatermarkAck;
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
-use temper_workflow::operations::{
-    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, BodyUpdate,
-    CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap,
-    CreateResource, DeleteResource, FoldRelationship, GoalPatch, MaterializeOnThreshold,
-    OpenInvocation, ReblockResources, ReconcileCognitiveMap, RecordCitationAudit, RetractFacet,
-    RetypeRelationship, ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, Surface,
-    UpdateResource,
-};
+use temper_workflow::operations::Surface;
 
 use temper_substrate::content::PreparedBlock;
 use temper_substrate::events::{fire_with, EventContext, SeedAction};
@@ -645,13 +646,13 @@ fn validate_managed_meta_pipeline(
 }
 
 /// Receive-side shape gate for the open (caller-defined) frontmatter tier, shared by BOTH
-/// `create_resource` and `update_resource` — the server twin of the CLI send-side check
-/// (symmetric defense). A *recognized* open_meta key carrying a wrong shape (e.g. `descriptor: 42`,
+/// `create_resource` and `update_resource`, and the only enforcing copy: no door checks open-tier
+/// shape before sending (ruling R8). A *recognized* open_meta key carrying a wrong shape (e.g. `descriptor: 42`,
 /// a malformed `date`) is a genuine bug: for the FTS-indexed keys it silently stores-but-does-not-index
 /// (a search miss), which is exactly what this catches. Unrecognized keys always pass — the tier is
 /// `additionalProperties: true`, so a newer convention key reaching an older server never hard-fails
 /// and version skew stays additive-safe. Discouraged keys (bare slug/title) are deliberately NOT gated
-/// here: they are a soft send-side (CLI) warning, not a wire rejection. Shape issues surface as a typed
+/// here: they are a soft CLI warning, not a wire rejection. Shape issues surface as a typed
 /// `BadRequest` (→ 400); a schema-compile failure is a programming error and stays `Config` (→ 500).
 fn validate_open_meta_shape(open_meta: Option<&serde_json::Value>) -> Result<(), TemperError> {
     let Some(value) = open_meta else {
@@ -1187,7 +1188,7 @@ impl DbBackend {
     /// the create back with it, so a `RESOURCE_BUSY` never comes back over a committed resource.
     /// On a fresh create the floor admits (the caller owns the home it was just placed in, visible
     /// to this transaction); on an idempotent replay the id is a PRIOR create's, which may since
-    /// have been tombstoned, erased or reassigned, and there the floor is the door's answer.
+    /// have been soft-deleted, erased or reassigned, and there the floor is the door's answer.
     async fn record_ingestion_source_in_tx(
         &self,
         tx: &mut sqlx::PgConnection,
@@ -1364,8 +1365,8 @@ impl DbBackend {
     /// (`handlers::edges` → 403 "Cannot modify source resource"); the write path only ever asserts
     /// resource→resource edges, so the source is always a `kb_resources` endpoint.
     ///
-    /// Gates the source resource (the tombstone floor + baseline authority) and container-write on
-    /// the edge's home, mirroring the clauses [`Self::assert_edge_from_source_home_in_tx`] applies when the
+    /// Gates the source resource (the soft-delete floor + baseline authority) and container-write
+    /// on the edge's home, mirroring the clauses [`Self::assert_edge_from_source_home_in_tx`] applies when the
     /// edge is created. Without this, mutating an edge would be *easier* than creating the identical
     /// one — a caller with a direct resource grant but no container authority could not assert an
     /// edge, yet could retype one that already exists, silently changing its meaning in a container
@@ -1376,7 +1377,7 @@ impl DbBackend {
     /// re-homed after the edge was asserted.
     ///
     /// **Clause 0, then the three of `assert` in the same order** (source-modify → container-write →
-    /// target-read), plus the tombstone floor the row lookup carries.
+    /// target-read), plus the fold floor the row lookup carries.
     ///
     /// **Clause 0 — the caller sees the edge, else it is absent.** "Sees" is `edges_visible_to`'s
     /// definition: the home anchor readable and both endpoints readable. An edge the caller does
@@ -1410,9 +1411,9 @@ impl DbBackend {
     ///
     /// A second, independent hole the same probe found: there was **no `is_folded` floor**, so a
     /// facet could be written to an already-retracted edge, landing live where no read surface can
-    /// ever see it. `NOT is_folded` in the lookup is the edge's tombstone floor, and it is the same
-    /// rule `can_modify_resource` states for resources: *"a tombstone is unmodifiable on every
-    /// axis."* Folding an already-folded edge is now `NotFound` rather than a silent second fold.
+    /// ever see it. `NOT is_folded` in the lookup is the edge's fold floor, and it is the same
+    /// rule `can_modify_resource` states for resources: a soft-deleted resource is unmodifiable on
+    /// every axis. Folding an already-folded edge is now `NotFound` rather than a silent second fold.
     ///
     /// **Clause ORDER is load-bearing, not cosmetic.** Clause 0 runs first because the clauses after
     /// it render refusals that name a side. It refuses only a caller who does not see the edge as
@@ -1428,9 +1429,9 @@ impl DbBackend {
     /// write cannot separate. Every caller opens the transaction, calls this first, and writes
     /// through an `_in_tx` variant on the same transaction.
     ///
-    /// **The erased classification is not reached in the ordinary case.** A tombstoned or erased
+    /// **The erased classification is not reached in the ordinary case.** A soft-deleted or erased
     /// endpoint on either side is unreadable, so clause 0 answers `NotFound` — to the owner of a
-    /// tombstoned source too, who formerly got the source floor's `403` (owner ruling, 2026-11-03:
+    /// soft-deleted source too, who formerly got the source floor's `403` (owner ruling, 2026-11-03:
     /// a soft-deleted resource does not exist now, so neither does its edge to that owner). In practice an erased
     /// endpoint on either side is not reached even by clause 0:
     /// the erasure act folds every live edge touching the erased resource
@@ -1483,7 +1484,7 @@ impl DbBackend {
 
         // Clause 1 is SOURCE-TYPED. Blob-endpoint edges (D3) have no
         // `can_modify_resource` to run — a blob is immutable and homed like a resource, so
-        // its floor is: live row (`NOT is_folded`, the tombstone floor restated for the one
+        // its floor is: live row (`NOT is_folded`, the fold floor restated for the one
         // table that keeps one) AND the caller can read the blob. The authority arm proper
         // stays clause 2 (container-write on the home), exactly as it subsumes clause 1's
         // authority arms for context-homed resources.
@@ -1511,7 +1512,7 @@ impl DbBackend {
                 .await
                 .map_err(api_err)?;
                 if !live_and_readable.unwrap_or(false) {
-                    // The edge's source is gone (tombstoned — the predicate carries the
+                    // The edge's source is gone (soft-deleted — the predicate carries the
                     // is_active floor) or unreadable from under it: refused as absent,
                     // the same posture the blob arm renders.
                     return Err(TemperError::NotFound(format!("edge {edge_id} not found")));
@@ -1519,8 +1520,8 @@ impl DbBackend {
             }
             // The write floor on the source, under its row lock in this transaction: 403 to a
             // caller who reads the edge but may not modify its source. Clause 0 has already
-            // refused a tombstone or a husk `NotFound` (the read floor hides both), so the
-            // floor's 410 is reachable here only by a write that raced the erasure act past
+            // refused a soft-deleted resource or a husk `NotFound` (the read floor hides both), so
+            // the floor's 410 is reachable here only by a write that raced the erasure act past
             // clause 0 and waited on its lock.
             "kb_resources" => {
                 write_floor::modify_floor_in_tx(
@@ -1564,7 +1565,7 @@ impl DbBackend {
                 .map_err(api_err)?;
                 if !live_and_readable.unwrap_or(false) {
                     // The map is absent or unreadable from under the edge — refused as
-                    // absent (kb_cogmaps keeps no tombstone column; the empty join IS the
+                    // absent (kb_cogmaps keeps no soft-delete column; the empty join IS the
                     // floor, the same shape the blob arm renders).
                     return Err(TemperError::NotFound(format!("edge {edge_id} not found")));
                 }
@@ -1649,7 +1650,7 @@ impl DbBackend {
     /// *authorship* and edge *visibility* answering to one definition — otherwise a caller could
     /// author an edge that the same rules then hide from them.
     ///
-    /// An erased or tombstoned target answers `NotFound` here, never the write floor's `410`: the
+    /// An erased or soft-deleted target answers `NotFound` here, never the write floor's `410`: the
     /// predicate's read floor (`resources_visible_to` joins `kb_resources.is_active`) hides it, and
     /// the caller is not writing the target, so the erased classification does not apply to it.
     ///
@@ -1723,8 +1724,8 @@ impl DbBackend {
     ///
     /// 1. **`can_modify_resource(src)`** — retained, and load-bearing for a reason clause 2 does not
     ///    cover: it carries the soft-delete WRITE floor (`r.is_active`). Container-write alone would
-    ///    happily assert an edge out of a tombstone. It also LEADS the home lookup, and that order
-    ///    is load-bearing too: `can_modify_resource` answers false for an ABSENT source and an
+    ///    happily assert an edge out of a soft-deleted resource. It also LEADS the home lookup,
+    ///    and that order is load-bearing too: `can_modify_resource` answers false for an ABSENT source and an
     ///    unauthorized one alike, so bare `Forbidden` discloses neither — the refusal an absent
     ///    source and an unauthorized one render is the same status and the same body. Reading the
     ///    home first rendered an absent source as a 500 beside this 403, an existence oracle in the
@@ -1734,7 +1735,7 @@ impl DbBackend {
     ///    placing a resource. The home lookup is `fetch_optional` and its missing row renders the
     ///    uniform not-found the target gate uses — reachable only as a data inconsistency (an
     ///    authorized, live resource with no home row), never as a 500. This subsumes clause 1's
-    ///    non-tombstone arms (container-write is
+    ///    non-soft-delete arms (container-write is
     ///    `can_modify_resource`'s arm 4), so the effective source authority is container authority.
     /// 3. **`endpoint_readable_by_profile(tgt)`** — you may point at what you can see. Closes F-1's
     ///    "a caller who can modify A can attach A→B to any B by id, including resources they cannot
@@ -1758,8 +1759,8 @@ impl DbBackend {
     /// false for an ABSENT source and an unauthorized one alike, so the bare `Forbidden` discloses
     /// neither, and a probe cannot read the source's existence off the status code (the 2026-09-05
     /// review's finding, task 01a06f5c). It is the write floor at the head of the edge write's own
-    /// transaction (resource erasure spec D13), so the source cannot be erased or tombstoned between
-    /// the check and the edge.
+    /// transaction (resource erasure spec D13), so the source cannot be erased or soft-deleted
+    /// between the check and the edge.
     ///
     /// Clauses 2 and 3 and the edge write, after clause 1, on a caller-supplied transaction:
     /// clause 2 (container-write on the source's resolved home), clause 3 (the target is readable)
@@ -3103,7 +3104,7 @@ impl DbBackend {
         // column on any PATCH, independent of whether managed_meta is present (a §7-Die key,
         // never a property).
         let title: Option<String> = cmd.title.clone();
-        // Receive-side symmetric-defense gate (twin of create's): reject a recognized open_meta key
+        // The open-tier shape gate (the same as create's): reject a recognized open_meta key
         // carrying the wrong shape before it lands as a property row. Auth ran above; this is the
         // validate-before-write step. Covers both the managed+open and open-only branches below.
         // Runs on the SET half only: a null-valued key is a delete verb, not a value, so
@@ -3370,7 +3371,7 @@ impl DbBackend {
         //
         // Clause 1 (`can_modify_resource` on the source) is NOT re-run: the source IS the resource
         // floored above, in this transaction, under a lock held to commit. Nothing this update
-        // writes can take that admission away: it never tombstones, and a re-home moves the
+        // writes can take that admission away: it never soft-deletes, and a re-home moves the
         // resource only into a context `check_context_authorable` admitted, which is
         // `can_modify_resource`'s own container-write arm on the new home.
         let goal_patched = match cmd.goal {
@@ -3512,8 +3513,8 @@ impl DbBackend {
         //
         // `FOR UPDATE` is what serializes a soft delete against every other write on the
         // resource: the floor's `FOR KEY SHARE` does not conflict with the `FOR NO KEY UPDATE` the
-        // tombstone flip takes, so without it a write that had passed its floor could land on a
-        // resource tombstoned a moment later. Taking it before the floor means the floor's
+        // soft-delete flip takes, so without it a write that had passed its floor could land on a
+        // resource soft-deleted a moment later. Taking it before the floor means the floor's
         // `FOR KEY SHARE` is already covered by this transaction's stronger lock. The reverse order
         // deadlocks: two concurrent deletes of one resource would each hold `KEY SHARE` and each
         // wait on the other to upgrade to `FOR UPDATE`.
@@ -3749,7 +3750,7 @@ impl DbBackend {
         // Home-detect + kernel-vs-context branch is shared with the create/update goal-edge
         // projection via `assert_edge_from_source_home_in_tx`, which owns clauses 2 and 3 (F-1):
         // container-write on the source's home, then the TARGET's read floor — an erased or
-        // tombstoned target stays that clause's 404, never the source floor's 410.
+        // soft-deleted target stays that clause's 404, never the source floor's 410.
         let edge = match self
             .assert_edge_from_source_home_in_tx(
                 &mut tx,

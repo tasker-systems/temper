@@ -1,4 +1,3 @@
-use chrono::Local;
 use temper_core::types::query::id_set::MAX_ID_SET_IDS;
 use temper_core::types::resource_view::{ResourceSection, SectionSet};
 use temper_workflow::schema;
@@ -502,12 +501,11 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 
     use temper_workflow::types::ManagedMeta;
 
-    // Open tail (Task A2): no client-side doctype fail-fast here — the
-    // server gate (`validate_create` / `validate_doctype`) governs, and an
-    // unrecognized doctype is a legitimate free string, not a client error.
+    // No client-side doctype check: the server governs, and an unrecognized doctype is a
+    // legitimate free string, not a client error.
 
-    // Fail-fast: --task linking is only valid for sessions. Reject before any
-    // create round-trip (mirrors the validate_create fail-fast hoist below).
+    // Fail-fast: --task linking is only valid for sessions. The link is a CLI-side act after the
+    // create, so this is the door's own flag rule: refuse before any create round-trip.
     if task.is_some() && doc_type != "session" {
         return Err(TemperError::BadRequest(format!(
             "--task linking is only supported for --type session (got --type {doc_type})"
@@ -531,10 +529,9 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         _ => None,
     };
 
-    // Home resolution — exactly one of --context / --cogmap. The home choice is
-    // a `HomeAnchor` enum (never a placeholder id plus a flag): a context home
-    // carries a placeholder id (the real ref travels as the create's `context_ref`),
-    // a cogmap home carries the resolved `CogmapId`.
+    // Home resolution — exactly one of --context / --cogmap, a parse error and so the door's. A
+    // context ref is sent as written (the server parses and resolves it); a cogmap ref resolves to
+    // its trailing UUID here.
     let (home, ctx) = match (context, cogmap) {
         (Some(_), Some(_)) => {
             return Err(TemperError::BadRequest(
@@ -548,7 +545,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             ));
         }
         (Some(context), None) => (
-            temper_core::types::home::HomeAnchor::Context(temper_core::types::ids::ContextId::new()),
+            temper_workflow::shaping::Home::Context(context.to_string()),
             context.to_string(),
         ),
         (None, Some(cogmap)) => {
@@ -556,9 +553,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             // parsed off and ignored.
             let id = temper_workflow::operations::parse_ref(cogmap)?.0;
             (
-                temper_core::types::home::HomeAnchor::Cogmap(
-                    temper_core::types::ids::CogmapId::from(id),
-                ),
+                temper_workflow::shaping::Home::Cogmap(id),
                 cogmap.to_string(),
             )
         }
@@ -569,69 +564,29 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // Body resolution — --from wins; fall back to --body flag + stdin pipe.
     let body_opt = resolve_create_body(from.as_deref(), body_flag.as_deref(), stdin_is_tty)?;
 
-    // Slug is §7-dissolved (never stored; addressing is trailing-UUID-only), so it is NOT a
-    // caller input — always derived from the title. It seeds the client-side `validate_create`
-    // temper-slug check; the server re-derives its own from the title (issue #307 Bug 2). The
-    // date-prefix for non-Concept/Goal doctypes is a property of THIS slug only — the local
-    // projection filename is `projection::projection_stem` (a bounded decorated ref) and has
-    // never carried the prefix.
-    let doctype_enum = doc_type
-        .parse::<temper_workflow::frontmatter::DocType>()
-        .ok();
-    let slug_resolved = derive_create_slug(title, doctype_enum);
-
-    // Parse the optional --open-meta JSON object (the free-form open tier) and validate its shape
-    // send-side (the server re-enforces the same gate — symmetric defense). A null value names
-    // a key with nothing to delete — the verb belongs to update — so refuse here with the
-    // verb's own vocabulary rather than the generic shape error the schema gate would give.
+    // Parse the optional --open-meta JSON object (the free-form open tier). Its shape, and a null
+    // value on a create, are the server's to refuse; only the discouraged-key advice is the CLI's.
     let open_meta_value = open_meta
         .map(|raw| parse_open_meta_flag("--open-meta", raw))
         .transpose()?;
     if let Some(om) = &open_meta_value {
-        let nulls: Vec<&str> = om
-            .as_object()
-            .map(|o| {
-                o.iter()
-                    .filter(|(_, v)| v.is_null())
-                    .map(|(k, _)| k.as_str())
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !nulls.is_empty() {
-            return Err(TemperError::BadRequest(format!(
-                "open_meta key(s) {} are null on create — omit the key (null deletes a key on \
-                 update; there is nothing to delete on create)",
-                nulls.join(", ")
-            )));
-        }
-        validate_open_meta_send_side(om)?;
+        warn_discouraged_open_meta_keys(om);
     }
 
-    // Build the CreateResource cmd. Body-None when no body input; the create shaper
-    // (`actions::resource_write::shaping`) synthesizes `# {title}\n` for the empty-body case.
-    // For a context home, `home` carries a placeholder id and the actual context
-    // ref (`ctx`) is passed to `resource_write::create`, which hands it to
-    // `cmd_to_ingest_payload`; for a cogmap home, `home` carries the resolved
-    // `CogmapId` and the shaper sends `home_cogmap_id` with an empty
-    // `context_ref`.
-    // Resolve --sources refs → provenance records for the body block. A ref that fails to
-    // parse is a hard error (escalate, never silently drop); sources without a body have
-    // nothing to attribute.
+    // Resolve --sources refs → provenance records for the body block. A ref that fails to parse is
+    // a hard error (escalate, never silently drop). Sources without a body are the server's to
+    // refuse.
     let resolved_sources = resolve_provenance_sources(&sources)?;
     let body_content = body_opt.filter(|b| !b.is_empty());
-    if !resolved_sources.is_empty() && body_content.is_none() {
-        return Err(TemperError::BadRequest(
-            "--sources requires a body update; add --body/--from or pipe content".into(),
-        ));
-    }
 
-    // `resolved_sources` is moved into `cmd.body` below; `--sources-as-edges` needs its
-    // own copy to select edge targets after the create.
+    // `resolved_sources` moves into the create below; `--sources-as-edges` needs its own copy to
+    // select edge targets after the create.
     let sources_for_edges = resolved_sources.clone();
 
-    // The preserve hook's act (authorship + correlation) — `act` itself is consumed by the
-    // create cmd below; the blob commit and derivation_source edge ride the same act.
+    // The preserve hook's act (authorship + correlation) and `--sources-as-edges`' asserts ride the
+    // same act as the create.
     let act_for_preserve = act.clone();
+    let act_for_edges = act.clone();
 
     // Resolve --goal ref → goal resource id (trailing-UUID-only, like `edge assert`); the server
     // projects the live `advances`→goal edge after create. An unparseable ref is a hard error.
@@ -639,70 +594,46 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         .map(temper_workflow::operations::parse_ref)
         .transpose()?;
 
-    // `act` (an `ActInput`) is consumed by `.into_act_context()?` below; `--sources-as-edges`
-    // needs its own copy to attach authorship to the post-create edge asserts.
-    let act_for_edges = act.clone();
-
-    let cmd = temper_workflow::operations::CreateResource {
-        // Mint an owner-scoped create idempotency key up front (issue #581, spike rung 3-C). Every
-        // CLI create carries one so a transient-failure retry — the in-process HTTP retry loop, or a
-        // segmented resume that replays the persisted key — converges on the already-committed
-        // resource via `(owner, key)` dedup instead of minting a duplicate. UUIDv7 by convention
-        // (time-sortable, like every other id this repo mints); the server never treats it as a
-        // resource id. The segmented path may replace this with a resumed key it persisted on a
-        // prior attempt (see `run_segmented_create`).
-        idempotency_key: Some(uuid::Uuid::now_v7()),
-        slug: slug_resolved,
-        doctype: doc_type.to_string(),
-        home,
+    // The create, as every door expresses it: `temper_workflow::shaping` owns its defaults (no
+    // body sends none; an absent origin is empty; an idempotency key is minted when none is given)
+    // and the server judges it.
+    // The preserve hook below homes its blob where the create lands; the home itself moves into
+    // the create.
+    let home_table = match home {
+        temper_workflow::shaping::Home::Context(_) => crate::cli::CliHomeTable::Context,
+        temper_workflow::shaping::Home::Cogmap(_) => crate::cli::CliHomeTable::Cogmap,
+    };
+    let input = temper_workflow::shaping::CreateInput {
         title: title.to_string(),
-        body: body_content.map(|content| temper_workflow::operations::BodyUpdate {
-            content,
-            content_hash: None,
-            chunks_packed: None,
-            sources: resolved_sources,
-            // Create writes a single new body block; per-block addressing is update-only.
-            content_block: None,
-        }),
-        managed_meta: ManagedMeta {
+        doc_type: doc_type.to_string(),
+        home,
+        content: body_content,
+        sources: resolved_sources,
+        managed_meta: Some(ManagedMeta {
             mode: mode.map(String::from),
             effort: effort.map(String::from),
             ..ManagedMeta::default()
-        },
+        }),
         open_meta: open_meta_value,
-        goal: goal_resolved,
-        // A URL `--from` becomes the resource's origin (issue #352); the server seeds a Remote
-        // block-provenance record from it when no explicit `--sources` were given. `--no-source`
-        // and a local-path `--from` leave this `None`.
+        goal: goal_resolved.map(uuid::Uuid::from),
+        // A URL `--from` becomes the resource's origin; the server seeds a Remote block-provenance
+        // record from it when no explicit `--sources` were given. `--no-source` and a local-path
+        // `--from` leave it unset.
         origin_uri: origin_uri_from_source(from.as_deref(), no_source),
-        chunks_packed: None,
-        content_hash: None,
-        act: act.into_act_context()?,
-        origin: temper_workflow::operations::Surface::CliCloud,
+        idempotency_key: None,
+        act,
     };
-
-    // Surface-side pre-flight validation — mirrors the hoist of
-    // `validate_update_args` for update. Without this, cloud-mode create would
-    // skip `validate_create` entirely (the create shaper has no equivalent), and
-    // bad inputs (e.g., --mode plan-or-build whitelist violations) would ship
-    // a doomed request to the server. Hoisting here lets the CLI fail-fast
-    // before any network call in both modes.
-    temper_workflow::operations::validate_create(&cmd)
-        .map_err(|e| TemperError::BadRequest(e.to_string()))?;
 
     // Acquire the client and dispatch the create. A body over `SEGMENT_BUDGET_BYTES` streams
     // through the segmented ingest endpoints (`actions::ingest::run_segmented_create`);
     // everything at or under the budget takes the one-shot `resource_write::create`
-    // (`actions::ingest::ingest_mode` is the seam that decides). Segmented dispatch is
-    // embed-gated like the one-shot path's body-trio computation (`compute_body_chunks`) — a
-    // no-embed build falls through to `resource_write::create`, which returns the
-    // "cloud mode requires --features embed" error for any body, so no separate fallback
-    // message is needed there.
+    // (`actions::ingest::ingest_mode` is the seam that decides). A no-embed build falls through to
+    // `resource_write::create`, which refuses with "cloud mode requires --features embed".
     let (runtime, client) = crate::actions::resource_write::connect()?;
 
     #[cfg(feature = "embed")]
     let created_resource = {
-        let body_len = cmd.body.as_ref().map(|b| b.content.len()).unwrap_or(0);
+        let body_len = input.content.as_ref().map(String::len).unwrap_or(0);
         let budget = temper_ingest::stream::SEGMENT_BUDGET_BYTES;
         if crate::actions::ingest::ingest_mode(body_len, budget)
             == crate::actions::ingest::IngestMode::Segmented
@@ -710,18 +641,17 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             let params = crate::actions::ingest::SegmentedCreateParams {
                 client: &client,
                 vault_root: &config.vault_root,
-                cmd: &cmd,
-                context_ref: &ctx,
+                input: &input,
                 budget,
             };
             runtime.block_on(crate::actions::ingest::run_segmented_create(params))?
         } else {
-            runtime.block_on(crate::actions::resource_write::create(&client, &cmd, &ctx))?
+            runtime.block_on(crate::actions::resource_write::create(&client, input))?
         }
     };
     #[cfg(not(feature = "embed"))]
     let created_resource: temper_core::types::resource_view::ResourceView =
-        runtime.block_on(crate::actions::resource_write::create(&client, &cmd, &ctx))?;
+        runtime.block_on(crate::actions::resource_write::create(&client, input))?;
 
     // Projection refresh: write the new resource to its canonical
     // projection path so the local copy reflects server state at once.
@@ -833,17 +763,8 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
                 // resolves one: a context ref needs the caller's context list (the
                 // create threads the ref server-side, so no UUID is in hand), a cogmap
                 // home is already trailing-UUID.
-                use crate::cli::CliHomeTable;
-                let resolved = match home {
-                    temper_core::types::home::HomeAnchor::Context(_) => {
-                        crate::actions::blob::resolve_home(&client, &ctx, CliHomeTable::Context)
-                            .await?
-                    }
-                    temper_core::types::home::HomeAnchor::Cogmap(_) => {
-                        crate::actions::blob::resolve_home(&client, &ctx, CliHomeTable::Cogmap)
-                            .await?
-                    }
-                };
+                let resolved =
+                    crate::actions::blob::resolve_home(&client, &ctx, home_table).await?;
                 let params = crate::actions::blob::prepare_put(&src_path, None, None)?;
                 let committed =
                     crate::actions::blob::put(&client, resolved, &params, |_, _, _| {}).await?;
@@ -929,28 +850,6 @@ fn resolve_create_body(
             std::io::stdin(),
             crate::actions::body_source::stdin_has_input_within,
         )
-    }
-}
-
-/// Derive a resource slug from the title (slug is §7-dissolved and never a caller
-/// input — issue #307). Date-prefixes every doctype except Concept and Goal (which
-/// are identified by name). `doctype` is `None` for an unrecognized (open-tail)
-/// label, which falls into the date-prefixed catch-all alongside every other
-/// non-Concept/Goal doctype. Used for the client-side `validate_create` temper-slug
-/// check only; the server re-derives its own, and the local projection filename is
-/// built by `projection::projection_stem` from the title and id, not from this.
-fn derive_create_slug(
-    title: &str,
-    doctype: Option<temper_workflow::frontmatter::DocType>,
-) -> String {
-    let today = Local::now().format("%Y-%m-%d").to_string();
-    let base_slug = vault::slugify(title);
-    match doctype {
-        // Concept and Goal are identified by name — no date prefix.
-        Some(temper_workflow::frontmatter::DocType::Concept)
-        | Some(temper_workflow::frontmatter::DocType::Goal) => base_slug,
-        // Every other doctype (known or open-tail/unrecognized) gets a date prefix.
-        _ => format!("{today}-{base_slug}"),
     }
 }
 
@@ -1671,8 +1570,7 @@ pub fn reassign(r#ref: &str, to: &str, fmt: crate::format::OutputFormat) -> Resu
 /// the projection file is removed afterward as a best-effort tail. The
 /// API failure surfaces as an error before any local mutation.
 ///
-/// `force` is forwarded to the backend `DeleteResource` command but does
-/// not gate a CLI-side confirmation prompt — cloud delete is
+/// `force` has no wire field and gates no confirmation prompt — cloud delete is
 /// non-interactive at the surface.
 pub fn delete(
     config: &Config,
@@ -1681,8 +1579,6 @@ pub fn delete(
     act: temper_core::types::ActInput,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
-    use temper_workflow::operations::DeleteResource;
-
     let id = temper_workflow::operations::parse_ref(r#ref)?;
 
     // Context-free read: fetch the row by id to learn its doctype + slug (for
@@ -1699,15 +1595,15 @@ pub fn delete(
     })
     .map_err(|e| drop_projection_if_erased(&config.vault_root, id, e))?;
 
-    let cmd = DeleteResource {
-        resource: id,
-        force,
-        act: act.into_act_context()?,
-        origin: temper_workflow::operations::Surface::CliCloud,
-    };
-
+    // Delete has no wire field for `force` and the server reads none: it is accepted for the
+    // flag's sake only.
+    let _ = force;
     let (runtime, client) = crate::actions::resource_write::connect()?;
-    runtime.block_on(crate::actions::resource_write::delete(&client, &cmd))?;
+    runtime.block_on(crate::actions::resource_write::delete(
+        &client,
+        uuid::Uuid::from(id),
+        &act,
+    ))?;
 
     // Projection refresh: remove the resource's projection file. Best-effort
     // — a removal failure must not fail the (already-committed) delete.
@@ -2251,7 +2147,7 @@ pub fn update_expect(
 fn build_partial_managed_meta_from_args(
     params: &UpdateParams<'_>,
 ) -> Option<temper_workflow::types::ManagedMeta> {
-    // Identity (`--title`) travels first-class on the cmd, not through managed_meta —
+    // Identity (`--title`) travels first-class on the update, not through managed_meta —
     // this builder carries only the Property vocabulary.
     let any_set = params.stage.is_some()
         || params.mode.is_some()
@@ -2382,37 +2278,17 @@ pub fn citation_audits(r#ref: &str, format: crate::format::OutputFormat) -> Resu
     })
 }
 
-/// Send-side gate for the open (caller-defined) frontmatter tier (create + update), the twin of the
-/// server's `validate_open_meta_shape` (symmetric defense — both ends inject/validate from the same
-/// schema so a mis-shaped recognized key never reaches storage). Hard-errors on a recognized key
-/// carrying the wrong shape (e.g. `descriptor: 42`, a malformed `date`) — for the FTS-indexed keys a
-/// wrong shape stores-but-does-not-index, a silent search miss. Unrecognized keys always pass (the tier
-/// is open), so version skew never hard-fails. Discouraged keys (bare `slug`/`title`, whose canonical
-/// home is `temper-slug`/`temper-title`) surface as a non-blocking stderr warning — the write proceeds.
-fn validate_open_meta_send_side(open_meta: &serde_json::Value) -> Result<()> {
-    let issues = temper_workflow::schema::validate_open_meta(open_meta)?;
-    if !issues.is_empty() {
-        let detail = issues
-            .iter()
-            .map(|i| {
-                let where_ = if i.path.is_empty() {
-                    "open_meta"
-                } else {
-                    &i.path
-                };
-                format!("{where_}: {}", i.message)
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(TemperError::BadRequest(format!(
-            "invalid --open-meta shape: {detail}. Run `temper resource describe-open-meta` for the \
-             recognized conventions"
-        )));
-    }
+/// The CLI's one open-tier check: discouraged keys (bare `slug`/`title`, whose canonical home is the
+/// managed identity fields) surface as a non-blocking stderr warning, and the write proceeds.
+///
+/// It is advice, never enforcement. Shape is the server's to refuse (ruling R8: the server is the
+/// only enforcing copy of request shaping): `DbBackend`'s `validate_open_meta_shape` refuses a
+/// recognized key carrying the wrong shape on create, on update's SET half and on the
+/// `open_meta_add` union, and the CLI renders that refusal as it renders any other.
+fn warn_discouraged_open_meta_keys(open_meta: &serde_json::Value) {
     for warning in temper_workflow::schema::check_discouraged_open_meta_keys(open_meta) {
         output::warning(&warning.message);
     }
-    Ok(())
 }
 
 /// The update surface's REPLACE channel: the explicit `--open-meta` JSON object.
@@ -2431,17 +2307,16 @@ fn build_open_meta_for_update(params: &UpdateParams<'_>) -> Result<Option<serde_
         return Ok(None);
     };
     let parsed = parse_open_meta_flag("--open-meta", raw)?;
-    // Shape hard-error + discouraged-key warning, send-side; the server re-enforces it.
-    // The gate runs on the SET half only: a null value is the delete verb, not a value,
-    // so a recognized key deleted via null (e.g. {"tags":null}) must not fail the
-    // "tags must be an array" check. The verbs ride the wire intact for the server to fold.
-    validate_open_meta_send_side(&strip_open_meta_nulls(&parsed))?;
+    // The discouraged-key warning reads the SET half only: a null value is the delete verb, so
+    // deleting a bare `slug` must not warn about writing one. The verbs ride the wire intact for
+    // the server to fold, and shape is the server's to refuse.
+    warn_discouraged_open_meta_keys(&strip_open_meta_nulls(&parsed));
     Ok(Some(parsed))
 }
 
 /// The SET half of an open_meta object: the null-valued entries (the delete verbs)
-/// removed, the rest in stored order. A non-object passes through untouched — the shape
-/// gate refuses it at the root path.
+/// removed, the rest in stored order, for the discouraged-key warning to read. A non-object
+/// passes through untouched; the server refuses it.
 fn strip_open_meta_nulls(parsed: &serde_json::Value) -> serde_json::Value {
     match parsed.as_object() {
         Some(obj) => serde_json::Value::Object(
@@ -2471,8 +2346,9 @@ fn strip_open_meta_nulls(parsed: &serde_json::Value) -> serde_json::Value {
 ///
 /// Both inputs feed the single `open_meta_add` wire field, so where they name the same key
 /// the two sets UNION — the channel's own semantics applied to its own two doors, and the
-/// server unions over the stored value on top of that. Validation runs once, on the merged
-/// object, so a discouraged key named by both warns once rather than twice.
+/// server unions over the stored value on top of that. The discouraged-key warning runs once, on
+/// the merged object, so a key named by both warns once rather than twice. Shape is the server's
+/// to judge, on the union it resolves.
 ///
 /// Returns `None` when neither door was used, so a frontmatter-only update PATCHes nothing
 /// on the open tier.
@@ -2485,7 +2361,7 @@ fn build_open_meta_add_for_update(params: &UpdateParams<'_>) -> Result<Option<se
     let Some(merged) = union_open_meta_patches(named, generic) else {
         return Ok(None);
     };
-    validate_open_meta_send_side(&merged)?;
+    warn_discouraged_open_meta_keys(&merged);
     Ok(Some(merged))
 }
 
@@ -2550,59 +2426,16 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
     }
 }
 
-/// Build a `MoveSpec` from the `--type-to` CLI flag. Returns `None` when
-/// `type_to` is not set.
-///
-/// Context moves (`--context-to`) do NOT produce a `MoveSpec` here: the CLI
-/// can't resolve a context ref to a `ContextId` without DB access. Instead,
-/// the raw ref string travels via `UpdateResource.context_ref` and is
-/// forwarded verbatim by the update shaper as `context_to` in the
-/// HTTP wire payload, where the API handler resolves it server-side.
-fn build_move_spec_from_args(
-    params: &UpdateParams<'_>,
-) -> Option<temper_workflow::operations::MoveSpec> {
-    params
-        .type_to
-        .map(|tt| temper_workflow::operations::MoveSpec {
-            context_to: None,
-            type_to: Some(String::from(tt)),
-        })
-}
-
-/// Resolve the update target: parse the ref to an id, read the current server row
-/// (context-free) for its doctype + home context, and validate any `--type-to` target
-/// before the command is built. Returns the `(id, row)` pair the rest of `update` threads on.
-///
-/// **The resource's OWN doctype is deliberately not gated here.** It used to be, and the
-/// gate refused resources the system itself creates: doc type is a free-text
-/// `kb_properties` row with no lookup table and no server-side parse (`DocType::from_str`
-/// appears nowhere in temper-api / temper-services / temper-substrate / temper-mcp), and
-/// `resource create` discards its own parse error, so the vocabulary is open in every
-/// direction but this one. Production carries 22 live `kernel_landmark` and 4 live
-/// `cogmap_charter` resources `[observed — 2026-08-02]`, and `update` refused all 26 with
-/// *"unknown doctype … expected one of …"* — a message wrong about the system it describes.
-///
-/// The gate was also inert: its parse result was discarded. The remaining doctype check is
-/// [`validate_update_args`], which takes the name as a **string** and reaches
-/// `schema::updatable_fields` — which re-parses it — only when a scalar flag (`--stage`,
-/// `--mode`, …) is actually set. So an out-of-vocabulary resource now accepts
-/// `--tags`/`--open-meta-add`/`--body`, and still refuses `--stage`. The refusal is
-/// **scoped, not renamed**: it is the same "unknown doctype" message, now raised only where
-/// a doc-type schema is genuinely required rather than on every update of the resource.
-///
-/// `--type-to` keeps its gate: choosing a conversion TARGET is a caller's assertion about
-/// what the resource should become, not an existing fact to be re-litigated.
+/// Resolve the update target: parse the ref to an id and read the current server row. The read
+/// is the existence check, so an erased or unreadable resource answers here (and drops its
+/// projection) before any write. Neither the resource's doc type nor a `--type-to` target is
+/// judged here: the server takes any doc-type name, as a create does.
 fn resolve_update_target(
     config: &Config,
     params: &UpdateParams<'_>,
-) -> Result<(
-    temper_core::types::ids::ResourceId,
-    temper_core::types::resource_view::ResourceView,
-)> {
+) -> Result<temper_core::types::ids::ResourceId> {
     let id = temper_workflow::operations::parse_ref(params.r#ref)?;
-    // Update needs only the row (home context + doctype for schema-keyed flag validation);
-    // `get` also carries both meta tiers.
-    let row = crate::actions::runtime::with_client(|client| {
+    crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
             client
                 .resources()
@@ -2612,39 +2445,30 @@ fn resolve_update_target(
         })
     })
     .map_err(|e| drop_projection_if_erased(&config.vault_root, id, e))?;
-    if let Some(tt) = params.type_to {
-        let _ = tt.parse::<temper_workflow::frontmatter::DocType>()?;
-    }
-    Ok((id, row))
+    Ok(id)
 }
 
 /// Update a resource's frontmatter fields.
 ///
 /// Surface responsibilities:
 ///
-/// 1. Doctype + type-to validation (clap-side polish; produces a friendlier
-///    error than letting `validate_update` surface a `BadRequest`).
-/// 2. Per-flag schema validation against `schema::updatable_fields` —
-///    rejects bad enum values (e.g. `--stage frobnicate`) with a
-///    user-targeted message before the operations layer ever sees them.
-/// 3. `--body` flag resolution (stdin/file → `Option<String>`).
-/// 4. Build an `UpdateResource` command and dispatch through `resource_write::update`.
-/// 5. Render output: JSON `{"temper-slug": ..., "content_hash": ...}` to
+/// 1. Resolve the ref and read the row: the read is the existence check, so an erased or
+///    unreadable resource answers here (and drops its projection) before any write.
+/// 2. `--body` flag resolution (stdin/file → `Option<String>`).
+/// 3. Build the update as every door expresses it and dispatch through
+///    `resource_write::update`, which shapes it with `temper_workflow::shaping`. Whether the
+///    flags suit the resource's doc type is the server's to judge.
+/// 4. Render output: JSON `{"temper-slug": ..., "content_hash": ...}` to
 ///    stdout — the agent show-edit-cat workflow contract (per CLAUDE.md).
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     use std::io::IsTerminal;
 
-    use temper_workflow::operations::{BodyUpdate, GoalPatch, UpdateResource};
+    use temper_workflow::shaping::{GoalChange, UpdateInput};
 
-    // 1. Resolve the ref to an id + the current server row (for its doctype
-    //    and home context), validating any `--type-to` target.
-    let (id, row) = resolve_update_target(config, params)?;
-    let current_type = row.doc_type_name.clone();
+    // 1. Resolve the ref to an id, reading the current server row.
+    let id = resolve_update_target(config, params)?;
 
-    // 2. Per-flag schema validation, keyed by the resolved doctype.
-    validate_update_args(params, &current_type)?;
-
-    // 3. --body resolution.
+    // 2. --body resolution.
     let stdin_is_tty = std::io::stdin().is_terminal();
     let resolved_body = crate::actions::body_source::resolve_body_source(
         params.body.as_deref(),
@@ -2653,63 +2477,46 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         crate::actions::body_source::stdin_has_input_within,
     )?;
 
-    // 3b. Resolve --sources refs → provenance records. A ref that fails to parse is a hard
-    // error (escalate); sources without a body update have nothing to attribute.
+    // 2b. Resolve --sources refs → provenance records. A ref that fails to parse is a hard
+    // error (escalate). Sources or a --content-block without a body are the server's to refuse.
     let resolved_sources = resolve_provenance_sources(params.sources)?;
-    if !resolved_sources.is_empty() && resolved_body.is_none() {
-        return Err(TemperError::BadRequest(
-            "--sources requires a body update; add --body or pipe content".into(),
-        ));
-    }
-    // --content-block addresses which block the body revise targets; with no body there is
-    // nothing to write to it.
-    if params.content_block.is_some() && resolved_body.is_none() {
-        return Err(TemperError::BadRequest(
-            "--content-block requires a body update; add --body or pipe content".into(),
-        ));
-    }
 
-    // 3c. Goal patch: --goal (set/replace, ref resolved via parse_ref) wins; --clear-goal
+    // 2c. Goal patch: --goal (set/replace, ref resolved via parse_ref) wins; --clear-goal
     // retracts; neither leaves the goal edge untouched. clap's `conflicts_with` guarantees at
     // most one is set, so the ordering here is defensive, not load-bearing.
     let goal = match (params.goal, params.clear_goal) {
-        (Some(r), _) => Some(GoalPatch::Set(temper_workflow::operations::parse_ref(r)?)),
-        (None, true) => Some(GoalPatch::Clear),
+        (Some(r), _) => Some(GoalChange::Set(uuid::Uuid::from(
+            temper_workflow::operations::parse_ref(r)?,
+        ))),
+        (None, true) => Some(GoalChange::Clear),
         (None, false) => None,
     };
 
-    // 4. Build the UpdateResource cmd.
-    // context_to travels as a raw ref via context_ref (the API handler resolves
-    // it server-side); type_to goes through MoveSpec and travels first-class on
-    // the wire (type is no longer a managed_meta key).
-    let cmd = UpdateResource {
-        expect: params.expect.clone(),
-        // The CLI's body guard is `--expect-body`, carried in `expect`; it sends no header.
-        if_match: None,
-        resource: id,
+    // 3. The update, as every door expresses it. `--context-to` and `--type-to` travel as
+    // written: the server resolves the context ref and takes any doc-type name.
+    let input = UpdateInput {
         title: params.title.map(String::from),
-        // CLI update has no --slug flag; the server derives the slug from an
-        // effective title change.
-        slug: None,
-        body: resolved_body.map(|content| {
-            let mut body = BodyUpdate::new(content);
-            body.sources = resolved_sources;
-            body.content_block = params.content_block;
-            body
-        }),
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_open_meta_for_update(params)?,
         open_meta_add: build_open_meta_add_for_update(params)?,
+        content: resolved_body,
+        sources: resolved_sources,
+        content_block: params.content_block,
+        context_to: params.context_to.map(String::from),
+        type_to: params.type_to.map(String::from),
         goal,
-        move_to: build_move_spec_from_args(params),
-        context_ref: params.context_to.map(String::from),
-        act: params.act.clone().into_act_context()?,
-        origin: temper_workflow::operations::Surface::CliCloud,
+        // The CLI's body guard is `--expect-body`, carried in `expect`; it sends no header.
+        expect: params.expect.clone(),
+        act: params.act.clone(),
     };
 
-    // 5. Acquire the client and dispatch the update.
+    // 4. Acquire the client and dispatch the update.
     let (runtime, client) = crate::actions::resource_write::connect()?;
-    let updated_row = runtime.block_on(crate::actions::resource_write::update(&client, &cmd))?;
+    let updated_row = runtime.block_on(crate::actions::resource_write::update(
+        &client,
+        uuid::Uuid::from(id),
+        input,
+    ))?;
 
     // 6. Projection refresh: rewrite the affected projection file from
     //    the returned server row. Best-effort — a projection write
@@ -2892,8 +2699,6 @@ pub struct AnnotateParams<'a> {
 /// addressed block with no re-chunk/re-embed (body_hash + embeddings unchanged). Verify the recorded
 /// rows with `resource show --provenance`.
 pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
-    use temper_workflow::operations::AnnotateResource;
-
     // Resolve the ref to an id and read the row first: the read is the existence check, so an
     // erased or unreadable resource answers here (and drops its projection) before any write.
     let id = temper_workflow::operations::parse_ref(params.r#ref)?;
@@ -2912,16 +2717,18 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
     // (escalate, never a silent drop). clap guarantees the list is non-empty (`required = true`).
     let resolved_sources = resolve_provenance_sources(params.sources)?;
 
-    let cmd = AnnotateResource {
-        resource: id,
+    let input = temper_workflow::shaping::AnnotateInput {
         sources: resolved_sources,
         content_block: params.content_block,
-        act: params.act.clone().into_act_context()?,
-        origin: temper_workflow::operations::Surface::CliCloud,
+        act: params.act.clone(),
     };
 
     let (runtime, client) = crate::actions::resource_write::connect()?;
-    let annotated = runtime.block_on(crate::actions::resource_write::annotate(&client, &cmd))?;
+    let annotated = runtime.block_on(crate::actions::resource_write::annotate(
+        &client,
+        uuid::Uuid::from(id),
+        input,
+    ))?;
 
     // The resource body is unchanged, so there is no projection file to rewrite — emit the same flat
     // action result `update` does (status + resource row), so the two write verbs read identically.
@@ -2932,62 +2739,6 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
     };
     let rendered = render_action_result_with_ref(&result, params.format)?;
     crate::output::plain(rendered);
-    Ok(())
-}
-
-/// Per-flag schema validation for `update`. Lifted from the pre-B4 surface
-/// code so the friendlier per-flag error messages survive the migration.
-/// Only validates scalar managed-meta flags; array fields and `title` (a
-/// base-schema field valid on all doctypes) are skipped.
-fn validate_update_args(params: &UpdateParams<'_>, current_type: &str) -> Result<()> {
-    // Build list of scalar field updates: (frontmatter_key, value) — a
-    // direct lift of the pre-B4 inline assembly so the validation loop
-    // semantics are unchanged.
-    let scalar_updates: Vec<(&str, String)> = [
-        ("temper-title", params.title.map(String::from)),
-        ("temper-stage", params.stage.map(String::from)),
-        ("temper-mode", params.mode.map(String::from)),
-        ("temper-effort", params.effort.map(String::from)),
-        ("temper-branch", params.branch.map(String::from)),
-        ("temper-pr", params.pr.map(String::from)),
-        ("temper-status", params.status.map(String::from)),
-        ("temper-seq", params.seq.map(|s| s.to_string())),
-    ]
-    .into_iter()
-    .filter_map(|(k, v)| v.map(|val| (k, val)))
-    .collect();
-
-    if scalar_updates.is_empty() {
-        return Ok(());
-    }
-
-    let schema_fields = schema::updatable_fields(current_type)?;
-
-    // Fields valid on all types — READ from base.schema.json, not listed. This was a
-    // hand-written `["temper-title"]` that silently omitted the base-declared provenance trio;
-    // `schema::universal_fields` is the same answer the shared write gate applies, so the CLI's
-    // friendlier per-flag message survives without the definition forking from it.
-    let universal = schema::universal_fields();
-
-    for (field_name, value) in &scalar_updates {
-        if universal.contains(*field_name) {
-            continue;
-        }
-        match schema_fields.iter().find(|(n, _)| n == field_name) {
-            Some((_name, schema_prop)) => {
-                if let Some(err) = schema::validate_field_value(field_name, value, schema_prop) {
-                    return Err(TemperError::Project(err));
-                }
-            }
-            None => {
-                let flag = field_name.strip_prefix("temper-").unwrap_or(field_name);
-                return Err(TemperError::Project(format!(
-                    "--{flag} is not valid for type '{current_type}'"
-                )));
-            }
-        }
-    }
-
     Ok(())
 }
 
@@ -3553,73 +3304,6 @@ mod build_helpers_tests {
         }
     }
 
-    /// A doc type the Rust enum does not name is still updatable, as long as the flags in
-    /// play need no doc-type schema.
-    ///
-    /// Doc type is a free-text `kb_properties` row: no lookup table, no server-side parse,
-    /// and `resource create` discards its own. The system therefore mints types the enum
-    /// never learned — 22 live `kernel_landmark` and 4 live `cogmap_charter` in production
-    /// `[observed — 2026-08-02]` — and `resolve_update_target` used to refuse every one of
-    /// them before reading a single flag.
-    ///
-    /// `kernel_landmark` is used verbatim rather than a made-up string precisely because it
-    /// is a real type the substrate writes; a fictional one would pin the mechanism while
-    /// leaving the case that motivated it untested.
-    #[test]
-    fn an_out_of_vocabulary_doctype_is_updatable_by_flags_needing_no_schema() {
-        let mut params = empty_update_params("foo");
-        params.open_meta = Some(r#"{"marker":"x"}"#);
-        let tags = vec!["x".to_string()];
-        params.tags = &tags;
-
-        assert!(
-            validate_update_args(&params, "kernel_landmark").is_ok(),
-            "open-tier flags need no doc-type schema, so an unknown doctype must not \
-             block them — 26 live production resources are exactly this case"
-        );
-    }
-
-    /// The converse, and the reason removing the blanket gate is safe: a flag that DOES
-    /// need the doc-type schema still refuses.
-    ///
-    /// The refusal is scoped, not renamed — `schema::updatable_fields` re-parses the type,
-    /// so it is the same "unknown doctype" message, now raised only where a schema is
-    /// genuinely required instead of on every update of the resource.
-    #[test]
-    fn a_schema_keyed_flag_still_refuses_an_out_of_vocabulary_doctype() {
-        let mut params = empty_update_params("foo");
-        params.stage = Some("done");
-
-        assert!(
-            validate_update_args(&params, "kernel_landmark").is_err(),
-            "--stage is validated against the doc-type schema, so a type with no schema \
-             must still be refused; dropping the blanket gate must not drop this"
-        );
-    }
-
-    /// A known doctype is unaffected in both directions — the change is about types the
-    /// enum does not name, and a guard that also loosened the ordinary path would be a
-    /// different change wearing this one's clothes.
-    #[test]
-    fn a_known_doctype_still_validates_its_scalar_flags() {
-        let mut params = empty_update_params("foo");
-        params.stage = Some("done");
-        assert!(validate_update_args(&params, "task").is_ok());
-
-        let mut bad = empty_update_params("foo");
-        bad.stage = Some("done");
-        assert!(
-            validate_update_args(&bad, "memory").is_err(),
-            "a memory has no temper-stage field, so --stage on one is still a schema error"
-        );
-    }
-
-    #[test]
-    fn build_move_spec_returns_none_when_both_flags_unset() {
-        let params = empty_update_params("foo");
-        assert!(build_move_spec_from_args(&params).is_none());
-    }
-
     #[test]
     fn origin_uri_from_url_source() {
         // A URL `--from` becomes the resource's origin (verbatim — casing preserved for the
@@ -3655,49 +3339,8 @@ mod build_helpers_tests {
         assert_eq!(origin_uri_from_source(None, false), None);
     }
 
-    /// context_to goes via `context_ref` in `UpdateResource`, not through
-    /// `MoveSpec.context_to`: the CLI can't resolve a ref to a ContextId
-    /// without DB access, so MoveSpec.context_to is always None from the CLI.
-    #[test]
-    fn build_move_spec_returns_none_when_only_context_to_set() {
-        let mut params = empty_update_params("foo");
-        params.context_to = Some("@me/temper");
-        // MoveSpec is None when only context_to is provided; the ref is
-        // forwarded via UpdateResource.context_ref by the caller instead.
-        assert!(
-            build_move_spec_from_args(&params).is_none(),
-            "context_to alone must not produce a MoveSpec; raw ref goes via context_ref"
-        );
-    }
-
-    #[test]
-    fn build_move_spec_returns_some_with_type_to_when_set() {
-        let mut params = empty_update_params("foo");
-        params.type_to = Some("concept");
-        let spec = build_move_spec_from_args(&params).expect("expected Some with type_to");
-        assert_eq!(
-            spec.context_to, None,
-            "MoveSpec.context_to is always None from CLI"
-        );
-        assert_eq!(spec.type_to, Some("concept".to_string()));
-    }
-
-    #[test]
-    fn build_move_spec_returns_some_with_type_to_when_both_set() {
-        // context_to goes via context_ref; type_to is still in MoveSpec.
-        let mut params = empty_update_params("foo");
-        params.context_to = Some("@me/temper");
-        params.type_to = Some("concept");
-        let spec = build_move_spec_from_args(&params).expect("expected Some with type_to");
-        assert_eq!(
-            spec.context_to, None,
-            "context_to never in MoveSpec from CLI"
-        );
-        assert_eq!(spec.type_to, Some("concept".to_string()));
-    }
-
     // Identity (`--title`) is a first-class wire field since Phase 2 — it travels
-    // on `UpdateResource.title`, not through `build_partial_managed_meta_from_args`
+    // on `UpdateInput.title`, not through `build_partial_managed_meta_from_args`
     // (which now carries only the Property vocabulary). The former "title propagates
     // through the partial managed_meta" guards were removed with that reshape.
 
@@ -3710,41 +3353,18 @@ mod build_helpers_tests {
         assert_eq!(v.get("n"), Some(&serde_json::json!(1)));
     }
 
+    /// The CLI does not judge open-tier shape on update: a mis-shaped recognized key rides the
+    /// wire as typed, for the server's `validate_open_meta_shape` to refuse (ruling R8). The
+    /// refusal itself is witnessed through the binary in the e2e suite
+    /// (`open_meta_shape_refusal_doors_test`).
     #[test]
-    fn validate_open_meta_send_side_passes_wellshaped_and_unknown_keys() {
-        // Recognized keys with correct shapes + an unknown key (open tier stays open) all pass.
-        let om = serde_json::json!({
-            "tags": ["release", "infra"],
-            "descriptor": "the full section descriptor",
-            "date": "2026-07-11",
-            "some_future_convention": {"nested": true}
-        });
-        assert!(validate_open_meta_send_side(&om).is_ok());
-    }
-
-    #[test]
-    fn validate_open_meta_send_side_hard_errors_on_misshaped_recognized_key() {
-        // descriptor must be a string; a number is a shape violation → hard error.
-        assert!(validate_open_meta_send_side(&serde_json::json!({"descriptor": 42})).is_err());
-        // date must match YYYY-MM-DD.
-        assert!(validate_open_meta_send_side(&serde_json::json!({"date": "July 11"})).is_err());
-        // tags items must be strings.
-        assert!(validate_open_meta_send_side(&serde_json::json!({"tags": [1, 2]})).is_err());
-    }
-
-    #[test]
-    fn validate_open_meta_send_side_warns_but_passes_on_discouraged_keys() {
-        // A bare `slug` is discouraged (canonical home is temper-slug) but not a shape error, so the
-        // write proceeds (warning goes to stderr).
-        assert!(validate_open_meta_send_side(&serde_json::json!({"slug": "my-thing"})).is_ok());
-    }
-
-    #[test]
-    fn build_open_meta_for_update_rejects_misshaped_merged_open_meta() {
-        // A mis-shaped recognized key in the --open-meta blob is caught at merge time.
+    fn a_misshaped_recognized_key_rides_the_update_wire_unjudged() {
         let mut params = empty_update_params("foo");
         params.open_meta = Some(r#"{"descriptor": 42}"#);
-        assert!(build_open_meta_for_update(&params).is_err());
+        assert_eq!(
+            build_open_meta_for_update(&params).expect("the CLI does not refuse shape"),
+            Some(serde_json::json!({"descriptor": 42}))
+        );
     }
 
     #[test]
@@ -3757,17 +3377,16 @@ mod build_helpers_tests {
     }
 
     #[test]
-    fn a_null_valued_key_passes_the_update_send_side_gate_as_a_delete_verb() {
-        // {"tags":null} on UPDATE is the delete verb, not a non-array value — the shape
-        // gate must judge the SET half, so the recognized-key check cannot refuse it,
-        // and the verb rides the wire intact for the server to fold.
+    fn a_null_valued_key_rides_the_update_wire_as_a_delete_verb() {
+        // {"tags":null} on UPDATE is the delete verb, not a non-array value: it rides the
+        // wire intact for the server to fold.
         let mut params = empty_update_params("foo");
         params.open_meta = Some(r#"{"tags":null}"#);
-        let built = build_open_meta_for_update(&params).expect("delete verb passes the gate");
+        let built = build_open_meta_for_update(&params).expect("the delete verb is sent");
         assert_eq!(
             built,
             Some(serde_json::json!({"tags": null})),
-            "the verb rides the wire intact, un-refused by the recognized-key shape check"
+            "the verb rides the wire intact"
         );
     }
 
@@ -3783,7 +3402,7 @@ mod build_helpers_tests {
             serde_json::json!({ "marker": "keep" }),
             "nulls dropped, set values kept in order"
         );
-        // A non-object passes through for the shape gate to refuse at the root.
+        // A non-object passes through untouched.
         assert_eq!(
             strip_open_meta_nulls(&serde_json::json!("[1]")),
             serde_json::json!("[1]")
@@ -3962,13 +3581,16 @@ mod build_helpers_tests {
         );
     }
 
-    /// The send-side shape gate covers the generic door too — it runs on the MERGED patch,
-    /// so a key arriving that way is held to the same schema as one arriving by flag.
+    /// The add channel does not judge shape either: the server shape-gates the union it
+    /// resolves, so a mis-shaped recognized key arriving by the generic door is sent as typed.
     #[test]
-    fn build_open_meta_add_rejects_a_misshaped_recognized_key() {
+    fn a_misshaped_recognized_key_rides_the_add_wire_unjudged() {
         let mut params = empty_update_params("foo");
         params.open_meta_add = Some(r#"{"tags":[1,2]}"#);
-        assert!(build_open_meta_add_for_update(&params).is_err());
+        assert_eq!(
+            build_open_meta_add_for_update(&params).expect("the CLI does not refuse shape"),
+            Some(serde_json::json!({"tags": [1, 2]}))
+        );
     }
 
     #[test]

@@ -986,6 +986,21 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
                 parse_error_field(body, "message").unwrap_or_else(|| "write refused".to_owned());
             ClientError::DataArtifactRefusal { message }
         }
+        // Keyed on the CODE, like every typed arm here, and only with the server's sentence: a
+        // `BAD_REQUEST` is the caller's to fix, and the message is what names the input. A 400
+        // with any other code, no code, or no message falls to the catch-all below, so a body this
+        // client could not read is never reported as a caller fault.
+        400 if parse_error_field(body, "code").as_deref()
+            == Some(temper_core::error::BAD_REQUEST_CODE) =>
+        {
+            match parse_error_field(body, "message") {
+                Some(message) => ClientError::BadRequest { message },
+                None => ClientError::Server {
+                    status: 400,
+                    message: "unexpected status 400".to_owned(),
+                },
+            }
+        }
         401 => match parse_error_field(body, "message") {
             // The API's error envelope carried a message — preserve it. The stock
             // variant threw this away, which made post-edge refusal-kind parity
@@ -1542,17 +1557,43 @@ mod tests {
         );
     }
 
-    /// An ordinary 400 keeps its incumbent behaviour. The arm is keyed on the CODE, so widening it
-    /// must not capture every other bad request.
+    /// A readable `BAD_REQUEST` is the caller's fault and says so: it maps to the typed variant
+    /// with the server's sentence intact, not to the `Server` catch-all. Before the arm, this body
+    /// arrived as `Server { status: 400 }` and the CLI reported it as `api`.
     #[test]
-    fn an_ordinary_400_is_untouched_by_the_plan_refused_arm() {
-        let body = r#"{"error":{"code":"BAD_REQUEST","message":"Invalid JSON"}}"#;
+    fn a_readable_bad_request_is_a_typed_caller_error() {
+        let body = r#"{"error":{"code":"BAD_REQUEST","message":"Bad request: Invalid JSON"}}"#;
         match map_status_to_error(status(400), body) {
-            ClientError::Server {
-                status: 400,
-                message,
-            } => assert_eq!(message, "Invalid JSON"),
-            other => panic!("expected the incumbent Server mapping, got {other:?}"),
+            ClientError::BadRequest { message } => assert_eq!(message, "Bad request: Invalid JSON"),
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    /// A 400 this client could not read as a `BAD_REQUEST` refusal stays the catch-all: an
+    /// unreadable body, a body with no code, a `BAD_REQUEST` with no sentence, and a 400 under a
+    /// code no arm owns. Reporting any of those as the caller's fault would hide a contract
+    /// disagreement.
+    #[test]
+    fn an_unreadable_400_stays_the_catch_all() {
+        for (body, expected) in [
+            ("not json at all", "unexpected status 400"),
+            (r#"{"error":{"message":"no code here"}}"#, "no code here"),
+            (
+                r#"{"error":{"code":"BAD_REQUEST"}}"#,
+                "unexpected status 400",
+            ),
+            (
+                r#"{"error":{"code":"PRECONDITION_NOT_HONOURED","message":"not honoured"}}"#,
+                "not honoured",
+            ),
+        ] {
+            match map_status_to_error(status(400), body) {
+                ClientError::Server {
+                    status: 400,
+                    message,
+                } => assert_eq!(message, expected, "{body}"),
+                other => panic!("{body}: expected the Server catch-all, got {other:?}"),
+            }
         }
     }
 

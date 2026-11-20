@@ -122,6 +122,17 @@ pub enum ClientError {
     #[error("conflict: {message}")]
     Conflict { message: String },
 
+    /// An ordinary caller-fixable refusal (HTTP 400, code
+    /// [`temper_core::error::BAD_REQUEST_CODE`]): the input named in `message` is the caller's to
+    /// correct. `message` is the server's sentence as sent, `Bad request: ` prefix included.
+    ///
+    /// Distinct from [`Self::Server`] because the body was read: the server named the refusal's
+    /// kind. A 400 whose body this client could not read, or that carries another code, stays
+    /// `Server { status: 400 }`, so a contract disagreement is never reported as the caller's
+    /// fault. Never retried: the same request is refused the same way.
+    #[error("{message}")]
+    BadRequest { message: String },
+
     /// An append or finalize on an ingest that has ended (HTTP 409, code
     /// [`temper_core::error::INGEST_ENDED_CODE`]): the resource's ingest is `cancelled` or
     /// `abandoned`. Distinct from [`Self::Conflict`] because it is **not** resumable: a resuming

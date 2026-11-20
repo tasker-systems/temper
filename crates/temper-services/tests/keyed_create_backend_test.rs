@@ -15,7 +15,8 @@ use temper_core::types::authorship::ActContext;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{CreateResource, Surface};
+use temper_services::commands::CreateResource;
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Seed a substrate profile and a profile-owned context (the minimum the write path's

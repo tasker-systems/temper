@@ -19,10 +19,11 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, EdgeId, InvocationId, ProfileId, ResourceId};
 use temper_core::types::invocation::Disposition;
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{
+use temper_services::commands::{
     AssertRelationship, CloseInvocation, CreateResource, DeleteResource, OpenInvocation,
-    RetypeRelationship, ReweightRelationship, Surface, UpdateResource,
+    RetypeRelationship, ReweightRelationship, UpdateResource,
 };
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 mod common;

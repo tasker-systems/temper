@@ -12,12 +12,12 @@ use temper_core::types::relationship_requests::{
     ReweightRelationshipRequest,
 };
 use temper_services::backend::DbBackend;
+use temper_services::commands::{
+    AssertRelationship, FoldRelationship, RetypeRelationship, ReweightRelationship,
+};
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::{edge_service, lineage_service};
 use temper_services::state::AppState;
-use temper_workflow::operations::{
-    AssertRelationship, FoldRelationship, RetypeRelationship, ReweightRelationship,
-};
 use temper_workflow::types::graph::{GraphEdgeRow, ResourceConnections};
 
 // ─── Handlers ────────────────────────────────────────────────────────────────

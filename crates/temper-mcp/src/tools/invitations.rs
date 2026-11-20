@@ -234,7 +234,10 @@ pub(crate) fn map_invitation_err(act: &str, err: ClientError) -> rmcp::ErrorData
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => rmcp::ErrorData::internal_error(format!("{act} failed: {other}"), None),
     }
 }
@@ -671,6 +674,11 @@ mod tests {
             },
             ClientError::Server {
                 status: 400,
+                message: "Bad request: invitation has expired".to_string(),
+            },
+            // The typed `BAD_REQUEST` the client now reads off the wire answers exactly as the
+            // untyped 400 did.
+            ClientError::BadRequest {
                 message: "Bad request: invitation has expired".to_string(),
             },
         ] {

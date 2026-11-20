@@ -177,8 +177,8 @@ pub async fn reassign_resource(
     // the reassign's own transaction: the resource must be live, under the `FOR KEY SHARE` row
     // lock the erasure act's `FOR UPDATE` conflicts with, held until the reassign commits. Liveness
     // only — the authority stays the gate above. A refusal is classified as every write floor's
-    // is: 410 `RESOURCE_ERASED` to a holder of an erased husk, 403 otherwise (a tombstone always
-    // 403). It runs ahead of the no-op return so a husk is never answered `200`.
+    // is: 410 `RESOURCE_ERASED` to a holder of an erased husk, 403 otherwise (a soft-deleted
+    // resource always 403). It runs ahead of the no-op return so a husk is never answered `200`.
     let mut tx = pool.begin().await?;
     if let Err(refusal) = write_floor::liveness_floor_in_tx(&mut tx, caller, resource).await {
         return Err(write_floor::rollback_with(tx, ApiError::from(refusal)).await);
@@ -329,8 +329,8 @@ async fn still_in_team_scope(
 
 /// Bulk-reassign, from `from_profile_id` to `to_profile_id`, every LIVE resource owned by
 /// `from` and homed in a context owned by `team_id`. Auth: caller manages the team (never the root
-/// or the gating team), `to` is a member of it, and `from` is or was a member of it. One transaction; returns the reassigned resource ids. A tombstoned or
-/// erased resource is outside the scope; one tombstoned or erased after the scope read fails the
+/// or the gating team), `to` is a member of it, and `from` is or was a member of it. One transaction; returns the reassigned resource ids. A soft-deleted or
+/// erased resource is outside the scope; one soft-deleted or erased after the scope read fails the
 /// liveness floor, and one moved out of the scope after it fails `still_in_team_scope`: either is
 /// skipped and is not among them.
 pub async fn reassign_team_resources(

@@ -24,7 +24,8 @@ use uuid::Uuid;
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{AssertRelationship, Surface};
+use temper_services::commands::AssertRelationship;
+use temper_workflow::operations::Surface;
 
 mod common;
 

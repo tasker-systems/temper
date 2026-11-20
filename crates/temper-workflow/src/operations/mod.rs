@@ -1,36 +1,19 @@
-//! Operations layer — commands, actions and events.
+//! Operations layer — the opinionated frame every door and the server share: the managed-meta
+//! actions (defaults, merges, validation), ref parsing and the act surface.
 //!
-//! This module is the canonical home for command/action/event vocabulary
-//! shared across all surfaces (CLI-local-vault, CLI-cloud, MCP, API-HTTP)
-//! and the server's `DbBackend` (in temper-services), which runs the commands.
-//!
-//! See `temper-artifacts:specs/2026-05-01-shared-core-execution-paths-design.md`.
+//! The server's write-command vocabulary is not here: it lives in `temper-services`, the only
+//! crate that runs it.
 
 mod actions;
-mod commands;
-mod events;
-mod inputs;
-mod output;
 mod refs;
 mod surface;
 
 pub use actions::{
     apply_defaults, apply_defaults_value, assemble_frontmatter_document, merge_managed_meta,
-    merge_open_meta, stamp_provenance, strip_system_managed_fields, validate_create,
-    validate_doctype, validate_managed_meta, validate_open_meta_keys, validate_slug,
-    validate_update, ActionError, FrontmatterIdentity, ValidateManagedMetaParams,
+    merge_open_meta, stamp_provenance, strip_system_managed_fields, validate_doctype,
+    validate_managed_meta, validate_open_meta_keys, validate_slug, ActionError,
+    FrontmatterIdentity, ValidateManagedMetaParams,
 };
-pub use commands::{
-    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
-    CloseInvocation, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap, CreateResource,
-    DeleteResource, FoldRelationship, GoalPatch, ListResources, MaterializeOnThreshold, MoveSpec,
-    OpenInvocation, ReblockResources, ReconcileCognitiveMap, RecordCitationAudit, RetractFacet,
-    RetypeRelationship, ReweightRelationship, SearchResources, SetFacet, ShowResource,
-    StewardDispatchTick, UpdateResource,
-};
-pub use events::{DomainEvent, PushDeferReason};
-pub use inputs::{BodyUpdate, ListFilter, SearchQuery};
-pub use output::CommandOutput;
 pub use refs::{
     decorated_ref, decorated_ref_bounded, is_remote_url, parse_ref, resolve_provenance_source,
     sluggify,

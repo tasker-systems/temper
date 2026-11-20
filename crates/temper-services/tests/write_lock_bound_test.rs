@@ -21,7 +21,8 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_services::backend::write_floor::WRITE_LOCK_TIMEOUT_MS;
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{CreateResource, Surface, UpdateResource};
+use temper_services::commands::{CreateResource, UpdateResource};
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Seed a substrate profile, its emitters, and a profile-owned context. Each test-target crate
@@ -341,7 +342,7 @@ async fn overlapping_writers_cannot_hold_the_act_off(pool: PgPool) {
 /// the code review of this branch.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_goal_patch_waiting_past_the_bound_answers_resource_busy(pool: PgPool) {
-    use temper_workflow::operations::GoalPatch;
+    use temper_services::commands::GoalPatch;
 
     let (backend, _, resource) = seed(&pool, "goalbusy@example.com").await;
     let bound = Duration::from_millis(WRITE_LOCK_TIMEOUT_MS);
@@ -626,7 +627,7 @@ async fn a_create_citing_a_url_does_not_deadlock_with_an_erasure_of_its_goal(poo
         doctype: doctype.to_string(),
         home: HomeAnchor::Context(ContextId::from(context)),
         title: slug.to_string(),
-        body: Some(temper_workflow::operations::BodyUpdate::new(
+        body: Some(temper_services::commands::BodyUpdate::new(
             "A paragraph that cites the shared URL.",
         )),
         managed_meta: ManagedMeta::default(),

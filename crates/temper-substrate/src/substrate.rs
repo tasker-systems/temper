@@ -81,7 +81,7 @@ pub async fn load(pool: &PgPool, anchor: HomeAnchor, lens_name: &str) -> Result<
     //
     // A soft delete (`resource_delete` → `is_active = false`) deliberately leaves the `kb_resource_homes`
     // row in place: the row is preserved, not erased. So the home table alone is NOT the active set, and
-    // joining `kb_resources` to filter tombstones is load-bearing rather than defensive. Without it a
+    // joining `kb_resources` to filter soft-deleted resources is load-bearing rather than defensive. Without it a
     // deleted resource stayed in formation forever — clustered into a region, its vector still pulling the
     // centroid, still counted in `member_count` and `centrality`. Measured on prod: every dead-but-homed
     // resource was still a region member (40 for 40), and six regions had no live member at all.

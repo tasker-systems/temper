@@ -27,12 +27,13 @@ use temper_core::types::element_trail::ElementKind;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, EntityId, ProfileId, ResourceId};
 use temper_services::backend::{substrate_read, DbBackend};
+use temper_services::commands::{CreateResource, UpdateResource};
 use temper_services::error::ApiError;
 use temper_services::services::{context_service, event_service};
 use temper_substrate::affinity::EdgeKind;
 use temper_substrate::events::{fire, EdgeHome, SeedAction};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
-use temper_workflow::operations::{CreateResource, Surface, UpdateResource};
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::{
     ResourceListParams, ResourceListResponse, ResourceSortField, SortOrder,

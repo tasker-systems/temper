@@ -16,7 +16,8 @@ use temper_core::error::TemperError;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{CreateResource, Surface};
+use temper_services::commands::CreateResource;
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 mod common;
@@ -100,7 +101,8 @@ async fn a_non_root_cogmap_requires_authorship(pool: PgPool) {
 
 /// Genesis a map as `creator` (not L0, joined to no team). Returns its id.
 async fn genesis_map(pool: &PgPool, creator: Uuid, name: &str) -> Uuid {
-    use temper_workflow::operations::{CreateCognitiveMap, Surface};
+    use temper_services::commands::CreateCognitiveMap;
+    use temper_workflow::operations::Surface;
     as_profile(pool, creator)
         .create_cognitive_map(CreateCognitiveMap {
             request: temper_core::types::reconcile::CreateCogmapRequest {

@@ -1107,11 +1107,8 @@ async fn a_nul_in_an_act_prose_field_is_refused_by_name(pool: PgPool) {
             .await
             .expect_err("an act holding U+0000 must refuse");
         let message = match err {
-            ClientError::Server {
-                status: 400,
-                message,
-            } => message,
-            other => panic!("U+0000 in `{field}` must arrive as a 400, not as {other}"),
+            ClientError::BadRequest { message } => message,
+            other => panic!("U+0000 in `{field}` must arrive as a typed 400, not as {other}"),
         };
         assert!(
             message.contains(&format!("`{field}` holds the character U+0000")),

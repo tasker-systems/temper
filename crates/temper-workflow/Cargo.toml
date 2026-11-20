@@ -6,7 +6,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Doc-type-aware workflow vocabulary for the temper knowledge base: resource rows, frontmatter, schema validation, and the operations command layer"
+description = "Doc-type-aware workflow vocabulary for the temper knowledge base: resource rows, frontmatter, schema validation, and the request shaping every door shares"
 
 [lib]
 name = "temper_workflow"

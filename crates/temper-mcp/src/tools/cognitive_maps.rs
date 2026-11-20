@@ -331,7 +331,10 @@ fn map_genesis_err(e: ClientError) -> rmcp::ErrorData {
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => rmcp::ErrorData::internal_error(
             format!("Failed to create cognitive map: {other}"),
             None,
@@ -393,7 +396,10 @@ fn map_materialize_err(e: ClientError, action: &str) -> rmcp::ErrorData {
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        }
+        | ClientError::BadRequest { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         other => rmcp::ErrorData::internal_error(format!("{action}: {other}"), None),
     }
 }
@@ -509,7 +515,8 @@ fn map_anchor_err(e: ClientError) -> rmcp::ErrorData {
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(
+        }
+        | ClientError::BadRequest { message } => rmcp::ErrorData::invalid_params(
             format!("invalid context ref: {}", api_error_cause(&message)),
             None,
         ),

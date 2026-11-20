@@ -15,7 +15,8 @@ use temper_core::types::authorship::ActContext;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{CreateResource, GoalPatch, Surface, UpdateResource};
+use temper_services::commands::{CreateResource, GoalPatch, UpdateResource};
+use temper_workflow::operations::Surface;
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::ResourceListParams;
 use uuid::Uuid;
@@ -174,7 +175,7 @@ async fn goal_reassignment_leaves_session_advances_edge_untouched(pool: PgPool) 
         .id;
     // Assert the session→task `advances` edge via the public relationship path.
     backend
-        .assert_relationship(temper_workflow::operations::AssertRelationship {
+        .assert_relationship(temper_services::commands::AssertRelationship {
             source: session,
             target: task,
             target_table: Default::default(),

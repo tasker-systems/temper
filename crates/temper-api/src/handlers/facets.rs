@@ -12,9 +12,9 @@ use temper_core::types::facet_requests::{
 use temper_core::types::ids::{EdgeId, ProfileId, PropertyId, ResourceId};
 use temper_core::types::property_owner::PropertyOwner;
 use temper_services::backend::DbBackend;
+use temper_services::commands::{RetractFacet, SetFacet};
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
-use temper_workflow::operations::{RetractFacet, SetFacet};
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 

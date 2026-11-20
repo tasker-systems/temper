@@ -1334,7 +1334,7 @@ const REPLACE_REBLOCKED: &str =
 const STRUCTURAL_EVENTS: &[&str] = &[
     "resource_created",
     // A delete changes the producer's node set exactly as a create does — `Substrate::load` filters to
-    // `is_active`, so a tombstone leaves formation. Listing it here is what makes that filter *land*:
+    // `is_active`, so a soft-deleted resource leaves formation. Listing it here is what makes that filter *land*:
     // without a clock tick the region never re-forms, and the stale membership/centroid/salience simply
     // sits there until some unrelated structural event happens to fire on the anchor. That is precisely
     // why the prod ghost regions were stable rather than self-healing.

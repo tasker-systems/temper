@@ -39,6 +39,18 @@ auth-identity contract — whose tokens this instance trusts and which it accept
   guests' content in the subject's own contexts), what stays in shared contexts, and what the
   record only reports.
 
+## When something must not exist
+
+- **[Erasure acts](../concepts/erasure-acts.md)** — the two purposes erasure serves (person
+  erasure and remediation), which act serves which, and what erase, scrub, husk, tombstone and
+  redact mean in an act's record.
+- **[Resource erasure](../concepts/resource-erasure.md)** — erasing a whole resource, its
+  relationships and its history, and what the act still leaves.
+- **[Block erasure and history scrub](../concepts/block-erasure-and-history-scrub.md)** — removing
+  one block's leak while the resource survives.
+- **[Field scrub](../concepts/field-scrub.md)** — removing a leak from a title, an origin URI or a
+  property.
+
 ## Keeping the corpus under the blocking policy
 
 - **[Reblocking a corpus](../playbooks/reblock-a-corpus.md)** — bringing existing resources under

@@ -61,8 +61,9 @@ pub struct BlobStrikeOutcome {
 pub struct ErasureCompletion {
     pub event_id: Uuid,
     /// The redacted set (D2): content hashes only — the governed-scope text hashes plus every
-    /// hash actually struck. Team- and map-homed hashes are NOT here; they ride the targets
-    /// as the named remainder.
+    /// hash actually struck, each one's projection rows emptied by hash. It names no ledger
+    /// rewrite. Team- and map-homed hashes are NOT here; they ride the targets as the named
+    /// remainder.
     pub redacted_hashes: Vec<String>,
     /// Per-target outcomes and the named remainder (D6's accepted-in-part arm).
     pub targets: Vec<ErasureTargetOutcome>,
@@ -118,7 +119,7 @@ pub struct ErasureSurvey {
     pub subject: ProfileId,
     pub already_erased: bool,
     /// The redacted set (D2) the act would admit: the governed-scope text hashes plus every
-    /// hash it would actually strike.
+    /// hash it would actually strike, each one's projection rows emptied by hash.
     pub redacted_hashes: Vec<String>,
     pub targets: Vec<ErasureTargetOutcome>,
     pub blob_strikes: Vec<BlobStrikeVerdict>,

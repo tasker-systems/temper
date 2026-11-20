@@ -27,8 +27,10 @@ tools compose, and what a schema cannot warn you about. The server's `tools/list
 
 **Write a resource**
 - Tool: `create_resource` — a new resource in an existing context; validated, chunked and embedded in one call.
-- Tool: `update_resource` — title or content; only the fields you pass change.
+- Tool: `update_resource` — title or content. Only the fields you pass change.
+  Its `context_to` moves the resource to another context, and `type_to` converts its doc type.
 - Tool: `update_resource_meta` — managed_meta and open_meta only, with no re-chunk or re-embed. Returns `{updated, id, view}`.
+  Meta only, by decision: it never moves or converts a resource.
   Both meta writes take `expect` (per-key expected values; `null` is absent) and write nothing when one fails.
 - Tool: `delete_resource` — soft-delete.
 - Tool: `segmented_ingest` — a body too large for one call, or a build that must resume: begin, append, blocks, finalize.
@@ -65,7 +67,8 @@ body: the chunker splits it and embeds the fragments as noise. Read `data-artifa
 **Blobs** — Tools: `blob_read`, `blob_manage`, advertised only while the blob door is open.
 
 **Off MCP, at the CLI:** resource and cogmap grants, the admin ledger, cogmap bind and unbind, and
-reassign. Moving a context to a team is `context_manage` transfer.
+reassign. Moving a context to a team is `context_manage` transfer; moving a resource to another
+context is `update_resource`'s `context_to`.
 
 ## Rules
 
@@ -84,6 +87,17 @@ reassign. Moving a context to a team is `context_manage` transfer.
 - **A content write replaces the whole body.** No tool edits one block's text in place, and
   `annotate_resource` never touches text. Re-read just before writing; for metadata alone use
   `update_resource_meta`. Once a resource has more than one block, name the `content_block`.
+- **A move or a conversion keeps the resource.** `update_resource`'s `context_to` changes only its
+  home; `type_to` changes only its doc type. The id, body and both meta tiers are kept. What each
+  refuses:
+  - `context_to` takes a context ref (`@me/<slug>`, `+<team>/<slug>` or a UUID). A bare name is
+    refused by name.
+  - A move needs write access to the resource and to the destination. A destination you can read
+    but not write is refused, and the refusal names both causes, since it cannot say which held.
+  - `type_to` takes a doc-type name. A name no schema knows is accepted, as on create: the
+    resource becomes that unschematized type, so a typo converts it. Only an empty name is
+    refused. A `managed_meta` or `title` sent in the same call is validated against the new type,
+    and a value the new type does not take is refused.
 - **The context must already exist.** `create_resource` fails on an unknown one. Do not create one
   silently: list contexts and ask the user which they meant, or whether to create it.
 - **Unreadable answers like absent** — an empty trail, provenance or shape list, or not-found. The
