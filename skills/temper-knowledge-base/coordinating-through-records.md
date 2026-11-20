@@ -348,9 +348,9 @@ values. So:
 ### Needs: read both spellings, write `depends_on`, fold a stray
 
 **The convention's default needs key** is `depends_on` in the work item's `open_meta`: an array of
-the work-item ids it waits on. It is a default name, as `claim_id` and `claimed_at` are, and any
-key works the same way. Temper does not normalize open-meta keys, so the spelling is your
-workflow's to keep.
+the work-item ids it waits on. Temper's open-meta schema documents the key, but no write
+normalizes or projects it, so the spelling is your workflow's to keep. As with `claim_id`, any key
+works the same way.
 
 - **Read needs from `depends_on` together with `depends-on`.** Older writers used the hyphen, and
   both are stored as sent. A work item's needs are the union of the two.
@@ -366,10 +366,13 @@ workflow's to keep.
     "correlation_id": "<C>"}
   ```
 
-  - **Echo each array exactly as read, order included.** Arrays compare element by element, so
-    the same ids in another order fail the guard.
-  - **A refusal means the needs changed since your read.** Re-read, rebuild the union, and fold
-    again. Never write without the guard: a concurrent writer's need would be lost.
+  - **Echo each array exactly as read, order included.** An array guard holds only when the
+    stored array has the same elements in the same order, so the same ids reordered fail it. This
+    is the one array guard the convention uses; the advice in "Echo values exactly" still holds
+    for every other key.
+  - **A refusal on `depends_on` or `depends-on` means the needs changed since your read.** Read
+    which keys the refusal names first. Then re-read, rebuild the union, and fold again. Never
+    write without the guard: a concurrent writer's need would be lost.
   - **A refusal can also be your own earlier attempt.** If `depends-on` is now absent and
     `depends_on` holds the union you meant to write, the fold landed.
   - **You may add the expectations of your other keys** to the same write, such as `claim_id`
