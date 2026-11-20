@@ -343,6 +343,14 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::TeamPublicWithinChanged
             | EventKind::PublicWithinEffectChanged
             | EventKind::PublicWithinPolicyChanged
+            // The erasure record (erasure estate-membership spec D6): ids, vocabulary and hashes,
+            // never content. No sidecar.
+            | EventKind::ErasureDeclared
+            | EventKind::ErasureMemberArrived
+            | EventKind::ErasureScopeSealed
+            | EventKind::ErasureReopened
+            | EventKind::ErasureBatchApplied
+            | EventKind::ErasureCompleted
             // The erasure act's admin pair (spec 2026-08-31): authority acts about a PERSON,
             // never knowledge. Same NULL-anchored, content-free shape. The snapshot side of the
             // replay redaction needs NOTHING more than this posture, and that is the point:
@@ -1062,6 +1070,14 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             | EventKind::TeamPublicWithinChanged
             | EventKind::PublicWithinEffectChanged
             | EventKind::PublicWithinPolicyChanged
+            // The erasure record (erasure estate-membership spec D6): registered, and appended by
+            // no writer yet. A no-op here until Task 4 adds each kind's projector and its arm.
+            | EventKind::ErasureDeclared
+            | EventKind::ErasureMemberArrived
+            | EventKind::ErasureScopeSealed
+            | EventKind::ErasureReopened
+            | EventKind::ErasureBatchApplied
+            | EventKind::ErasureCompleted
             // The erasure act's refusal face (spec 2026-08-31, D6): NULL-anchored, mutates
             // NOTHING by design — one reason-code event, and the refusal set must not admit
             // it. The walk stays a no-op; `PrincipalErased` graduated above.

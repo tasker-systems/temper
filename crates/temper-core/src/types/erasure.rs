@@ -246,7 +246,8 @@ pub enum ErasureMemberRefusalReason {
 }
 
 /// A table whose rows an erasure member can name. Serializes as the DDL spells the table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Ordered by declaration, so it can key a map that serializes with stable bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ErasureMemberTable {
@@ -255,6 +256,22 @@ pub enum ErasureMemberTable {
     KbCogmaps,
     KbBlobs,
     KbEdges,
+}
+
+/// What an erasure was declared over, as `kb_erasures.kind` spells it (its
+/// `kb_erasures_kind_check`). Carried by `erasure_declared`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ErasureKind {
+    /// A person's estate; the subject is a profile.
+    Estate,
+    /// One resource; the subject is the resource. Every legacy erasure is of this kind.
+    Resource,
+    /// A selection of items; there is no subject.
+    Selection,
+    /// A resource's block history; the subject is the resource.
+    Block,
 }
 
 impl From<ResourceErasureRefusalReason> for RecordedRefusalReason {

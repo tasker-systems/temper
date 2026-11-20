@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErasureBatchApplied",
+  "description": "`erasure_batch_applied` — the drain's summary of one batch over one member table, and the\nreaper's record of a `batch_fatal` item. NOT an authority: each erased item's authority is its\nown event, named by `authority_event`. Projected as the refusals it records.",
+  "type": "object",
+  "properties": {
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ErasureBatchEntry"
+      }
+    },
+    "member_table": {
+      "$ref": "#/$defs/ErasureMemberTable"
+    }
+  },
+  "required": [
+    "member_table",
+    "entries"
+  ],
+  "$defs": {
+    "ErasureBatchEntry": {
+      "description": "One item's outcome in an [`ErasureBatchApplied`] record. The outcome is the item's, written to\nevery open row of it, in every erasure `erasures` names.",
+      "type": "object",
+      "properties": {
+        "authority_event": {
+          "description": "The item's authorising event, when it was erased.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "erasures": {
+          "description": "The erasures whose open rows of the item the batch locked.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "member": {
+          "description": "The item's id, in the batch's member table.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ErasureBatchOutcome"
+        },
+        "reason": {
+          "description": "Why the item was set aside, when it was refused.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErasureMemberRefusalReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "routine": {
+          "description": "The routine that raised the refusal: a function name, never a message.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sqlstate": {
+          "description": "The SQLSTATE of the error that refused the item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "member",
+        "erasures",
+        "outcome"
+      ]
+    },
+    "ErasureBatchOutcome": {
+      "description": "What a batch did with one item, in an [`ErasureBatchEntry`].",
+      "oneOf": [
+        {
+          "description": "The item was erased, under its own authority event.",
+          "type": "string",
+          "const": "erased"
+        },
+        {
+          "description": "The item was set aside with a reason.",
+          "type": "string",
+          "const": "refused"
+        }
+      ]
+    },
+    "ErasureMemberRefusalReason": {
+      "description": "The drain's closed refusal vocabulary: why an erasure member was set aside rather than erased.\nMirrored by the `kb_erasure_refusal_reasons` table, `policy/erasure/estate.toml`'s\n`[refusal_reasons]` and the `erasure_refusal_reasons` seeds in `system.yaml`; a test holds the\nfour copies equal. Distinct from [`RecordedRefusalReason`], which is the single-resource doors'\nledger vocabulary.",
+      "oneOf": [
+        {
+          "description": "The item is a cogmap's telos or charter resource, which only map-grain erasure erases.",
+          "type": "string",
+          "const": "charter_resource"
+        },
+        {
+          "description": "A verifier raised on the item, so only a code or data fix lets it finish.",
+          "type": "string",
+          "const": "defect"
+        },
+        {
+          "description": "The item failed its batch alone until the reaper set it aside.",
+          "type": "string",
+          "const": "batch_fatal"
+        },
+        {
+          "description": "The item's unit raised an error that no other code names.",
+          "type": "string",
+          "const": "unclassified"
+        }
+      ]
+    },
+    "ErasureMemberTable": {
+      "description": "A table whose rows an erasure member can name. Serializes as the DDL spells the table.\nOrdered by declaration, so it can key a map that serializes with stable bytes.",
+      "type": "string",
+      "enum": [
+        "kb_resources",
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_blobs",
+        "kb_edges"
+      ]
+    }
+  }
+}

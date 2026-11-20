@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, HashMap};
 // The erasure family's wire shapes live in temper-core (every wire type does); the ledger payloads
 // below embed some of them, re-exported here so `payloads::` stays a complete vocabulary.
 pub use temper_core::types::erasure::{
-    ErasureAct, ErasureMemberRefusalReason, ErasureMemberTable, ErasureTargetOutcome,
+    ErasureAct, ErasureKind, ErasureMemberRefusalReason, ErasureMemberTable, ErasureTargetOutcome,
     RecordedRefusalReason, RedactedEventFields, ResourceErasureRefusalReason, RetainedCategory,
     RetentionCategory, ScrubFieldKind, ScrubbedField,
 };
@@ -1782,6 +1782,196 @@ pub struct ResourceScrubbed {
     pub redacted_fields: Vec<RedactedEventFields>,
 }
 
+/// `erasure_declared` — an erasure declared: its kind, subject, request and manifest, the map of
+/// every item it covers, and the holders who could read them. Projected into `kb_erasures`,
+/// `kb_erasure_members`, `kb_erasure_former_holders` and, for an estate, `kb_erasure_estate_snapshots`.
+///
+/// The payload carries `erasure_id` because `_event_append` mints the event's own id and a payload
+/// cannot name it. A map entry carries no status: an entry with `prior_erasure` and `prior_event`
+/// is born `erased` (an earlier erasure already finished the item), and every other is born
+/// `pending`.
+///
+/// `legacy` marks an erasure recorded from a door that names no erasure. A legacy declaration is
+/// always of kind `resource` and carries no request, no manifest, no counts, no checksum and no
+/// holders. Absent means false.
+///
+/// Erasure records are never redacted, and no key is a trail join key: an event is named by
+/// `prior_event`, never `event_id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ErasureDeclared {
+    pub erasure_id: Uuid,
+    pub kind: ErasureKind,
+    /// The subject's table, as the DDL spells it: `kb_profiles` for an estate, `kb_resources` for
+    /// a resource or a block erasure. Absent for a selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_table: Option<String>,
+    /// The subject's id. Absent exactly when `subject_table` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_id: Option<Uuid>,
+    /// The declaring request's idempotency key. Absent only when `legacy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_ref: Option<Uuid>,
+    /// The release semver of the erasure policy the erasure was declared under. Absent only when
+    /// `legacy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_version: Option<String>,
+    /// The sha256 (lowercase hex) of the canonical parsed erasure policy. Absent only when
+    /// `legacy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_digest: Option<String>,
+    /// Every item the erasure covers when declared, containers before the leaves they hold.
+    pub map: Vec<ErasureMapEntry>,
+    /// The declared member count per table, for an estate. Absent for a legacy erasure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counts: Option<BTreeMap<ErasureMemberTable, u64>>,
+    /// The map's checksum (`erasure_map_checksum`), for an estate. Absent for a legacy erasure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<String>,
+    /// The profiles that held the erasure's items when it was declared. Empty for a legacy
+    /// erasure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holders: Vec<Uuid>,
+    /// True for an erasure recorded from a door that names no erasure. Absent means false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy: bool,
+}
+
+/// One item of an erasure's map, as `erasure_declared` declares it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ErasureMapEntry {
+    pub table: ErasureMemberTable,
+    pub id: Uuid,
+    /// The container member (a context or a cogmap) of the same erasure that holds this item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<ErasureMemberRef>,
+    /// The earlier erasure that already finished this item. Present with `prior_event`, and the
+    /// row is then born `erased`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_erasure: Option<Uuid>,
+    /// The event that erased this item in the earlier erasure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_event: Option<Uuid>,
+}
+
+/// An item an erasure member names: its table, as the DDL spells it, and its id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ErasureMemberRef {
+    pub table: ErasureMemberTable,
+    pub id: Uuid,
+}
+
+/// `erasure_member_arrived` — an item mapped into an erasure after its declaration, by the arrival
+/// trigger, the closing survey or the straggler detector. Projected as a `late` member row.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ErasureMemberArrived {
+    pub erasure_id: Uuid,
+    pub member: ErasureMemberRef,
+    /// The container member of the same erasure that holds the item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<ErasureMemberRef>,
+    pub source: ErasureArrivalSource,
+}
+
+/// What found the item an [`ErasureMemberArrived`] record maps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ErasureArrivalSource {
+    /// The arrival trigger, as the item was written into the erasure's scope.
+    Trigger,
+    /// The closing survey, which seals the erasure's scope.
+    ClosingSurvey,
+    /// The straggler detector, after the scope was sealed.
+    Straggler,
+}
+
+/// `erasure_scope_sealed` — the closing survey sealed an erasure's scope. A container erasure
+/// cannot complete before it. Carries the count and the digest of the late members so far.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ErasureScopeSealed {
+    pub erasure_id: Uuid,
+    /// How many members arrived after the declaration.
+    pub late_count: u64,
+    /// The digest of the late members, taken over their `erasure_member_arrived` records.
+    pub late_digest: String,
+}
+
+/// `erasure_reopened` — an item arrived after an erasure completed, so the completion no longer
+/// holds. Its projector clears `kb_erasures.completed_event_id`, and completion runs again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ErasureReopened {
+    pub erasure_id: Uuid,
+    /// The `erasure_member_arrived` event that reopened the erasure.
+    pub arrival_event: Uuid,
+}
+
+/// `erasure_batch_applied` — the drain's summary of one batch over one member table, and the
+/// reaper's record of a `batch_fatal` item. NOT an authority: each erased item's authority is its
+/// own event, named by `authority_event`. Projected as the refusals it records.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ErasureBatchApplied {
+    pub member_table: ErasureMemberTable,
+    pub entries: Vec<ErasureBatchEntry>,
+}
+
+/// One item's outcome in an [`ErasureBatchApplied`] record. The outcome is the item's, written to
+/// every open row of it, in every erasure `erasures` names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ErasureBatchEntry {
+    /// The item's id, in the batch's member table.
+    pub member: Uuid,
+    /// The erasures whose open rows of the item the batch locked.
+    pub erasures: Vec<Uuid>,
+    pub outcome: ErasureBatchOutcome,
+    /// The item's authorising event, when it was erased.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_event: Option<Uuid>,
+    /// Why the item was set aside, when it was refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ErasureMemberRefusalReason>,
+    /// The SQLSTATE of the error that refused the item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sqlstate: Option<String>,
+    /// The routine that raised the refusal: a function name, never a message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine: Option<String>,
+}
+
+/// What a batch did with one item, in an [`ErasureBatchEntry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ErasureBatchOutcome {
+    /// The item was erased, under its own authority event.
+    Erased,
+    /// The item was set aside with a reason.
+    Refused,
+}
+
+/// `erasure_completed` — the completion step ran for an erasure: every member was closed and the
+/// by-hash half applied. It may repeat, after an `erasure_reopened`; `kb_erasures` keeps the
+/// latest. Carries the hashes the by-hash half redacted and the late-member digest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ErasureCompleted {
+    pub erasure_id: Uuid,
+    /// The hashes the completion step redacted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redacted_hashes: Vec<String>,
+    /// The digest of the late members, as `erasure_scope_sealed` takes it. Absent for an erasure
+    /// that was never sealed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late_digest: Option<String>,
+}
+
 /// `team_membership_changed` — one recorded write to `kb_team_members` (team-role rank spec C8,
 /// "The event"). Written only by `_admin_team_membership_write`, in the same statement as the row.
 ///
@@ -2247,7 +2437,7 @@ impl FoldDisposition {
 }
 
 /// The typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 41] = [
+pub const TYPED_EVENT_NAMES: [&str; 47] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -2289,7 +2479,20 @@ pub const TYPED_EVENT_NAMES: [&str; 41] = [
     "team_public_within_changed",
     "public_within_effect_changed",
     "public_within_policy_changed",
+    "erasure_declared",
+    "erasure_member_arrived",
+    "erasure_scope_sealed",
+    "erasure_reopened",
+    "erasure_batch_applied",
+    "erasure_completed",
 ];
+
+/// The typed event names retired for writing: each stays registered, typed and replayable, so old
+/// ledgers replay, and `_event_append` refuses a new one. Held equal to the `kb_event_types` rows
+/// whose `write_retired_at` is set (temper-services `erasure_records_schema_test`). Distinct from
+/// the events test's `NO_WRITE_PATH_YET`, which admits only kinds with no `EventKind` arm: a
+/// retired kind keeps its arm. Empty until the first retirement.
+pub const WRITE_RETIRED: [&str; 0] = [];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
 /// remote system's, whose shape temper does not control and cannot publish. They are deliberately
@@ -2308,7 +2511,7 @@ pub const FOREIGN_EVENT_NAMES: [&str; 1] = ["webhook_received"];
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 19] = [
+pub const ADMIN_EVENT_NAMES: [&str; 25] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
@@ -2328,6 +2531,12 @@ pub const ADMIN_EVENT_NAMES: [&str; 19] = [
     "team_public_within_changed",
     "public_within_effect_changed",
     "public_within_policy_changed",
+    "erasure_declared",
+    "erasure_member_arrived",
+    "erasure_scope_sealed",
+    "erasure_reopened",
+    "erasure_batch_applied",
+    "erasure_completed",
 ];
 
 /// The event names classified `kb_event_types.category = 'system'` — configuration acts, which are
@@ -2476,6 +2685,26 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "public_within_policy_changed" => {
                     serde_json::from_value::<PublicWithinPolicyChanged>(r.payload.clone())?;
+                }
+                // The erasure record (erasure estate-membership spec D6). Registered before any
+                // writer, so these arms first meet a payload a test appends.
+                "erasure_declared" => {
+                    serde_json::from_value::<ErasureDeclared>(r.payload.clone())?;
+                }
+                "erasure_member_arrived" => {
+                    serde_json::from_value::<ErasureMemberArrived>(r.payload.clone())?;
+                }
+                "erasure_scope_sealed" => {
+                    serde_json::from_value::<ErasureScopeSealed>(r.payload.clone())?;
+                }
+                "erasure_reopened" => {
+                    serde_json::from_value::<ErasureReopened>(r.payload.clone())?;
+                }
+                "erasure_batch_applied" => {
+                    serde_json::from_value::<ErasureBatchApplied>(r.payload.clone())?;
+                }
+                "erasure_completed" => {
+                    serde_json::from_value::<ErasureCompleted>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.
@@ -3302,5 +3531,267 @@ mod tests {
                 "as_str() must equal the serde rename for {t:?}"
             );
         }
+    }
+
+    /// `erasure_declared` (erasure estate-membership spec D6): an estate declaration round-trips
+    /// with its map, counts, checksum and holders; the counts key on the DDL table name; and no key
+    /// is a trail join key.
+    #[test]
+    fn erasure_declared_round_trips_an_estate_declaration() {
+        let context = ErasureMemberRef {
+            table: ErasureMemberTable::KbContexts,
+            id: Uuid::now_v7(),
+        };
+        let declared = ErasureDeclared {
+            erasure_id: Uuid::now_v7(),
+            kind: ErasureKind::Estate,
+            subject_table: Some("kb_profiles".into()),
+            subject_id: Some(Uuid::now_v7()),
+            request_ref: Some(Uuid::now_v7()),
+            manifest_version: Some("1.2.3".into()),
+            manifest_digest: Some("a".repeat(64)),
+            map: vec![
+                ErasureMapEntry {
+                    table: context.table,
+                    id: context.id,
+                    parent: None,
+                    prior_erasure: None,
+                    prior_event: None,
+                },
+                ErasureMapEntry {
+                    table: ErasureMemberTable::KbResources,
+                    id: Uuid::now_v7(),
+                    parent: Some(context),
+                    prior_erasure: Some(Uuid::now_v7()),
+                    prior_event: Some(Uuid::now_v7()),
+                },
+            ],
+            counts: Some(BTreeMap::from([
+                (ErasureMemberTable::KbResources, 1),
+                (ErasureMemberTable::KbContexts, 1),
+            ])),
+            checksum: Some("b".repeat(64)),
+            holders: vec![Uuid::now_v7()],
+            legacy: false,
+        };
+        let v = serde_json::to_value(&declared).unwrap();
+        no_trail_key(&v, "erasure_declared");
+        assert_eq!(v["kind"], "estate");
+        assert_eq!(v["map"][0]["table"], "kb_contexts");
+        assert_eq!(v["map"][1]["parent"]["table"], "kb_contexts");
+        assert_eq!(v["counts"]["kb_resources"], 1);
+        assert!(v["map"][0].get("parent").is_none());
+        assert!(v.get("legacy").is_none(), "absent means not legacy");
+        assert_eq!(
+            serde_json::from_value::<ErasureDeclared>(v).unwrap(),
+            declared
+        );
+    }
+
+    /// A legacy `erasure_declared` (spec R21): `legacy` is present and true, and the request,
+    /// manifest, counts, checksum and holders are absent on the wire. An absent `legacy` reads as
+    /// false.
+    #[test]
+    fn a_legacy_erasure_declared_omits_what_a_legacy_erasure_lacks() {
+        let declared = ErasureDeclared {
+            erasure_id: Uuid::now_v7(),
+            kind: ErasureKind::Resource,
+            subject_table: Some("kb_resources".into()),
+            subject_id: Some(Uuid::now_v7()),
+            request_ref: None,
+            manifest_version: None,
+            manifest_digest: None,
+            map: vec![ErasureMapEntry {
+                table: ErasureMemberTable::KbResources,
+                id: Uuid::now_v7(),
+                parent: None,
+                prior_erasure: None,
+                prior_event: None,
+            }],
+            counts: None,
+            checksum: None,
+            holders: Vec::new(),
+            legacy: true,
+        };
+        let v = serde_json::to_value(&declared).unwrap();
+        no_trail_key(&v, "erasure_declared");
+        assert_eq!(v["legacy"], true);
+        assert_eq!(v["kind"], "resource");
+        for absent in [
+            "request_ref",
+            "manifest_version",
+            "manifest_digest",
+            "counts",
+            "checksum",
+            "holders",
+        ] {
+            assert!(
+                v.get(absent).is_none(),
+                "a legacy declaration omits {absent}"
+            );
+        }
+        assert_eq!(
+            serde_json::from_value::<ErasureDeclared>(v.clone()).unwrap(),
+            declared
+        );
+
+        let mut unmarked = v;
+        unmarked.as_object_mut().unwrap().remove("legacy");
+        assert!(
+            !serde_json::from_value::<ErasureDeclared>(unmarked)
+                .unwrap()
+                .legacy
+        );
+    }
+
+    #[test]
+    fn erasure_kinds_serialize_as_kb_erasures_spells_them() {
+        for (kind, name) in [
+            (ErasureKind::Estate, "estate"),
+            (ErasureKind::Resource, "resource"),
+            (ErasureKind::Selection, "selection"),
+            (ErasureKind::Block, "block"),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), name);
+            assert_eq!(
+                serde_json::from_value::<ErasureKind>(serde_json::json!(name)).unwrap(),
+                kind
+            );
+        }
+    }
+
+    /// `erasure_member_arrived`: each source round-trips, an absent parent stays absent, and no
+    /// key is a trail join key.
+    #[test]
+    fn erasure_member_arrived_round_trips_each_source() {
+        for (source, name) in [
+            (ErasureArrivalSource::Trigger, "trigger"),
+            (ErasureArrivalSource::ClosingSurvey, "closing_survey"),
+            (ErasureArrivalSource::Straggler, "straggler"),
+        ] {
+            let arrived = ErasureMemberArrived {
+                erasure_id: Uuid::now_v7(),
+                member: ErasureMemberRef {
+                    table: ErasureMemberTable::KbBlobs,
+                    id: Uuid::now_v7(),
+                },
+                parent: (source == ErasureArrivalSource::Trigger).then(|| ErasureMemberRef {
+                    table: ErasureMemberTable::KbCogmaps,
+                    id: Uuid::now_v7(),
+                }),
+                source,
+            };
+            let v = serde_json::to_value(&arrived).unwrap();
+            no_trail_key(&v, "erasure_member_arrived");
+            assert_eq!(v["source"], name);
+            assert_eq!(v["member"]["table"], "kb_blobs");
+            assert_eq!(
+                v.get("parent").is_some(),
+                source == ErasureArrivalSource::Trigger
+            );
+            assert_eq!(
+                serde_json::from_value::<ErasureMemberArrived>(v).unwrap(),
+                arrived
+            );
+        }
+    }
+
+    #[test]
+    fn erasure_scope_sealed_round_trips() {
+        let sealed = ErasureScopeSealed {
+            erasure_id: Uuid::now_v7(),
+            late_count: 3,
+            late_digest: "c".repeat(64),
+        };
+        let v = serde_json::to_value(&sealed).unwrap();
+        no_trail_key(&v, "erasure_scope_sealed");
+        assert_eq!(v["late_count"], 3);
+        assert_eq!(
+            serde_json::from_value::<ErasureScopeSealed>(v).unwrap(),
+            sealed
+        );
+    }
+
+    /// `erasure_reopened` names its arrival as `arrival_event`, never `event_id`.
+    #[test]
+    fn erasure_reopened_round_trips() {
+        let reopened = ErasureReopened {
+            erasure_id: Uuid::now_v7(),
+            arrival_event: Uuid::now_v7(),
+        };
+        let v = serde_json::to_value(&reopened).unwrap();
+        no_trail_key(&v, "erasure_reopened");
+        assert_eq!(
+            serde_json::from_value::<ErasureReopened>(v).unwrap(),
+            reopened
+        );
+    }
+
+    /// `erasure_batch_applied`: an erased entry carries its `authority_event` and no refusal
+    /// detail, a refused one its reason, SQLSTATE and routine; absent fields stay absent; no key is
+    /// a trail join key.
+    #[test]
+    fn erasure_batch_applied_round_trips_both_outcomes() {
+        let applied = ErasureBatchApplied {
+            member_table: ErasureMemberTable::KbResources,
+            entries: vec![
+                ErasureBatchEntry {
+                    member: Uuid::now_v7(),
+                    erasures: vec![Uuid::now_v7(), Uuid::now_v7()],
+                    outcome: ErasureBatchOutcome::Erased,
+                    authority_event: Some(Uuid::now_v7()),
+                    reason: None,
+                    sqlstate: None,
+                    routine: None,
+                },
+                ErasureBatchEntry {
+                    member: Uuid::now_v7(),
+                    erasures: vec![Uuid::now_v7()],
+                    outcome: ErasureBatchOutcome::Refused,
+                    authority_event: None,
+                    reason: Some(ErasureMemberRefusalReason::Defect),
+                    sqlstate: Some("P0001".into()),
+                    routine: Some("_resource_erasure_payload_redaction".into()),
+                },
+            ],
+        };
+        let v = serde_json::to_value(&applied).unwrap();
+        no_trail_key(&v, "erasure_batch_applied");
+        assert_eq!(v["member_table"], "kb_resources");
+        assert_eq!(v["entries"][0]["outcome"], "erased");
+        assert!(v["entries"][0].get("reason").is_none());
+        assert!(v["entries"][0].get("sqlstate").is_none());
+        assert_eq!(v["entries"][1]["outcome"], "refused");
+        assert_eq!(v["entries"][1]["reason"], "defect");
+        assert!(v["entries"][1].get("authority_event").is_none());
+        assert_eq!(
+            serde_json::from_value::<ErasureBatchApplied>(v).unwrap(),
+            applied
+        );
+    }
+
+    /// `erasure_completed`: with and without hashes and a late digest.
+    #[test]
+    fn erasure_completed_round_trips_with_and_without_its_optional_fields() {
+        let full = ErasureCompleted {
+            erasure_id: Uuid::now_v7(),
+            redacted_hashes: vec!["d".repeat(64)],
+            late_digest: Some("e".repeat(64)),
+        };
+        let bare = ErasureCompleted {
+            erasure_id: Uuid::now_v7(),
+            redacted_hashes: Vec::new(),
+            late_digest: None,
+        };
+        for completed in [&full, &bare] {
+            let v = serde_json::to_value(completed).unwrap();
+            no_trail_key(&v, "erasure_completed");
+            assert_eq!(
+                &serde_json::from_value::<ErasureCompleted>(v).unwrap(),
+                completed
+            );
+        }
+        let v = serde_json::to_value(&bare).unwrap();
+        assert!(v.get("redacted_hashes").is_none() && v.get("late_digest").is_none());
     }
 }

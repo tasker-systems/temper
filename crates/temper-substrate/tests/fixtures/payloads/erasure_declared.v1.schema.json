@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErasureDeclared",
+  "description": "`erasure_declared` — an erasure declared: its kind, subject, request and manifest, the map of\nevery item it covers, and the holders who could read them. Projected into `kb_erasures`,\n`kb_erasure_members`, `kb_erasure_former_holders` and, for an estate, `kb_erasure_estate_snapshots`.\n\nThe payload carries `erasure_id` because `_event_append` mints the event's own id and a payload\ncannot name it. A map entry carries no status: an entry with `prior_erasure` and `prior_event`\nis born `erased` (an earlier erasure already finished the item), and every other is born\n`pending`.\n\n`legacy` marks an erasure recorded from a door that names no erasure. A legacy declaration is\nalways of kind `resource` and carries no request, no manifest, no counts, no checksum and no\nholders. Absent means false.\n\nErasure records are never redacted, and no key is a trail join key: an event is named by\n`prior_event`, never `event_id`.",
+  "type": "object",
+  "properties": {
+    "checksum": {
+      "description": "The map's checksum (`erasure_map_checksum`), for an estate. Absent for a legacy erasure.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "counts": {
+      "description": "The declared member count per table, for an estate. Absent for a legacy erasure.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "kb_blobs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kb_cogmaps": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kb_contexts": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kb_edges": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kb_resources": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "erasure_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "holders": {
+      "description": "The profiles that held the erasure's items when it was declared. Empty for a legacy\nerasure.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "kind": {
+      "$ref": "#/$defs/ErasureKind"
+    },
+    "legacy": {
+      "description": "True for an erasure recorded from a door that names no erasure. Absent means false.",
+      "type": "boolean"
+    },
+    "manifest_digest": {
+      "description": "The sha256 (lowercase hex) of the canonical parsed erasure policy. Absent only when\n`legacy`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "manifest_version": {
+      "description": "The release semver of the erasure policy the erasure was declared under. Absent only when\n`legacy`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "map": {
+      "description": "Every item the erasure covers when declared, containers before the leaves they hold.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ErasureMapEntry"
+      }
+    },
+    "request_ref": {
+      "description": "The declaring request's idempotency key. Absent only when `legacy`.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "subject_id": {
+      "description": "The subject's id. Absent exactly when `subject_table` is.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "subject_table": {
+      "description": "The subject's table, as the DDL spells it: `kb_profiles` for an estate, `kb_resources` for\na resource or a block erasure. Absent for a selection.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "erasure_id",
+    "kind",
+    "map"
+  ],
+  "$defs": {
+    "ErasureKind": {
+      "description": "What an erasure was declared over, as `kb_erasures.kind` spells it (its\n`kb_erasures_kind_check`). Carried by `erasure_declared`.",
+      "oneOf": [
+        {
+          "description": "A person's estate; the subject is a profile.",
+          "type": "string",
+          "const": "estate"
+        },
+        {
+          "description": "One resource; the subject is the resource. Every legacy erasure is of this kind.",
+          "type": "string",
+          "const": "resource"
+        },
+        {
+          "description": "A selection of items; there is no subject.",
+          "type": "string",
+          "const": "selection"
+        },
+        {
+          "description": "A resource's block history; the subject is the resource.",
+          "type": "string",
+          "const": "block"
+        }
+      ]
+    },
+    "ErasureMapEntry": {
+      "description": "One item of an erasure's map, as `erasure_declared` declares it.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "parent": {
+          "description": "The container member (a context or a cogmap) of the same erasure that holds this item.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErasureMemberRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prior_erasure": {
+          "description": "The earlier erasure that already finished this item. Present with `prior_event`, and the\nrow is then born `erased`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "prior_event": {
+          "description": "The event that erased this item in the earlier erasure.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "table": {
+          "$ref": "#/$defs/ErasureMemberTable"
+        }
+      },
+      "required": [
+        "table",
+        "id"
+      ]
+    },
+    "ErasureMemberRef": {
+      "description": "An item an erasure member names: its table, as the DDL spells it, and its id.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "table": {
+          "$ref": "#/$defs/ErasureMemberTable"
+        }
+      },
+      "required": [
+        "table",
+        "id"
+      ]
+    },
+    "ErasureMemberTable": {
+      "description": "A table whose rows an erasure member can name. Serializes as the DDL spells the table.\nOrdered by declaration, so it can key a map that serializes with stable bytes.",
+      "type": "string",
+      "enum": [
+        "kb_resources",
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_blobs",
+        "kb_edges"
+      ]
+    }
+  }
+}

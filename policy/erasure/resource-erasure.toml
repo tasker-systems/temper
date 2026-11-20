@@ -377,6 +377,26 @@ refine = [
 [payload."principal_erasure_refused"]
 "/detail" = { disposition = "structural", note = "fixed text" }
 
+# The erasure record (spec D6): never redacted, so every string is the record's own. Its ids,
+# tables, kinds, sources, outcomes and reasons are uuids or vocabulary, which the walk classes
+# itself; erasure_member_arrived and erasure_reopened carry no other string.
+[payload."erasure_declared"]
+"/subject_table"    = { disposition = "structural", note = "a DDL table name, kb_profiles or kb_resources" }
+"/manifest_version" = { disposition = "structural", note = "the erasure policy's release semver" }
+"/manifest_digest"  = { disposition = "structural", note = "a hash of the erasure policy" }
+"/checksum"         = { disposition = "structural", note = "a hash of the member map" }
+
+[payload."erasure_scope_sealed"]
+"/late_digest" = { disposition = "structural", note = "a hash of the late members" }
+
+[payload."erasure_batch_applied"]
+"/entries/*/sqlstate" = { disposition = "structural", note = "a five-character SQLSTATE" }
+"/entries/*/routine"  = { disposition = "structural", note = "a function name, never a message" }
+
+[payload."erasure_completed"]
+"/redacted_hashes/*" = { disposition = "structural", note = "hashes" }
+"/late_digest"       = { disposition = "structural", note = "a hash of the late members" }
+
 # ── out of scope: not the resource's text ───────────────────────────────────────────────────
 [payload."admin_ledger_opened"]
 "/note" = { disposition = "out-of-scope", note = "an admin's note on the admin ledger, anchored on no resource" }

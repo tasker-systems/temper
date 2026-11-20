@@ -1,8 +1,8 @@
 #![cfg(feature = "test-db")]
 //! The erasure record's schema (migration 20261201000010): one probe per CHECK and per foreign key
 //! the record tables carry, the status moves `kb_erasure_members_status_moves` admits and refuses,
-//! the five fence views, the D1.1 map checksum, `kb_event_types.write_retired_at`, and the
-//! allowlist's re-issued COMMENT.
+//! the five fence views, the D1.1 map checksum, `kb_event_types.write_retired_at` and the
+//! `WRITE_RETIRED` list held equal to it, and the allowlist's re-issued COMMENT.
 //!
 //! Every row is inserted by hand: nothing writes these tables until the erasure projectors land, and
 //! a schema probe should not depend on them. Each probe row is a valid base row with exactly one
@@ -16,6 +16,7 @@
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 const CHECK_VIOLATION: &str = "23514";
@@ -1172,6 +1173,52 @@ async fn write_retired_at_is_a_nullable_timestamp_set_on_no_kind(pool: PgPool) {
     .await
     .unwrap();
     assert_eq!(retired, 0, "no kind is retired for writing yet");
+}
+
+/// The kinds whose `kb_event_types.write_retired_at` is set, by name.
+async fn retired_kinds(pool: &PgPool) -> BTreeSet<String> {
+    sqlx::query_scalar("SELECT name FROM kb_event_types WHERE write_retired_at IS NOT NULL")
+        .fetch_all(pool)
+        .await
+        .expect("read the retired kinds")
+        .into_iter()
+        .collect()
+}
+
+/// FAILS IF: `temper_substrate::payloads::WRITE_RETIRED` and the `kb_event_types` rows whose
+/// `write_retired_at` is set name different kinds, in either direction. The probe sets the column
+/// on one kind the list does not name and asserts the comparison then fails, so the equality is not
+/// two empty reads agreeing by accident.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn write_retired_is_the_rows_whose_column_is_set(pool: PgPool) {
+    let listed: BTreeSet<String> = temper_substrate::payloads::WRITE_RETIRED
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    assert_eq!(
+        retired_kinds(&pool).await,
+        listed,
+        "WRITE_RETIRED names exactly the kinds whose write_retired_at is set"
+    );
+
+    let probe = temper_substrate::payloads::TYPED_EVENT_NAMES
+        .iter()
+        .find(|name| !listed.contains(**name))
+        .expect("a typed kind that is not retired");
+    sqlx::query("UPDATE kb_event_types SET write_retired_at = now() WHERE name = $1")
+        .bind(*probe)
+        .execute(&pool)
+        .await
+        .expect("retire the probe kind");
+    let retired = retired_kinds(&pool).await;
+    assert!(
+        retired.contains(*probe),
+        "the probe set {probe}'s write_retired_at"
+    );
+    assert_ne!(
+        retired, listed,
+        "a kind retired in the registry but missing from WRITE_RETIRED must break the equality"
+    );
 }
 
 /// FAILS IF: the allowlist's COMMENT names a path under `scripts/` (the manifest it was generated

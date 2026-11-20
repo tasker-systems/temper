@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErasureScopeSealed",
+  "description": "`erasure_scope_sealed` — the closing survey sealed an erasure's scope. A container erasure\ncannot complete before it. Carries the count and the digest of the late members so far.",
+  "type": "object",
+  "properties": {
+    "erasure_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "late_count": {
+      "description": "How many members arrived after the declaration.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "late_digest": {
+      "description": "The digest of the late members, taken over their `erasure_member_arrived` records.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "erasure_id",
+    "late_count",
+    "late_digest"
+  ]
+}
