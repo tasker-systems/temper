@@ -203,10 +203,11 @@ file (`2>err.log`) and read it separately.
 ## A Failed Pipe Is Not a Failed Write
 
 A write can land while its answer is lost. Read `temper`'s own answer, not the pipe's: write
-stdout to a file (`temper … --format json >out.json 2>err.log; echo $?`) and parse the file.
-Exit 0, or a refusal such as `PRECONDITION_FAILED` or `bad-request`, is a known outcome. A
-`network` code, a server error (`api`), a timeout or no readable stdout means the outcome is
-unknown: the write may have landed, since a gateway can time out after the server commits. Before retrying a
+stdout to a file (`TEMPER_FORMAT=json temper … >out.json 2>err.log; echo $?`) and parse the
+file. The variable pins JSON over any config default. Exit 0, or a refusal such as
+`PRECONDITION_FAILED` or `bad-request`, is a known outcome. A `network` code, an `api` code (a
+server or unclassified error), a timeout or no readable stdout means the outcome is unknown: the
+write may have landed, since a gateway can time out after the server commits. Before retrying a
 create or a commit whose outcome is unknown, check whether it landed, and retry only when it did
 not:
 
