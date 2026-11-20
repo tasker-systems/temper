@@ -152,6 +152,29 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         "kb_erased_content",
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.content_hash), '[]'::jsonb) FROM kb_erased_content t",
     ),
+    // The erasure record (erasure estate-membership spec D1, R8; migration
+    // 20261201000010_erasure_records_schema.sql), projected by the six erasure record kinds' walk
+    // arms below. Every id is payload-carried (the erasure id rides every record; the event ids are
+    // restored with kb_events), so the tables diff in full, ordered by their natural keys. The one
+    // subtraction is the map's drain working columns, which are written outside the ledger and are
+    // not replayed.
+    (
+        "kb_erasures",
+        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_erasures t",
+    ),
+    (
+        "kb_erasure_members",
+        "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'attempts' - 'next_attempt_at' - 'lease_expires_at') \
+              ORDER BY t.erasure_id, t.member_table, t.member_id), '[]'::jsonb) FROM kb_erasure_members t",
+    ),
+    (
+        "kb_erasure_estate_snapshots",
+        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.erasure_id), '[]'::jsonb) FROM kb_erasure_estate_snapshots t",
+    ),
+    (
+        "kb_erasure_former_holders",
+        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.erasure_id, t.profile_id), '[]'::jsonb) FROM kb_erasure_former_holders t",
+    ),
 ];
 
 /// Non-projected input tables, copied verbatim into the replay namespace. Restore order respects FK
@@ -192,6 +215,8 @@ const INPUT_TABLES: &[&str] = &[
     "kb_principal_governance",
     "kb_topics",
     "kb_event_types",
+    // The erasure members' closed refusal vocabulary: no event writes it, like kb_event_types.
+    "kb_erasure_refusal_reasons",
     "kb_events",
 ];
 
@@ -1070,14 +1095,6 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             | EventKind::TeamPublicWithinChanged
             | EventKind::PublicWithinEffectChanged
             | EventKind::PublicWithinPolicyChanged
-            // The erasure record (erasure estate-membership spec D6): registered, and appended by
-            // no writer yet. A no-op here until Task 4 adds each kind's projector and its arm.
-            | EventKind::ErasureDeclared
-            | EventKind::ErasureMemberArrived
-            | EventKind::ErasureScopeSealed
-            | EventKind::ErasureReopened
-            | EventKind::ErasureBatchApplied
-            | EventKind::ErasureCompleted
             // The erasure act's refusal face (spec 2026-08-31, D6): NULL-anchored, mutates
             // NOTHING by design — one reason-code event, and the refusal set must not admit
             // it. The walk stays a no-op; `PrincipalErased` graduated above.
@@ -1154,6 +1171,46 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     "block_history_scrubbed event {id} names no subject_ids"
                 );
                 apply_block_history_scrub(&mut tx, id).await?;
+            }
+            // The erasure record (erasure estate-membership spec D6 *Replay*, R8; migration
+            // 20261201000030_erasure_record_projectors.sql). Each kind projects at its own position
+            // through the one function the live path calls after its append. Each takes what it
+            // writes from its payload and its own event's `occurred_at`; the only state it reads is
+            // the row it is about to change (a flag already set, an edge already folded, a member
+            // no longer open), which at this position is what the live call saw.
+            // `erasure_declared` also sets the bound flags of its pending members: a resource's
+            // `is_active` and an edge's fold land in projected tables
+            // and are diffed; a context's `is_active` lands in an input table the restore already
+            // set, so D7.3 is its only detector.
+            EventKind::ErasureDeclared => {
+                sqlx::query!("SELECT _project_erasure_declared($1, $2)", id, payload)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            }
+            EventKind::ErasureMemberArrived => {
+                sqlx::query!("SELECT _project_erasure_member_arrived($1, $2)", id, payload)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            }
+            EventKind::ErasureScopeSealed => {
+                sqlx::query!("SELECT _project_erasure_scope_sealed($1, $2)", id, payload)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            }
+            EventKind::ErasureReopened => {
+                sqlx::query!("SELECT _project_erasure_reopened($1, $2)", id, payload)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            }
+            EventKind::ErasureBatchApplied => {
+                sqlx::query!("SELECT _project_erasure_batch_applied($1, $2)", id, payload)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            }
+            EventKind::ErasureCompleted => {
+                sqlx::query!("SELECT _project_erasure_completed($1, $2)", id, payload)
+                    .fetch_one(&mut *tx)
+                    .await?;
             }
             // The field scrub (field-grain scrub spec S8; migration 20261018100020). The arm projects
             // only its redaction rows, at this event's position, through the one projector the live

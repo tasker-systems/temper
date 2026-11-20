@@ -190,6 +190,27 @@ const CLASSIFIED: &[(&str, Class)] = &[
         Class::NotCallerFacing("projector: writes the fold from its event"),
     ),
     (
+        "_edge_fold_apply/2",
+        Class::NotCallerFacing(
+            "the fold's one body, called by the projectors _project_relationship_folded and \
+             _erasure_member_flag; returns nothing",
+        ),
+    ),
+    (
+        "_project_erasure_declared/2",
+        Class::NotCallerFacing(
+            "projector: writes the erasure record and its members' bound flags from its event; \
+             returns nothing",
+        ),
+    ),
+    (
+        "_erasure_member_flag/3",
+        Class::NotCallerFacing(
+            "projector helper: sets an erasure member's bound flag (an edge's fold) from its \
+             event; returns nothing",
+        ),
+    ),
+    (
         "_project_relationship_retyped/2",
         Class::NotCallerFacing("projector: writes the retype from its event"),
     ),
