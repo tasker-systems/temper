@@ -625,48 +625,86 @@ async fn restore_table(pool: &PgPool, table: &str, rows: &serde_json::Value) -> 
 
 /// Restore inputs and walk the ledger through the projection halves — the SAME code normal
 /// operation runs. Call against a freshly reset (01+02, un-seeded) namespace.
+///
+/// **The walk order** is `ORDER BY (e.xact_id IS NULL) DESC, e.xact_id, e.seq, e.id`, the ledger's
+/// recorded order (`20261116000010_kb_events_record_order.sql`):
+///
+/// - A row appended since that migration carries `xact_id`, the appending transaction's id, and
+///   `seq`, its append order from `kb_events_seq`. The walk takes transactions in `xact_id` order
+///   and each transaction's events in `seq` order, the order the act wrote them.
+/// - A row from before it carries NULL in both, and the walk takes all of those first, in id
+///   order, as replay always took them: their order within a millisecond was never recorded, and
+///   none is invented. First is right, because every one of them was appended before the migration
+///   added the columns, so before every row that carries them.
+/// - The order is total and deterministic: the pair is unique where set
+///   (`kb_events_feed_position_unique`), the two columns are set together
+///   (`kb_events_order_both_or_neither`), and `id`, the primary key, orders the NULL rows.
+/// - It is not `ORDER BY e.id`. `uuid_generate_v7()` on PG17 has no order within a millisecond,
+///   so two events of one transaction, or of two transactions in one millisecond, can sort either
+///   way by id, and a walk by id then projects them out of order.
+///
+/// **What remains.** `xact_id` order is the order transactions took their ids (at their first
+/// write), not the order they committed. A transaction that took its id first but committed after
+/// another walks before it. Where the two touched different rows nothing differs. Where the later
+/// committer's projection depends on what the earlier one wrote (a row it waited on, then wrote
+/// over; a row it read after the other committed and then referenced), the walk projects them in
+/// the other order. It then diverges, which the byte-identity diff reports (a write guard does not
+/// abort it; see `temper.replaying` below), or it raises on the reference, which fails the replay.
 pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
     for (table, rows) in &snap.inputs {
         restore_table(pool, table, rows).await?;
     }
     let events = sqlx::query(
-        "SELECT e.id, et.name, e.payload \
-           FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id ORDER BY e.id",
+        "SELECT e.id, et.name, e.payload, e.correlation_id, e.occurred_at \
+           FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          ORDER BY (e.xact_id IS NULL) DESC, e.xact_id, e.seq, e.id",
     )
     .fetch_all(pool)
     .await?;
     // The resource erasure act's deferral (spec 2026-09-28, D14: "the replay arm for
     // `resource_erased` applies the body only after every event that shares the act's
-    // correlation id, so the act's own folds are in place whichever order they sort in").
-    // Event ids come from `uuid_generate_v7()`, which on PG17/Neon has no order within a
-    // millisecond, so the act's `relationship_folded` events can sort AFTER its
-    // `resource_erased`. For each erasure, `apply_after` is the greatest walk-order id among the
-    // events sharing its correlation id; the body runs once the walk has projected that event.
-    // An erasure that is itself the greatest applies at its own position. The span is bounded to
-    // the act's own transaction: every event the act appends shares its `occurred_at` (the column
-    // default, now() = the transaction's start), and the request reference can recur on later
-    // events — a retried request refused as already erased, or a caller that reuses it as an
-    // ordinary correlation — which must not pull the body past lawful writes that followed the
-    // act. The remaining limit is cross-transaction id inversion: an event from ANOTHER
-    // transaction that committed before the act can still sort inside, or after, the act's span.
-    // One that touches R then projects over what the live act had already erased, the walk
-    // diverges (D14) rather than aborting on the write guard (see `temper.replaying` below), and
-    // the byte-identity diff reports it.
-    let apply_after: HashMap<Uuid, Uuid> = sqlx::query!(
-        r#"SELECT er.id,
-                  (SELECT s.id FROM kb_events s
-                    WHERE s.correlation_id = er.correlation_id
-                      AND s.occurred_at = er.occurred_at
-                    ORDER BY s.id DESC LIMIT 1) AS "apply_after!"
-             FROM kb_events er JOIN kb_event_types et ON et.id = er.event_type_id
-            WHERE et.name = 'resource_erased' AND er.correlation_id IS NOT NULL"#
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .filter(|r| r.apply_after != r.id)
-    .map(|r| (r.id, r.apply_after))
-    .collect();
+    // correlation id, so the act's own folds are in place whichever order they sort in"). For
+    // each erasure, `apply_after` is the last event, in the walk order above, among the events
+    // sharing its correlation id and its `occurred_at`; the body runs once the walk has projected
+    // that event. An erasure that is itself the last applies at its own position. It is read off
+    // the walk itself, so the deferral and the walk cannot disagree about what "last" means.
+    //
+    // The span is bounded to the act's own transaction: every event the act appends shares its
+    // `occurred_at` (the column default, now() = the transaction's start), and the request
+    // reference can recur on later events — a retried request refused as already erased, or a
+    // caller that reuses it as an ordinary correlation — which must not pull the body past lawful
+    // writes that followed the act. The remaining limit is the walk's own (see above): an event
+    // from another transaction that committed before the act but took its transaction id after
+    // the act's walks after the act. One that touches R then projects over what the live act had
+    // already erased, the walk diverges (D14) rather than aborting on the write guard (see
+    // `temper.replaying` below), and the byte-identity diff reports it.
+    type Span = (Uuid, Option<chrono::DateTime<chrono::Utc>>);
+    let span_of = |r: &sqlx::postgres::PgRow| -> Option<Span> {
+        let correlation: Option<Uuid> = r.get(3);
+        correlation.map(|c| (c, r.get(4)))
+    };
+    // Later events overwrite earlier ones, so each span ends holding its last event in walk order.
+    let mut span_last: HashMap<Span, Uuid> = HashMap::new();
+    for r in &events {
+        if let Some(span) = span_of(r) {
+            span_last.insert(span, r.get(0));
+        }
+    }
+    let mut apply_after: HashMap<Uuid, Uuid> = HashMap::new();
+    for r in &events {
+        let name: String = r.get(1);
+        let Some(span) = span_of(r) else {
+            continue;
+        };
+        if name != "resource_erased" {
+            continue;
+        }
+        let id: Uuid = r.get(0);
+        let last = span_last[&span];
+        if last != id {
+            apply_after.insert(id, last);
+        }
+    }
     // Deferred applications, keyed by the event after which they run: (subject, erasure event).
     let mut pending: HashMap<Uuid, Vec<(Uuid, Uuid)>> = HashMap::new();
     for r in events {
@@ -677,10 +715,10 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             .with_context(|| format!("replay: no projector for event type {name}"))?;
         // Each event projects in its own transaction, with `temper.replaying` set LOCAL to it:
         // the resource write guard (`_resource_write_guard`, migration 20260929040730) returns at
-        // once under it. A lawful write whose event committed before an erasure can sort after
-        // the act's events in this walk (event ids are uuidv7, unordered across transactions
-        // within a millisecond on PG17), and the walk must then diverge (D14), not abort on the
-        // guard. `set_config(.., true)` scopes the setting to this transaction, so it ends at the
+        // once under it. A lawful write whose transaction committed before an erasure's can walk
+        // after the act's events (its transaction took its id after the act's; see the walk order
+        // above), and the walk must then diverge (D14), not abort on the guard.
+        // `set_config(.., true)` scopes the setting to this transaction, so it ends at the
         // commit below or at the rollback an early `?` return causes when the transaction drops,
         // and the pooled connection never carries it to another user. The multi-statement Rust
         // projector (`project_property_retracted`) gets its atomicity from the same transaction.
@@ -1004,9 +1042,9 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // struck one) and the spec's own §5 form (replay a ledger containing an erasure
             // into a clean namespace and the projection is byte-identical INCLUDING the
             // redacted rows; erase again, re-run, still passes) both require that the
-            // emptiness be applied AT THE EVENT'S LEDGER POSITION — this walk is `ORDER BY
-            // e.id`, so a trailing pass over the walked state would wrongly redact what later
-            // events lawfully put (the post-erasure re-committed blob row beside the emptied
+            // emptiness be applied AT THE EVENT'S LEDGER POSITION — this walk is in ledger order
+            // (see `replay`'s doc), so a trailing pass over the walked state would wrongly redact
+            // what later events lawfully put (the post-erasure re-committed blob row beside the emptied
             // one; the formation watermark a post-erasure `region_materialized` re-set), and
             // "the ledger totally determines the projection" would rot into "the final state is
             // post-processed by a rule outside the walk". Resolved as: READ AHEAD TO KNOW THE
@@ -1109,8 +1147,8 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // The act's completion (spec 2026-09-28, D2/D12/D14). The body applies at the END of
             // the act's correlated span, not at this event's position: after the last event of
             // the act's own transaction sharing its correlation id (`apply_after`, above the
-            // walk), so the act's own folds are projected first whichever order their ids sort
-            // in (D14). An erasure that is already the last of its span applies here. Either way it is not a trailing pass
+            // walk), so the act's own folds are projected first wherever they fall in its
+            // transaction (D14). An erasure that is already the last of its span applies here. Either way it is not a trailing pass
             // over the whole ledger, which would wrongly redact what later events lawfully wrote.
             // The set needs no read-ahead scan — the payload names the resource, and the
             // redaction body joins the projection by THAT id, so the idempotent call reproduces

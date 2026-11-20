@@ -19,6 +19,12 @@
 //!     refusal and a born-erased row, and the checksum recomputed from the rebuilt map equals the
 //!     `erasure_declared` payload's for every non-legacy erasure;
 //!   * the golden checksum: one fixed map's D1.1 checksum, pinned to a literal;
+//!   * the walk order: with ids forced to invert the order the events were written (in one
+//!     transaction, and across two), replay still rebuilds what the live projectors wrote: an
+//!     arrival after its declaration, a reopening after its completion, a second refusal after the
+//!     first;
+//!   * a declaration's counts, checksum and holders are verified against its map, and a field its
+//!     kind does not carry raises;
 //!   * the edge fold: an edge member folds with its edge-owned properties, an edge folded before
 //!     keeps its own fold, and `relationship_folded` still folds and raises through the shared
 //!     helper.
@@ -169,17 +175,15 @@ async fn fold_edge(pool: &PgPool, emitter: EntityId, edge: EdgeId) -> Uuid {
 /// Append one erasure record event under the system actor and project it in the same
 /// transaction, as the live path does. Returns the event id, or the error either step raised.
 ///
-/// It first waits two milliseconds. Replay walks the ledger in id order, and `uuid_generate_v7()`
-/// has no order within a millisecond (20261116000010_kb_events_record_order.sql), so two appends
-/// in one millisecond could replay in either order: a declaration after the arrival that needs it,
-/// or the second refusal before the first. The wait puts every record in a later millisecond than
-/// whatever was written before it.
+/// Each record is its own transaction, after the one before it, and replay walks transactions in
+/// the order they took their ids (`replay::replay`), so the records replay in the order they were
+/// written, whatever order `uuid_generate_v7()` gave their ids. The ordering witnesses below force
+/// the ids to disagree with that order.
 async fn try_record(
     pool: &PgPool,
     kind: &str,
     payload: &serde_json::Value,
 ) -> Result<Uuid, sqlx::Error> {
-    sqlx::query("SELECT pg_sleep(0.002)").execute(pool).await?;
     let (_, emitter) = system_actor(pool).await;
     let mut tx = pool.begin().await?;
     let event: Uuid =
@@ -1584,4 +1588,423 @@ async fn the_map_checksum_of_a_fixed_map_is_pinned(pool: PgPool) {
     .await;
 
     assert_eq!(map_checksum(&pool, erasure).await.as_deref(), Some(GOLDEN));
+}
+
+// ── the walk order: forced id inversions ─────────────────────────────────────────────────────
+
+/// Two version-7 ids in the current millisecond, `(high, low)` with `low < high`. On PG17
+/// `uuid_generate_v7()` has no order within a millisecond (20261116000010_kb_events_record_order.sql),
+/// so of two appends in one millisecond either may get the lower id. The witnesses below give the
+/// LATER append `low`: an inversion PG17 can mint, built on every run rather than by chance.
+///
+/// Bytes 0..6 hold the millisecond; the version is byte 6's high nibble and the variant byte 8's
+/// top two bits. Every other bit is random, so all ones and all zeros there are the highest and the
+/// lowest id of the millisecond.
+fn same_millisecond() -> (Uuid, Uuid) {
+    let mut high = *Uuid::now_v7().as_bytes();
+    let mut low = high;
+    high[6] = 0x7f;
+    high[7] = 0xff;
+    high[8] = 0xbf;
+    low[6] = 0x70;
+    low[7] = 0x00;
+    low[8] = 0x80;
+    for byte in &mut high[9..] {
+        *byte = 0xff;
+    }
+    for byte in &mut low[9..] {
+        *byte = 0x00;
+    }
+    (Uuid::from_bytes(high), Uuid::from_bytes(low))
+}
+
+/// Append one erasure record event whose id is `id`, and project it, in `tx`: what
+/// `_event_append` and the live writer do, with the id chosen rather than minted. The row's
+/// recorded order is still the live one: the column defaults give it its own transaction's
+/// `xact_id` and a fresh `seq`, and `kb_events_order_recorded` refuses anything else.
+async fn append_as(
+    tx: &mut sqlx::PgConnection,
+    emitter: EntityId,
+    id: Uuid,
+    kind: &str,
+    payload: &serde_json::Value,
+) {
+    let appended = sqlx::query(
+        "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, payload, correlation_id, \
+                                category) \
+         SELECT $1, t.id, $2, $3, $1, t.category FROM kb_event_types t WHERE t.name = $4",
+    )
+    .bind(id)
+    .bind(emitter)
+    .bind(payload)
+    .bind(kind)
+    .execute(&mut *tx)
+    .await
+    .unwrap_or_else(|e| panic!("{kind} {id} must append: {e}"))
+    .rows_affected();
+    assert_eq!(appended, 1, "setup: {kind} is a registered kind");
+    sqlx::query(&format!("SELECT _project_{kind}($1, $2)"))
+        .bind(id)
+        .bind(payload)
+        .execute(&mut *tx)
+        .await
+        .unwrap_or_else(|e| panic!("{kind} {id} must project: {e}"));
+}
+
+/// `ids` in replay's walk order (`replay::replay`).
+async fn walk_order(pool: &PgPool, ids: &[Uuid]) -> Vec<Uuid> {
+    sqlx::query_scalar(
+        "SELECT id FROM kb_events WHERE id = ANY($1) \
+          ORDER BY (xact_id IS NULL) DESC, xact_id, seq, id",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// One transaction declares an erasure and then maps an arrival into it, and the arrival's id
+/// sorts below the declaration's. Replay walks the transaction in append order, so the erasure row
+/// exists before the arrival's member row needs it.
+///
+/// FAILS IF: replay walks by id. The arrival then projects first, and its member row violates
+/// `kb_erasure_members`' foreign key to an erasure not yet projected, so replay raises.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_walks_one_transaction_in_append_order_whatever_its_ids(pool: PgPool) {
+    fresh(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_context(&pool, owner, "walk-tx-home").await;
+    let r = make_resource(&pool, owner, emitter, home, "walk-tx-r").await;
+    let erasure = Uuid::now_v7();
+    let declared = serde_json::to_value(declaration(
+        erasure,
+        ErasureKind::Selection,
+        None,
+        vec![],
+        vec![],
+    ))
+    .unwrap();
+    let arrived = serde_json::to_value(ErasureMemberArrived {
+        erasure_id: erasure,
+        member: member(ErasureMemberTable::KbResources, r.uuid()),
+        parent: None,
+        source: ErasureArrivalSource::ClosingSurvey,
+    })
+    .unwrap();
+
+    let (high, low) = same_millisecond();
+    let mut tx = pool.begin().await.unwrap();
+    append_as(&mut tx, emitter, high, "erasure_declared", &declared).await;
+    append_as(&mut tx, emitter, low, "erasure_member_arrived", &arrived).await;
+    tx.commit().await.unwrap();
+
+    assert!(low < high, "setup: the later append has the lower id");
+    assert_eq!(
+        walk_order(&pool, &[high, low]).await,
+        vec![high, low],
+        "setup: the walk takes the declaration first, as it was appended"
+    );
+    assert_replay_byte_identical(
+        &pool,
+        "of one transaction whose ids invert",
+        &["kb_erasures", "kb_erasure_members"],
+    )
+    .await;
+}
+
+/// An erasure completes, and a later transaction reopens it with an id that sorts below the
+/// completion's, as a straggler's `erasure_reopened` in the completion's millisecond can on PG17.
+/// Live, the erasure is not complete.
+///
+/// FAILS IF: replay walks by id. It then projects the reopening first and the completion last, and
+/// the rebuilt erasure is complete (`completed_event_id` set) where the live one is not.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_reopening_whose_id_sorts_before_the_completion_replays_as_it_committed(pool: PgPool) {
+    fresh(&pool).await;
+    let (_, emitter) = system_actor(&pool).await;
+    let erasure = Uuid::now_v7();
+    declare(
+        &pool,
+        &declaration(erasure, ErasureKind::Selection, None, vec![], vec![]),
+    )
+    .await;
+
+    let (high, low) = same_millisecond();
+    let completed = serde_json::to_value(ErasureCompleted {
+        erasure_id: erasure,
+        redacted_hashes: vec![],
+        late_digest: None,
+    })
+    .unwrap();
+    let reopened = serde_json::to_value(ErasureReopened {
+        erasure_id: erasure,
+        arrival_event: high,
+    })
+    .unwrap();
+    for (id, kind, payload) in [
+        (high, "erasure_completed", &completed),
+        (low, "erasure_reopened", &reopened),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        append_as(&mut tx, emitter, id, kind, payload).await;
+        tx.commit().await.unwrap();
+    }
+
+    assert!(low < high, "setup: the reopening has the lower id");
+    assert_eq!(
+        walk_order(&pool, &[high, low]).await,
+        vec![high, low],
+        "setup: the walk takes the completion first, as it committed"
+    );
+    assert_eq!(
+        erasure_events(&pool, erasure).await,
+        (None, None),
+        "setup: live, the reopening cleared the completion"
+    );
+    assert_replay_byte_identical(
+        &pool,
+        "of a reopening whose id sorts before its completion",
+        &["kb_erasures"],
+    )
+    .await;
+}
+
+/// Two batches refuse one item, the second in a later transaction with an id that sorts below the
+/// first's. Live, the item carries the second refusal's reason and the first refusal's time.
+///
+/// FAILS IF: replay walks by id. It then projects the second refusal first, and the rebuilt row
+/// carries the first refusal's reason and the second refusal's time.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn two_refusals_whose_ids_invert_replay_as_they_committed(pool: PgPool) {
+    fresh(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_context(&pool, owner, "walk-refusals-home").await;
+    let r = make_resource(&pool, owner, emitter, home, "walk-refusals-r").await;
+    let erasure = Uuid::now_v7();
+    declare(
+        &pool,
+        &declaration(
+            erasure,
+            ErasureKind::Resource,
+            Some(("kb_resources", r.uuid())),
+            vec![pending(ErasureMemberTable::KbResources, r.uuid(), None)],
+            vec![],
+        ),
+    )
+    .await;
+
+    let (high, low) = same_millisecond();
+    let refusal = |reason| {
+        serde_json::to_value(ErasureBatchApplied {
+            member_table: ErasureMemberTable::KbResources,
+            entries: vec![refused(r.uuid(), vec![erasure], reason)],
+        })
+        .unwrap()
+    };
+    for (id, reason) in [
+        (high, ErasureMemberRefusalReason::Defect),
+        (low, ErasureMemberRefusalReason::Unclassified),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        append_as(
+            &mut tx,
+            emitter,
+            id,
+            "erasure_batch_applied",
+            &refusal(reason),
+        )
+        .await;
+        tx.commit().await.unwrap();
+    }
+
+    assert!(low < high, "setup: the second refusal has the lower id");
+    assert_eq!(
+        walk_order(&pool, &[high, low]).await,
+        vec![high, low],
+        "setup: the walk takes the first refusal first, as it committed"
+    );
+    let (reason, at_first): (Option<String>, bool) = sqlx::query_as(
+        "SELECT refusal_reason, first_refused_at = (SELECT occurred_at FROM kb_events WHERE id = $3) \
+           FROM kb_erasure_members \
+          WHERE erasure_id = $1 AND member_table = 'kb_resources' AND member_id = $2",
+    )
+    .bind(erasure)
+    .bind(r.uuid())
+    .bind(high)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (reason.as_deref(), at_first),
+        (Some("unclassified"), true),
+        "setup: live, the row carries the second reason and the first time"
+    );
+    assert_replay_byte_identical(
+        &pool,
+        "of two refusals whose ids invert",
+        &["kb_erasures", "kb_erasure_members"],
+    )
+    .await;
+}
+
+// ── the declaration's claims, verified ───────────────────────────────────────────────────────
+
+/// An honest estate declaration of `map`, for a new subject `handle` that is also its one holder.
+async fn honest_estate(
+    pool: &PgPool,
+    handle: &str,
+    map: Vec<ErasureMapEntry>,
+) -> serde_json::Value {
+    let subject = common::insert_profile(pool, handle).await;
+    serde_json::to_value(declaration(
+        Uuid::now_v7(),
+        ErasureKind::Estate,
+        Some(("kb_profiles", subject)),
+        map,
+        vec![subject],
+    ))
+    .unwrap()
+}
+
+/// A declaration's counts, checksum and holders are verified against the map, never stored on
+/// trust, and a field its kind does not carry raises. Each refused payload is an honest one with
+/// one change, and nothing of it lands; each honest one projects.
+///
+/// FAILS IF: an estate projects with a checksum or a count that is not its map's, a count for a
+/// table that is not a member table, or no checksum; a non-estate projects with counts, or with a
+/// checksum that is not its map's; a legacy declaration projects with counts, a checksum or
+/// holders; or (the controls) an honest estate, selection or legacy declaration is refused.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_declaration_whose_claims_are_not_its_maps_is_refused(pool: PgPool) {
+    fresh(&pool).await;
+    let resource = Uuid::now_v7();
+    let container = Uuid::now_v7();
+    let parent = member(ErasureMemberTable::KbContexts, container);
+    let map = || {
+        vec![
+            pending(ErasureMemberTable::KbContexts, container, None),
+            pending(ErasureMemberTable::KbResources, resource, Some(parent)),
+        ]
+    };
+    let flipped = |checksum: &serde_json::Value| {
+        let mut text = checksum.as_str().expect("a checksum").to_owned();
+        let last = if text.ends_with('0') { "1" } else { "0" };
+        text.replace_range(text.len() - 1.., last);
+        serde_json::json!(text)
+    };
+    let selection = || {
+        serde_json::to_value(declaration(
+            Uuid::now_v7(),
+            ErasureKind::Selection,
+            None,
+            map(),
+            vec![],
+        ))
+        .unwrap()
+    };
+    let legacy = || {
+        serde_json::to_value(legacy_declaration(
+            Uuid::now_v7(),
+            resource,
+            vec![pending(ErasureMemberTable::KbResources, resource, None)],
+        ))
+        .unwrap()
+    };
+
+    let mut cases: Vec<(&str, serde_json::Value, &str)> = Vec::new();
+    let mut p = honest_estate(&pool, "claims-1", map()).await;
+    p["checksum"] = flipped(&p["checksum"]);
+    cases.push((
+        "an estate whose checksum is not its map's",
+        p,
+        "the checksum is not the map's",
+    ));
+    let mut p = honest_estate(&pool, "claims-2", map()).await;
+    p["counts"]["kb_resources"] = serde_json::json!(2);
+    cases.push((
+        "an estate that overcounts a table",
+        p,
+        "the estate counts are not the map's",
+    ));
+    let mut p = honest_estate(&pool, "claims-3", map()).await;
+    p["counts"]["kb_blobs"] = serde_json::json!(1);
+    cases.push((
+        "an estate that counts a table its map does not hold",
+        p,
+        "the estate counts are not the map's",
+    ));
+    let mut p = honest_estate(&pool, "claims-4", map()).await;
+    p["counts"]["kb_teams"] = serde_json::json!(0);
+    cases.push((
+        "an estate that counts a table that is not a member table",
+        p,
+        "the estate counts name a table that is not a member table",
+    ));
+    let mut p = honest_estate(&pool, "claims-5", map()).await;
+    p.as_object_mut().unwrap().remove("checksum");
+    cases.push((
+        "an estate with no checksum",
+        p,
+        "an estate declaration carries no checksum",
+    ));
+    let mut p = selection();
+    p["counts"] = serde_json::json!({"kb_resources": 1, "kb_contexts": 1});
+    cases.push((
+        "a selection with counts",
+        p,
+        "only an estate declaration carries counts",
+    ));
+    let mut p = selection();
+    p["checksum"] = flipped(&p["checksum"]);
+    cases.push((
+        "a selection whose checksum is not its map's",
+        p,
+        "the checksum is not the map's",
+    ));
+    for (key, value) in [
+        ("holders", serde_json::json!([Uuid::now_v7()])),
+        ("checksum", serde_json::json!(DIGEST)),
+        ("counts", serde_json::json!({"kb_resources": 1})),
+    ] {
+        let mut p = legacy();
+        p[key] = value;
+        cases.push((
+            "a legacy declaration with a field it never carries",
+            p,
+            "a legacy declaration carries counts, a checksum or holders",
+        ));
+    }
+
+    for (what, payload, says) in cases {
+        let erasure = payload["erasure_id"].clone();
+        let err = try_record(&pool, "erasure_declared", &payload)
+            .await
+            .expect_err(what);
+        assert!(
+            err.to_string().contains(says),
+            "{what}: unexpected error: {err}"
+        );
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_erasures WHERE id = $1::uuid")
+            .bind(erasure.as_str().unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "{what}: nothing of the refused declaration lands");
+    }
+
+    let mut unchecked = selection();
+    unchecked.as_object_mut().unwrap().remove("checksum");
+    for (what, payload) in [
+        (
+            "an honest estate",
+            honest_estate(&pool, "claims-6", map()).await,
+        ),
+        ("an honest selection", selection()),
+        ("a selection with no checksum", unchecked),
+        ("an honest legacy declaration", legacy()),
+    ] {
+        try_record(&pool, "erasure_declared", &payload)
+            .await
+            .unwrap_or_else(|e| panic!("control: {what} projects: {e}"));
+    }
 }

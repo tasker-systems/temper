@@ -321,6 +321,11 @@ async fn every_erasure_check_refuses_its_one_violation(pool: PgPool) {
             json!({"manifest_digest": "A".repeat(64)}),
             "kb_erasures_manifest_digest_check",
         ),
+        (
+            "a manifest version that is not a semver",
+            json!({"manifest_version": "the march release"}),
+            "kb_erasures_manifest_version_check",
+        ),
     ] {
         assert_refused(
             insert(&pool, "kb_erasures", &with(&fresh(), changes)).await,
@@ -508,6 +513,18 @@ async fn every_member_check_refuses_its_one_violation(pool: PgPool) {
             refused_changes(),
             json!({"refusal_sqlstate": "oops"}),
             "kb_erasure_members_refusal_sqlstate_check",
+        ),
+        (
+            "a refusal routine that is a message, not a routine name",
+            refused_changes(),
+            json!({"refusal_routine": "ERROR: could not erase the resource"}),
+            "kb_erasure_members_refusal_routine_check",
+        ),
+        (
+            "a refusal routine in capitals",
+            refused_changes(),
+            json!({"refusal_routine": "Resource_Erasure_Execute"}),
+            "kb_erasure_members_refusal_routine_check",
         ),
         (
             "a pending row with a first refusal",
@@ -786,6 +803,65 @@ async fn every_other_status_move_is_refused(pool: PgPool) {
     ] {
         assert_trigger_refused(update_member(&pool, m, &set).await, says, what);
     }
+}
+
+/// FAILS IF: first_refused_at can be set other than by a move into refused: on a row born erased,
+/// or by a move from pending straight to erased. The controls: a row born erased without it, a
+/// move into refused that sets it, and a refused row's move to erased that keeps it, are admitted.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_refusal_time_is_set_only_by_a_move_into_refused(pool: PgPool) {
+    let ev = event(&pool).await;
+    let e = erasure(&pool, ev, json!({})).await;
+    let says = "first_refused_at is set only by a move into refused";
+
+    let born = with(
+        &member_row(e),
+        json!({"status": "erased", "erased_by_event_id": ev, "first_refused_at": AT}),
+    );
+    assert_trigger_refused(
+        insert(&pool, "kb_erasure_members", &born).await,
+        says,
+        "a row born erased with a refusal time",
+    );
+    member(
+        &pool,
+        e,
+        json!({"status": "erased", "erased_by_event_id": ev}),
+    )
+    .await;
+
+    let m = member(&pool, e, json!({})).await;
+    assert_trigger_refused(
+        update_member(
+            &pool,
+            m,
+            &format!("status = 'erased', erased_by_event_id = '{ev}', first_refused_at = '{AT}'"),
+        )
+        .await,
+        says,
+        "pending -> erased setting a refusal time",
+    );
+    update_member(
+        &pool,
+        m,
+        &format!(
+            "status = 'refused', refusal_reason = 'defect', first_refused_at = '{AT}', \
+             refusal_routine = 'public._resource_erasure_payload_redaction'"
+        ),
+    )
+    .await
+    .expect("control: pending -> refused sets the refusal time and a qualified routine name");
+    update_member(
+        &pool,
+        m,
+        &format!("status = 'erased', erased_by_event_id = '{ev}'"),
+    )
+    .await
+    .expect("control: refused -> erased keeps the refusal time");
+    assert!(
+        member_state(&pool, m).await.4.is_some(),
+        "the refusal time survives the move to erased"
+    );
 }
 
 /// FAILS IF: a member row can be inserted refused. A row is born pending or erased, and reaches

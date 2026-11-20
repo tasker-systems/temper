@@ -1825,7 +1825,9 @@ pub struct ErasureDeclared {
     /// The declared member count per table, for an estate. Absent for a legacy erasure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub counts: Option<BTreeMap<ErasureMemberTable, u64>>,
-    /// The map's checksum (`erasure_map_checksum`), for an estate. Absent for a legacy erasure.
+    /// The map's checksum (`erasure_map_checksum`): required for an estate, optional for any other
+    /// non-legacy erasure, and verified by the projector whenever present. Absent for a legacy
+    /// erasure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checksum: Option<String>,
     /// The profiles that held the erasure's items when it was declared. Empty for a legacy
@@ -2520,6 +2522,12 @@ pub const ADMIN_ACT_KINDS: [&str; 4] = [
     "resource_scrubbed",
     "block_history_scrubbed",
 ];
+
+/// The erasure kinds that are an admin act by their kind alone, as `_event_is_admin_act` lists
+/// them: each is anchored on the blob or context it erases, so it is withheld from a reader's
+/// changes without reading a correlated record. Spec D6 makes each a per-unit erasure authority;
+/// no consumer marks members by them yet.
+pub const ANCHORED_ACT_KINDS: [&str; 2] = ["blob_erased", "context_erased"];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
 /// remote system's, whose shape temper does not control and cannot publish. They are deliberately

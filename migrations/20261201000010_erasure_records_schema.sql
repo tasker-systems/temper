@@ -25,6 +25,33 @@
 --
 -- _erasure_redact_paths()'s COMMENT is re-issued to name its manifest's present path; its body is
 -- unchanged.
+--
+-- THE LOCK BOUND. This migration takes strong locks on two tables every write touches: each
+-- `REFERENCES kb_events(id)` takes SHARE ROW EXCLUSIVE on kb_events, which conflicts with the ROW
+-- EXCLUSIVE every _event_append takes, and `ALTER TABLE kb_event_types ADD COLUMN` takes ACCESS
+-- EXCLUSIVE on a table every _event_append reads. An additive migration runs while the previous
+-- deployment is still serving (DEPLOYING.md). Unbounded, a request for either lock queues behind
+-- every open writer, and every later append queues behind the request, so the deploy would stall
+-- the live ledger for as long as the longest open transaction. So the whole migration runs under
+-- `SET LOCAL lock_timeout = '500ms'`, below the default `deadlock_timeout` (1s), so the wait gives
+-- up before a deadlock check would even start.
+--
+--   * temper-migrate applies each migration through sqlx's `Migrator`, which wraps one file and
+--     its bookkeeping in one transaction (temper-migrate `ledger`, its module doc), and the test
+--     runners apply each file as one multi-statement query, one implicit transaction. Either way
+--     `SET LOCAL` lasts exactly as long as this file, and no later migration inherits it.
+--   * When the bound fires, this migration rolls back, the build fails, the previous deployment
+--     keeps serving on the schema it already has, and the next deploy retries the migration.
+--   * It is set here, in the file, and not as a function's SET clause: a later CREATE OR REPLACE
+--     silently drops a function's SET clauses (20261015100000_erasure_acts_pin_lock_timeout.sql's
+--     header).
+--   * It is the first migration to set a lock_timeout, because it is the first additive migration
+--     that adds foreign keys into kb_events and a column to kb_event_types while a deployment
+--     serves.
+--   * A lock, once granted, is held to commit: the bound limits how long the migration waits, not
+--     how long it blocks. Everything after the grant is DDL on new tables and one COMMENT.
+
+SET LOCAL lock_timeout = '500ms';
 
 -- ---------------------------------------------------------------------------
 -- Section 1. The closed refusal vocabulary.
@@ -60,7 +87,9 @@ CREATE TABLE kb_erasures (
                           CHECK (subject_table IN ('kb_profiles', 'kb_resources')),
     subject_id            uuid,
     request_ref           uuid,
-    manifest_version      text,
+    manifest_version      text
+                          CONSTRAINT kb_erasures_manifest_version_check
+                          CHECK (manifest_version ~ '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'),
     manifest_digest       text
                           CONSTRAINT kb_erasures_manifest_digest_check
                           CHECK (manifest_digest ~ '^[0-9a-f]{64}$'),
@@ -99,6 +128,9 @@ status.$c$;
 
 COMMENT ON COLUMN kb_erasures.request_ref IS
     'The declaring request''s idempotency key, unique per kind. NULL exactly when legacy.';
+COMMENT ON COLUMN kb_erasures.manifest_version IS
+    'The release semver of the erasure policy the erasure was declared under, CHECKed to a semver '
+    'shape so the column can hold nothing else. NULL exactly when legacy.';
 COMMENT ON COLUMN kb_erasures.manifest_digest IS
     'sha256 (lowercase hex) of the canonical parsed erasure policy the erasure was declared under. '
     'NULL exactly when legacy.';
@@ -145,7 +177,9 @@ CREATE TABLE kb_erasure_members (
     refusal_sqlstate   text
                        CONSTRAINT kb_erasure_members_refusal_sqlstate_check
                        CHECK (refusal_sqlstate ~ '^[0-9A-Z]{5}$'),
-    refusal_routine    text,
+    refusal_routine    text
+                       CONSTRAINT kb_erasure_members_refusal_routine_check
+                       CHECK (refusal_routine ~ '^[a-z_][a-z0-9_]{0,62}(\.[a-z_][a-z0-9_]{0,62})?$'),
     first_refused_at   timestamptz,
     erased_by_event_id uuid        REFERENCES kb_events(id),
     attempts           integer     NOT NULL DEFAULT 0
@@ -210,16 +244,21 @@ COMMENT ON COLUMN kb_erasure_members.prior_erasure_id IS
 COMMENT ON COLUMN kb_erasure_members.late IS
     'Mapped after the declaration, by erasure_member_arrived. Excluded from the declared checksum.';
 COMMENT ON COLUMN kb_erasure_members.refusal_routine IS
-    'The routine that raised the refusal, a function name and never a message.';
+    'The routine that raised the refusal, a function name and never a message: CHECKed to a '
+    'lowercase identifier, optionally schema-qualified, as refusal_sqlstate is CHECKed to a '
+    'SQLSTATE. The record is never redacted, so the column must not be able to hold free text.';
 COMMENT ON COLUMN kb_erasure_members.first_refused_at IS
-    'When the item was first refused. Never changed once set: a retry keeps it, and so does the '
-    'move to erased.';
+    'When the item was first refused. Set only by a move into refused, and never changed once '
+    'set: a retry keeps it, and so does the move to erased.';
 COMMENT ON COLUMN kb_erasure_members.erased_by_event_id IS
     'The item''s authorising event, or for a row born erased the event that erased it before.';
 
 -- The status moves. Modelled on kb_principal_standing_events_append_only (20260720000040): BEFORE,
--- FOR EACH ROW, and refusing rather than repairing. An INSERT is checked for its birth status
--- only: a row is born pending or erased, and reaches refused by an UPDATE. The one rewrite it
+-- FOR EACH ROW, and refusing rather than repairing. An INSERT is checked for its birth: a row is
+-- born pending or erased, and reaches refused by an UPDATE. first_refused_at is set only by a move
+-- into refused, so a row born erased, or moved pending -> erased, carries none; on a pending row
+-- kb_erasure_members_pending_never_refused refuses it, and the trigger leaves that case to the
+-- CHECK so the CHECK's name reports it. The one rewrite it
 -- makes is the refused -> erased move clearing the refusal's reason, SQLSTATE and routine, so the
 -- projector that marks an item erased writes the same statement whatever the row's prior status.
 CREATE FUNCTION kb_erasure_members_status_moves()
@@ -234,6 +273,10 @@ BEGIN
     IF TG_OP = 'INSERT' THEN
         IF NEW.status = 'refused' THEN
             RAISE EXCEPTION 'kb_erasure_members: a member row is born pending or erased, never refused'
+                USING ERRCODE = 'check_violation';
+        END IF;
+        IF NEW.status = 'erased' AND NEW.first_refused_at IS NOT NULL THEN
+            RAISE EXCEPTION 'kb_erasure_members: first_refused_at is set only by a move into refused'
                 USING ERRCODE = 'check_violation';
         END IF;
         RETURN NEW;
@@ -260,6 +303,12 @@ BEGIN
             USING ERRCODE = 'check_violation';
     END IF;
 
+    IF OLD.first_refused_at IS NULL AND NEW.first_refused_at IS NOT NULL
+       AND NEW.status = 'erased' THEN
+        RAISE EXCEPTION 'kb_erasure_members: first_refused_at is set only by a move into refused'
+            USING ERRCODE = 'check_violation';
+    END IF;
+
     IF OLD.status = 'refused' AND NEW.status = 'erased' THEN
         NEW.refusal_reason   := NULL;
         NEW.refusal_sqlstate := NULL;
@@ -278,7 +327,8 @@ CREATE TRIGGER kb_erasure_members_status_moves
 COMMENT ON FUNCTION kb_erasure_members_status_moves IS
   'Refuses an INSERT on kb_erasure_members whose status is refused (a row is born pending or '
   'erased), DELETE, any change to a row''s identity, parent, prior_erasure_id or late, any '
-  'change to first_refused_at once set, and every status move but pending -> pending, '
+  'change to first_refused_at once set, a first_refused_at on a row born erased or moved '
+  'pending -> erased (it is set only by a move into refused), and every status move but pending -> pending, '
   'pending -> erased, pending -> refused, refused -> refused (the same or a changed reason) and '
   'refused -> erased, which it makes clear the refusal''s reason, SQLSTATE and routine. An erased '
   'row is frozen. Raises check_violation naming the move. Enforced under temper.replaying too; '
@@ -418,5 +468,6 @@ SELECT declare_migration(
     'kb_event_types.write_retired_at, which nothing reads. Re-issues the COMMENT on '
     '_erasure_redact_paths() only. No existing table, column, constraint, function body or row '
     'changes, and nothing writes or reads the new objects yet, so a binary without this change is '
-    'unaffected.'
+    'unaffected. Runs under SET LOCAL lock_timeout = 500ms: if a lock on kb_events or '
+    'kb_event_types is not granted in time, it rolls back and the serving deployment is untouched.'
 );

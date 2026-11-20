@@ -8,9 +8,10 @@
 //! `targets`, appended without the wrapper, then the projection-side body. The ledger keeps its
 //! text, so the husk still owes a completion pass. A cut-2 erasure runs the act itself.
 //!
-//! Replay walks the ledger in id order, and `uuid_generate_v7()` has no order within a millisecond
-//! (20261116000010_kb_events_record_order.sql). [`pause`] waits two milliseconds before each step
-//! whose order a test relies on, and the replay witness asserts that order before it compares.
+//! Every step is its own transaction, after the one before it, and replay walks transactions in
+//! the order they took their ids (`replay::replay`), whatever order `uuid_generate_v7()` gave the
+//! events' ids. The replay witnesses assert that walk order before they compare, and one forces a
+//! completion record's id below the backfill's declaration's, as PG17 can mint it.
 //!
 //! Witnesses:
 //!   * a cut-1 husk is backfilled as an `erased` and a `pending` legacy erasure, the second
@@ -19,6 +20,9 @@
 //!     is byte-identical;
 //!   * a second backfill appends nothing and leaves the `pending` row open, including around an
 //!     earlier completion record (the backfill never re-projects one);
+//!   * the backfill takes no table lock, so an append runs beside it; run again after a first
+//!     erasure the migration's read missed, it records that straggler, closes the P14 check, and
+//!     changes nothing else, before or after the drain's completion pass;
 //!   * a cut-2 erasure is one `erased` legacy erasure and owes no backfill event;
 //!   * a `resource_erased` of neither shape raises, and an erased resource with no record raises;
 //!   * a completion record never touches a non-legacy erasure, and clears the drain columns of the
@@ -106,14 +110,6 @@ async fn make_resource(pool: &PgPool, slug: &str) -> Uuid {
     .uuid()
 }
 
-/// Two milliseconds, so the next append lands in a later millisecond than every earlier one.
-async fn pause(pool: &PgPool) {
-    sqlx::query("SELECT pg_sleep(0.002)")
-        .execute(pool)
-        .await
-        .unwrap();
-}
-
 /// A husk as cut 1 left it, in the cut-1 act's own transaction: the plan, a `resource_erased`
 /// first record that carries `targets` and names no `redacted_fields`, appended without the
 /// wrapper as cut 1 appended it, then the projection-side body. The ledger's text is untouched.
@@ -181,9 +177,8 @@ async fn try_backfill(pool: &PgPool) -> Result<i32, sqlx::Error> {
         .await
 }
 
-/// The backfill, after a pause so its appends sort after everything before them.
+/// The backfill, in its own transaction.
 async fn backfill(pool: &PgPool) -> i32 {
-    pause(pool).await;
     try_backfill(pool).await.expect("the backfill runs")
 }
 
@@ -214,6 +209,18 @@ async fn declarations(pool: &PgPool) -> Vec<(Uuid, Uuid, serde_json::Value)> {
            FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
           WHERE t.name = 'erasure_declared' ORDER BY e.id",
     )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// `ids` in replay's walk order (`replay::replay`).
+async fn walk_order(pool: &PgPool, ids: &[Uuid]) -> Vec<Uuid> {
+    sqlx::query_scalar(
+        "SELECT id FROM kb_events WHERE id = ANY($1) \
+          ORDER BY (xact_id IS NULL) DESC, xact_id, seq, id",
+    )
+    .bind(ids)
     .fetch_all(pool)
     .await
     .unwrap()
@@ -265,7 +272,6 @@ async fn assert_replay_byte_identical(pool: &PgPool, after_what: &str, written: 
 /// Append a `resource_erased` record by hand and project it through the wrapper in the same
 /// transaction, as the act does. Returns the event id.
 async fn record_resource_erased(pool: &PgPool, payload: &serde_json::Value) -> Uuid {
-    pause(pool).await;
     let (_, emitter) = system_actor(pool).await;
     let mut tx = pool.begin().await.unwrap();
     let event: Uuid = sqlx::query_scalar(
@@ -298,7 +304,6 @@ fn completion_payload(resource: Uuid) -> serde_json::Value {
 
 /// Append an `erasure_declared` and project it in the same transaction. Returns the event id.
 async fn declare(pool: &PgPool, d: &ErasureDeclared) -> Uuid {
-    pause(pool).await;
     let payload = serde_json::to_value(d).unwrap();
     let (_, emitter) = system_actor(pool).await;
     let mut tx = pool.begin().await.unwrap();
@@ -424,7 +429,6 @@ async fn a_cut1_husk_is_backfilled_as_an_erased_and_a_pending_legacy_erasure(poo
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn an_old_door_completion_pass_closes_the_backfilled_pending_row(pool: PgPool) {
     let (r, first, declared, erasure) = backfilled_husk(&pool).await;
-    pause(&pool).await;
     let completion = execute_act(&pool, r).await;
     assert_eq!(
         legacy_of(&pool, r).await,
@@ -438,20 +442,20 @@ async fn an_old_door_completion_pass_closes_the_backfilled_pending_row(pool: PgP
 /// Replay of the sequence (cut-1 husk, backfill, completion pass) rebuilds every projection byte
 /// for byte, the legacy erasures among them.
 ///
-/// The precondition first: the backfill's `erasure_declared` sorts below the completion record,
-/// as replay walks them. A same-millisecond inversion fails here, loudly, and not as a diff below.
+/// The precondition first: the first record, the backfill's `erasure_declared` and the completion
+/// record walk in the order they were appended.
 ///
 /// FAILS IF: replay of the first record, the backfill's declaration, or the completion record
 /// writes any row the live sequence did not.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn replay_of_a_backfilled_and_completed_husk_is_byte_identical(pool: PgPool) {
     let (r, first, declared, _) = backfilled_husk(&pool).await;
-    pause(&pool).await;
     let completion = execute_act(&pool, r).await;
-    assert!(
-        first < declared && declared < completion,
+    assert_eq!(
+        walk_order(&pool, &[first, declared, completion]).await,
+        vec![first, declared, completion],
         "precondition: the first record, the backfill's erasure_declared and the completion record \
-         sort in append order ({first}, {declared}, {completion})"
+         walk in append order"
     );
     assert_replay_byte_identical(
         &pool,
@@ -604,38 +608,261 @@ async fn the_backfill_is_a_noop_on_an_empty_ledger(pool: PgPool) {
     assert_eq!(counts().await, before);
 }
 
-/// The backfill takes `kb_events` in SHARE mode in its own transaction, so it waits out every
-/// transaction still appending and holds off every new append until its caller commits.
+/// The backfill takes no table lock: while a transaction holding a backfill that appended is still
+/// open, another transaction appends to the ledger under a short lock bound. The backfill's
+/// transaction holds no lock on `kb_events` stronger than the ROW EXCLUSIVE every append takes.
 ///
-/// FAILS IF: after the call, the calling transaction holds no granted ShareLock on `kb_events`
-/// (the control: it held none before the call).
+/// FAILS IF: the backfill takes `kb_events` in SHARE mode (or stronger). The concurrent append then
+/// waits for the backfill's transaction and its lock bound fires, and the backfill's backend holds
+/// the stronger mode in `pg_locks`.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn the_backfill_takes_the_ledger_in_share_mode(pool: PgPool) {
+async fn the_backfill_takes_no_table_lock_so_an_append_runs_beside_it(pool: PgPool) {
     fresh(&pool).await;
-    let share_held = "SELECT EXISTS (SELECT 1 FROM pg_locks                        WHERE locktype = 'relation' AND relation = 'kb_events'::regclass                          AND mode = 'ShareLock' AND granted AND pid = pg_backend_pid())";
-    let mut tx = pool.begin().await.unwrap();
-    let before: bool = sqlx::query_scalar(share_held)
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap();
-    assert!(
-        !before,
-        "control: the transaction holds no share lock before the call"
-    );
+    let r = make_resource(&pool, "beside").await;
+    simulate_cut1_husk(&pool, r).await;
+    let (_, emitter) = system_actor(&pool).await;
+
+    let mut held = pool.begin().await.unwrap();
     let appended: i32 = sqlx::query_scalar("SELECT _erasure_legacy_backfill()")
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut *held)
         .await
         .expect("the backfill runs");
-    assert_eq!(appended, 0);
-    let after: bool = sqlx::query_scalar(share_held)
-        .fetch_one(&mut *tx)
+    assert_eq!(
+        appended, 1,
+        "setup: the backfill appended, so it wrote to the ledger"
+    );
+    let strong: Vec<String> = sqlx::query_scalar(
+        "SELECT mode FROM pg_locks \
+          WHERE locktype = 'relation' AND relation = 'kb_events'::regclass \
+            AND pid = pg_backend_pid() AND granted \
+            AND mode NOT IN ('AccessShareLock', 'RowShareLock', 'RowExclusiveLock')",
+    )
+    .fetch_all(&mut *held)
+    .await
+    .unwrap();
+    assert_eq!(
+        strong,
+        Vec::<String>::new(),
+        "the backfill holds no table lock on kb_events"
+    );
+
+    let mut beside = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL lock_timeout = '200ms'")
+        .execute(&mut *beside)
         .await
         .unwrap();
-    assert!(
-        after,
-        "the backfill's transaction holds kb_events in SHARE mode until it commits"
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT _event_append('resource_created', $1, NULL, NULL, '{}'::jsonb)",
+    )
+    .bind(emitter)
+    .fetch_one(&mut *beside)
+    .await
+    .expect("an append runs while the backfill's transaction is open");
+    beside.rollback().await.unwrap();
+    held.rollback().await.unwrap();
+}
+
+/// The check that finds a first erasure the migration's read missed: an erased resource with no
+/// `erased` member (P14 in the slice plan; `_erasure_legacy_backfill`'s comment carries the same
+/// query).
+const UNRECORDED_ERASED_RESOURCES: &str = "
+    SELECT r.id FROM kb_resources r
+     WHERE r.erased_at IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM kb_erasure_members m
+                        WHERE m.member_table = 'kb_resources' AND m.member_id = r.id
+                          AND m.status = 'erased')
+     ORDER BY r.id";
+
+async fn unrecorded(pool: &PgPool) -> Vec<Uuid> {
+    sqlx::query_scalar(UNRECORDED_ERASED_RESOURCES)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+/// The remedy for that race is to run the backfill again, at any time. The world: a husk the
+/// migration's backfill recorded (`pending`, its pass owed), a cut-2 erasure the re-issued wrapper
+/// recorded, and a straggler: a first erasure appended without the wrapper, as one that committed
+/// under the replaced wrapper after the migration's read. The check reports the straggler alone.
+/// The re-run records it as the migration would have, and changes nothing else; a further re-run
+/// appends nothing; after the husk's completion pass a re-run still leaves every row as it is; and
+/// replay of the whole sequence is byte-identical.
+///
+/// FAILS IF: the re-run misses the straggler, declares a second pass for the recorded husk,
+/// touches the cut-2 erasure's row, reopens the completed husk, appends on a later call, or any
+/// of it fails to replay.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_rerun_records_a_straggler_and_is_safe_at_any_time(pool: PgPool) {
+    let (husk, husk_first, _, _) = backfilled_husk(&pool).await;
+    let cut2 = make_resource(&pool, "rerun-cut2").await;
+    let cut2_event = execute_act(&pool, cut2).await;
+    let straggler = make_resource(&pool, "rerun-straggler").await;
+    let straggler_first = simulate_cut1_husk(&pool, straggler).await;
+    assert_eq!(
+        unrecorded(&pool).await,
+        vec![straggler],
+        "setup: the check reports the straggler, and only it"
     );
-    tx.rollback().await.unwrap();
+    let husk_rows = legacy_of(&pool, husk).await;
+    let cut2_rows = legacy_of(&pool, cut2).await;
+
+    assert_eq!(
+        backfill(&pool).await,
+        1,
+        "the straggler owes its pass, and only it is declared"
+    );
+    assert_eq!(
+        unrecorded(&pool).await,
+        Vec::<Uuid>::new(),
+        "the check is clear"
+    );
+    let rows = legacy_of(&pool, straggler).await;
+    assert_eq!(rows.len(), 2, "the straggler: {rows:?}");
+    assert_eq!(
+        rows[0],
+        (
+            straggler_first,
+            straggler_first,
+            "erased".to_owned(),
+            Some(straggler_first)
+        )
+    );
+    assert_eq!((rows[1].2.as_str(), rows[1].3), ("pending", None));
+    assert_eq!(
+        legacy_of(&pool, husk).await,
+        husk_rows,
+        "the recorded husk is unchanged"
+    );
+    assert_eq!(
+        legacy_of(&pool, cut2).await,
+        cut2_rows,
+        "the cut-2 erasure is unchanged"
+    );
+    assert_eq!(
+        cut2_rows,
+        vec![(
+            cut2_event,
+            cut2_event,
+            "erased".to_owned(),
+            Some(cut2_event)
+        )]
+    );
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    assert_eq!(backfill(&pool).await, 0, "a further re-run appends nothing");
+    assert_eq!(
+        replay::dump_projections(&pool).await.unwrap(),
+        before,
+        "and writes nothing"
+    );
+
+    let completion = execute_act(&pool, husk).await;
+    let completed = legacy_of(&pool, husk).await;
+    assert_eq!(
+        completed[0],
+        (
+            husk_first,
+            husk_first,
+            "erased".to_owned(),
+            Some(husk_first)
+        )
+    );
+    assert_eq!(
+        (completed[1].2.as_str(), completed[1].3),
+        ("erased", Some(completion))
+    );
+    let before = replay::dump_projections(&pool).await.unwrap();
+    assert_eq!(
+        backfill(&pool).await,
+        0,
+        "a re-run after the completion pass appends nothing"
+    );
+    assert_eq!(
+        replay::dump_projections(&pool).await.unwrap(),
+        before,
+        "and reopens nothing"
+    );
+
+    assert_replay_byte_identical(
+        &pool,
+        "after a straggler's re-run backfill",
+        &["kb_erasures", "kb_erasure_members"],
+    )
+    .await;
+}
+
+/// The backfill's commit millisecond: a completion record whose id is forced below the backfill's
+/// `erasure_declared` in the same millisecond, as PG17's `uuid_generate_v7()` can mint it for a
+/// completion pass that runs right after the migration commits. Live, the completion record closes
+/// the backfill's `pending` row.
+///
+/// FAILS IF: replay walks by id. It then projects the completion record before the declaration,
+/// closes nothing, and the rebuilt row stays `pending` where the live one is `erased`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_completion_record_in_the_backfills_millisecond_replays_as_it_committed(pool: PgPool) {
+    let (r, _, declared, erasure) = backfilled_husk(&pool).await;
+    // The lowest version-7 id of the declaration's millisecond: bytes 0..6 are the millisecond,
+    // and every bit after them but the version and the variant is zero.
+    let mut bytes = *declared.as_bytes();
+    bytes[6] = 0x70;
+    bytes[7] = 0x00;
+    bytes[8] = 0x80;
+    for byte in &mut bytes[9..] {
+        *byte = 0x00;
+    }
+    let completion = Uuid::from_bytes(bytes);
+    assert!(
+        completion < declared,
+        "setup: the completion record has the lower id"
+    );
+
+    // The completion pass's record and its projection, as the act writes them: the wrapper, then
+    // the body under the record's id.
+    let (_, emitter) = system_actor(&pool).await;
+    let payload = completion_payload(r);
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, payload, correlation_id, \
+                                category) \
+         SELECT $1, t.id, $2, $3, $1, t.category FROM kb_event_types t \
+          WHERE t.name = 'resource_erased'",
+    )
+    .bind(completion)
+    .bind(emitter)
+    .bind(&payload)
+    .execute(&mut *tx)
+    .await
+    .expect("the completion record appends");
+    sqlx::query("SELECT _project_resource_erased_redactions($1, $2)")
+        .bind(completion)
+        .bind(&payload)
+        .execute(&mut *tx)
+        .await
+        .expect("the wrapper projects the completion record");
+    sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2)")
+        .bind(r)
+        .bind(completion)
+        .execute(&mut *tx)
+        .await
+        .expect("the body runs under the completion record");
+    tx.commit().await.unwrap();
+
+    assert_eq!(
+        walk_order(&pool, &[declared, completion]).await,
+        vec![declared, completion],
+        "setup: the walk takes the declaration first, as it committed"
+    );
+    assert_eq!(
+        member_status(&pool, erasure, r).await,
+        ("erased".to_owned(), Some(completion)),
+        "setup: live, the completion record closed the backfill's row"
+    );
+    assert_replay_byte_identical(
+        &pool,
+        "of a completion record in the backfill's millisecond",
+        &["kb_erasures", "kb_erasure_members"],
+    )
+    .await;
 }
 
 /// A `resource_erased` in the ledger of neither shape raises inside the backfill, so the migration
@@ -847,7 +1074,6 @@ async fn the_migration_records_the_husks_of_a_ledger_made_before_it(own: PgPool)
     let first = simulate_cut1_husk(&pool, husk).await;
     let cut2 = make_resource(&pool, "pre-record-cut2").await;
     let cut2_event = execute_act(&pool, cut2).await;
-    pause(&pool).await;
 
     all.run(&pool).await.expect("the rest of the chain applies");
 

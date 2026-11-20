@@ -2631,8 +2631,10 @@ async fn a_key_typed_in_anothers_sentinel_shape_is_renamed_by_its_own_scrub(pool
 /// but whose projection landed after the unset holds a live row under the real key. Its key text is
 /// not prior: the act holds it as `current`, the verifier refuses a rename of it, and its live row
 /// keeps a key text the family listing still names. Renaming the rest of the family keeps replay
-/// identical: the renamed unset folds only the renamed rows, as live did. (Without the scrub, this
-/// inversion diverges on replay by itself, erasure D14: the real-keyed unset would fold the row.)
+/// identical: the renamed unset folds only the renamed rows, as live did. (Replay walks the
+/// assertion after the unset, as its transaction committed after the unset's, so the inverted id
+/// alone does not make replay diverge; the witness holds what the act does with an id that sorts
+/// between the set and the unset.)
 ///
 /// FAILS IF: key text at or before the unset is prior though its event asserts a live row, so the
 /// act renames it (the live row keeps the real key under an event that no longer names it, and

@@ -2,10 +2,13 @@
 //! Membership implies the flag (erasure estate-membership spec D7.3; migrations
 //! 20261201000010_erasure_records_schema.sql and 20261201000030_erasure_record_projectors.sql).
 //!
-//! [`VIOLATIONS`] is the check. It returns one row per violation of four conjuncts, each over the
+//! [`VIOLATIONS`] is the check. It returns one row per violation of five conjuncts, each over the
 //! whole database (every `sqlx::test` gets its own):
 //!
-//!   * `resource_flag`: a `kb_erasure_members` row of `kb_resources` whose resource is active;
+//!   * `item_missing`: a `kb_erasure_members` row, of any member type and any status, whose item
+//!     is not a row of its table. The three flag conjuncts below join to the item, so without this
+//!     one a member whose item does not exist would satisfy them by vanishing from the join;
+//!   * `resource_flag`: a row of `kb_resources` whose resource is active;
 //!   * `context_flag`: a row of `kb_contexts` whose context is active;
 //!   * `edge_flag`: a row of `kb_edges` whose edge is not folded;
 //!   * `erased_has_row`: a resource with `erased_at` set and no `erased` member row.
@@ -39,7 +42,17 @@ const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789
 
 /// Every violation of D7.3, as (conjunct, item id). Empty when membership implies the flag.
 const VIOLATIONS: &str = "
-    SELECT 'resource_flag'::text AS conjunct, m.member_id AS item
+    SELECT 'item_missing'::text AS conjunct, m.member_id AS item
+      FROM kb_erasure_members m
+     WHERE (CASE m.member_table
+                WHEN 'kb_resources' THEN EXISTS (SELECT 1 FROM kb_resources x WHERE x.id = m.member_id)
+                WHEN 'kb_contexts'  THEN EXISTS (SELECT 1 FROM kb_contexts x  WHERE x.id = m.member_id)
+                WHEN 'kb_cogmaps'   THEN EXISTS (SELECT 1 FROM kb_cogmaps x   WHERE x.id = m.member_id)
+                WHEN 'kb_blobs'     THEN EXISTS (SELECT 1 FROM kb_blobs x     WHERE x.id = m.member_id)
+                WHEN 'kb_edges'     THEN EXISTS (SELECT 1 FROM kb_edges x     WHERE x.id = m.member_id)
+            END) IS NOT TRUE
+    UNION ALL
+    SELECT 'resource_flag', m.member_id
       FROM kb_erasure_members m
       JOIN kb_resources r ON r.id = m.member_id
      WHERE m.member_table = 'kb_resources' AND r.is_active
@@ -380,4 +393,35 @@ async fn an_erased_resource_with_no_erased_row_is_reported(pool: PgPool) {
         violations(&pool).await,
         only("erased_has_row", w.free_resource.uuid())
     );
+}
+
+/// A member whose item does not exist is reported, for each of the five member types, whatever
+/// its status. Each type is mapped in turn, so each step's report adds exactly that member.
+///
+/// FAILS IF: a member type's missing item is not reported (the flag conjuncts' joins drop it), or
+/// is reported under any other conjunct.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_member_whose_item_is_missing_is_reported_for_every_member_type(pool: PgPool) {
+    let w = world(&pool).await;
+    let mut missing: Vec<Uuid> = Vec::new();
+    for table in [
+        "kb_resources",
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_blobs",
+        "kb_edges",
+    ] {
+        let id = Uuid::now_v7();
+        map_without_flag(&pool, w.erasure, table, id).await;
+        missing.push(id);
+        missing.sort();
+        assert_eq!(
+            violations(&pool).await,
+            missing
+                .iter()
+                .map(|id| ("item_missing".to_owned(), *id))
+                .collect::<Vec<_>>(),
+            "after mapping a missing {table} item"
+        );
+    }
 }
