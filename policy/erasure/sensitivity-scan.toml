@@ -23,9 +23,9 @@
 # temper_services::MIGRATOR (so `_sqlx_migrations` is included). The complement is that set minus
 # every `table.column` declared in personal-data.toml.
 #
-# COUNT at `count_at`: 178 text/varchar columns; 18 declared in the sibling; `declared_count` declared here.
-count_at = "20261108000000"
-declared_count = 160
+# COUNT at `count_at`: 192 text/varchar columns; 19 declared in the sibling; `declared_count` declared here.
+count_at = "20261201000010"
+declared_count = 173
 #
 # THERE IS NO `unadjudicated` CLASS. A class that means "we will decide later" is how a manifest
 # starts accumulating lines nobody reads. A new column is declared by the PR that adds it.
@@ -110,6 +110,8 @@ declared_count = 160
 "kb_cogmap_components.fingerprint"                = { disposition = "structural", note = "digest of a component's membership" }
 "kb_cogmaps.steward_boundary_fingerprint"         = { disposition = "structural", note = "digest of the steward's boundary" }
 "kb_remote_sources.uri_normalized"                = { disposition = "structural", note = "normalization of .uri, same row; a finding on .uri points here too" }
+"kb_erasures.manifest_digest"                     = { disposition = "structural", note = "sha256 of the canonical parsed erasure policy (CHECK: 64 hex)" }
+"kb_erasure_estate_snapshots.checksum"            = { disposition = "structural", note = "sha256 of an erasure's member map (erasure_map_checksum)" }
 
 # ── polymorphic discriminators (table names under a CHECK) ──────────────────────────────────
 "kb_blob_uploads.home_table"                      = { disposition = "structural", note = "discriminator" }
@@ -126,6 +128,8 @@ declared_count = 160
 "kb_properties.owner_table"                       = { disposition = "structural", note = "discriminator" }
 "kb_resource_homes.anchor_table"                  = { disposition = "structural", note = "discriminator" }
 "kb_subscriptions.subscriber_table"               = { disposition = "structural", note = "discriminator" }
+"kb_erasure_members.member_table"                 = { disposition = "structural", note = "discriminator" }
+"kb_erasure_members.parent_table"                 = { disposition = "structural", note = "discriminator" }
 
 # ── enums, states and closed vocabularies ───────────────────────────────────────────────────
 "kb_data_artifact_shapes.enforcement"             = { disposition = "structural", note = "CHECK enum" }
@@ -156,6 +160,15 @@ declared_count = 160
 "kb_workflow_jobs.dispatch_type"                  = { disposition = "structural", note = "dispatch vocabulary" }
 "kb_workflow_jobs.persona"                        = { disposition = "structural", note = "persona vocabulary" }
 "kb_cogmap_lenses.selection_kind"                 = { disposition = "structural", note = "lens vocabulary" }
+"kb_erasures.kind"                                = { disposition = "structural", note = "CHECK enum" }
+"kb_erasures.manifest_version"                    = { disposition = "structural", note = "the release semver of the erasure policy" }
+"kb_erasure_estate_snapshots.kind"                = { disposition = "structural", note = "CHECK enum, one value" }
+"kb_erasure_members.status"                       = { disposition = "structural", note = "CHECK enum" }
+"kb_erasure_members.refusal_reason"               = { disposition = "structural", note = "closed vocabulary, FK to kb_erasure_refusal_reasons" }
+"kb_erasure_members.refusal_sqlstate"             = { disposition = "structural", note = "a five-character SQLSTATE (CHECK)" }
+"kb_erasure_members.refusal_routine"              = { disposition = "structural", note = "the name of the routine that raised, never its message" }
+"kb_erasure_refusal_reasons.code"                 = { disposition = "structural", note = "closed vocabulary (ErasureRefusalReason)" }
+"kb_erasure_refusal_reasons.meaning"              = { disposition = "structural", note = "the fixed meaning of a code, seeded by migration and held equal to estate.toml" }
 "kb_data_artifact_shapes.artifact_kind"           = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name" }
 "kb_data_artifacts.artifact_kind"                 = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name" }
 "kb_migration_ledger.recorded_by"                 = { disposition = "structural", note = "provenance vocabulary" }
