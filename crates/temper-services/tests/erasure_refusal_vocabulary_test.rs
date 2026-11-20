@@ -149,10 +149,13 @@ async fn the_four_copies_of_the_refusal_vocabulary_are_equal(pool: PgPool) {
     assert_eq!(disagreements(&c), Vec::<String>::new());
 }
 
+/// A named probe: which copy it edits, and the edit.
+type Probe = (&'static str, fn(&mut Copies));
+
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_code_added_to_one_copy_only_is_reported(pool: PgPool) {
     const PROBE: &str = "probe_only_here";
-    let probes: [(&str, fn(&mut Copies)); 4] = [
+    let probes: [Probe; 4] = [
         ("manifest", |c| {
             c.manifest.insert(PROBE.into(), Some("m".into()));
         }),

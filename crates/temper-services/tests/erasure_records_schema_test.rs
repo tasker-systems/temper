@@ -89,10 +89,6 @@ async fn insert(pool: &PgPool, table: &str, row: &Value) -> Result<(), sqlx::Err
     .map(|_| ())
 }
 
-async fn exec(pool: &PgPool, sql: &str) -> Result<(), sqlx::Error> {
-    sqlx::query(sql).execute(pool).await.map(|_| ())
-}
-
 async fn system_profile(pool: &PgPool) -> Uuid {
     sqlx::query_scalar("SELECT id FROM kb_profiles WHERE handle = 'system'")
         .fetch_one(pool)
