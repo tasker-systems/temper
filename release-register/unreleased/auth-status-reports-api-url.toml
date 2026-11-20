@@ -1,4 +1,4 @@
-title    = "`temper auth status` reports the `api_url` its requests and grant are sent to"
+title    = "`temper auth status` reports the `api_url` it talks to"
 pr       = "self"
 classes  = ["additive"]
 surfaces = ["cli-stdout", "clients"]

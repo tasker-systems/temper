@@ -398,7 +398,7 @@ async fn resolve_access(client: &TemperClient) -> (Option<Identity>, SystemAcces
 struct AuthStatusReport {
     #[serde(flatten)]
     auth: AuthStatus,
-    /// The API base URL this CLI sends requests, and any grant it holds, to. The stored grant
+    /// Where this CLI sends requests and presents any grant it holds. The stored grant
     /// records no origin of its own, so this is where it will be presented, not where it was minted.
     /// Read off the built client, so it carries the CLI's own precedence (`TEMPER_API_URL`, then
     /// `[cloud] api_url`) without restating it. Present signed in and signed out: it is

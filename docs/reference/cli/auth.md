@@ -80,7 +80,7 @@ Options:
 ```text
 Show current auth status
 
-Reports `api_url` — the API base URL this CLI sends requests, and any grant it holds, to (`TEMPER_API_URL`, else `[cloud] api_url`) — whether or not you are signed in.
+Reports `api_url` — where this CLI sends requests and presents any grant it holds (`TEMPER_API_URL`, else `[cloud] api_url`) — whether or not you are signed in.
 
 Usage: temper auth status [OPTIONS]
 
