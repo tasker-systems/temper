@@ -508,6 +508,9 @@ pub fn at_cos(c: f32) -> Vec<f32> {
 /// A real, embedded context to materialize regions over — shared by the telos + two-clock tests.
 pub mod context_fixture;
 
+/// D1.1's map checksum, independent of `erasure_map_checksum`, for erasure fixtures.
+pub mod erasure_map;
+
 /// A loopback listener that counts connections — the "nothing was fetched" witness.
 pub mod fetch_probe;
 

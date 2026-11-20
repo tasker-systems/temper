@@ -11,8 +11,9 @@
 --   * A MAP ENTRY CARRIES NO STATUS. An entry with prior_erasure and prior_event is born erased;
 --     every other is born pending. An entry with only one of the two raises.
 --   * A DECLARATION'S CLAIMS ARE VERIFIED, NEVER TRUSTED. _project_erasure_declared compares the
---     payload's counts and checksum with the map it inserts, and raises on a mismatch or on a
---     field the declaration's kind does not carry. The checks read only the payload and the rows
+--     payload's counts and checksum with the map it inserts, and raises on a mismatch, on a
+--     field the declaration's kind does not carry, or on one it must carry and lacks (every
+--     non-legacy declaration carries its checksum). The checks read only the payload and the rows
 --     the call inserts, so a payload that projected live projects the same way in replay.
 --   * THE BOUND FLAGS ARE SET ON PENDING MEMBERS ONLY, through _erasure_member_flag, which both
 --     the declaration and an arrival call. A row born erased was finished by an earlier erasure,
@@ -109,12 +110,12 @@ _project_erasure_declared and _project_erasure_member_arrived.$c$;
 -- raises:
 --
 --   * a legacy declaration carries no manifest, no request, no counts, no checksum and no holders;
---   * counts belong to an estate only. An estate carries counts and a checksum. Its counts name
---     only the five member tables and must include every table its map holds; a count for a table
---     the map does not hold may be absent, and reads as 0. Each count equals the map's entries of
---     that table;
---   * a checksum, on an estate or on any other non-legacy declaration, equals
---     erasure_map_checksum over the rows just inserted.
+--   * every non-legacy declaration carries a checksum (D1.1 defines it for every non-legacy
+--     erasure, so D7.5 can re-derive each one), and it equals erasure_map_checksum over the rows
+--     just inserted;
+--   * counts belong to an estate only, and an estate carries them. They name only the five member
+--     tables and must include every table its map holds; a count for a table the map does not
+--     hold may be absent, and reads as 0. Each count equals the map's entries of that table.
 --
 -- Each is a writer's defect, and the projector refuses it rather than dropping, defaulting or
 -- trusting what it was given. An honest historical payload never raises: the checks read only the
@@ -150,6 +151,10 @@ BEGIN
         RAISE EXCEPTION 'erasure_declared event %: a legacy declaration carries counts, a checksum or holders', p_event
             USING ERRCODE = 'check_violation';
     END IF;
+    IF NOT v_legacy AND v_checksum IS NULL THEN
+        RAISE EXCEPTION 'erasure_declared event %: a non-legacy declaration carries no checksum', p_event
+            USING ERRCODE = 'not_null_violation';
+    END IF;
     IF v_kind IS DISTINCT FROM 'estate' AND v_counts IS NOT NULL THEN
         RAISE EXCEPTION 'erasure_declared event %: only an estate declaration carries counts', p_event
             USING ERRCODE = 'check_violation';
@@ -158,10 +163,6 @@ BEGIN
     IF v_kind = 'estate' THEN
         IF v_counts IS NULL THEN
             RAISE EXCEPTION 'erasure_declared event %: an estate declaration carries no counts', p_event
-                USING ERRCODE = 'not_null_violation';
-        END IF;
-        IF v_checksum IS NULL THEN
-            RAISE EXCEPTION 'erasure_declared event %: an estate declaration carries no checksum', p_event
                 USING ERRCODE = 'not_null_violation';
         END IF;
         IF EXISTS (SELECT 1 FROM jsonb_array_elements(v_map) AS m(entry)
@@ -253,12 +254,12 @@ $c$Projects an erasure_declared payload: the kb_erasures row (declared_event_id 
 estate snapshot for an estate, one kb_erasure_members row per map entry (born erased when the entry
 names prior_erasure and prior_event, else pending), the former holders, and the bound flags of the
 pending members (_erasure_member_flag). It verifies what the payload claims about the map and
-raises on a mismatch or a field that does not belong: a legacy payload carries no manifest,
-request, counts, checksum or holders; only an estate carries counts, and an estate carries counts
-and a checksum, its counts naming only member tables, including every table its map holds (an
-absent one reads as 0), and each equal to the map's entries of that table; a checksum present on
-any declaration equals erasure_map_checksum of the rows just inserted. Payload-driven; replay calls
-it at the event's position.$c$;
+raises on a mismatch, a missing field or a field that does not belong: a legacy payload carries no
+manifest, request, counts, checksum or holders; every non-legacy payload carries a checksum, equal
+to erasure_map_checksum of the rows just inserted; only an estate carries counts, and an estate
+carries them, naming only member tables, including every table its map holds (an absent one reads
+as 0), each equal to the map's entries of that table. Payload-driven; replay calls it at the
+event's position.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 4. erasure_member_arrived.
@@ -562,7 +563,7 @@ BEGIN
            AND EXISTS (SELECT 1 FROM jsonb_object_keys(e.payload) AS k(key)
                         WHERE k.key NOT IN ('subject_table', 'subject_id', 'actor',
                                             'redacted_fields'))
-         ORDER BY (e.xact_id IS NULL) DESC, e.xact_id, e.seq, e.id
+         ORDER BY (e.seq IS NULL) DESC, e.seq, e.id
     LOOP
         PERFORM _project_resource_erased_membership(v_record.id, v_record.payload);
     END LOOP;

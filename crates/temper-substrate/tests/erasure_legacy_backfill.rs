@@ -8,10 +8,10 @@
 //! `targets`, appended without the wrapper, then the projection-side body. The ledger keeps its
 //! text, so the husk still owes a completion pass. A cut-2 erasure runs the act itself.
 //!
-//! Every step is its own transaction, after the one before it, and replay walks transactions in
-//! the order they took their ids (`replay::replay`), whatever order `uuid_generate_v7()` gave the
-//! events' ids. The replay witnesses assert that walk order before they compare, and one forces a
-//! completion record's id below the backfill's declaration's, as PG17 can mint it.
+//! Every step is its own transaction, after the one before it, and replay walks events in append
+//! order (`replay::replay`), whatever order `uuid_generate_v7()` gave the events' ids. The replay
+//! witnesses assert that walk order before they compare, and one forces a completion record's id
+//! below the backfill's declaration's, as PG17 can mint it.
 //!
 //! Witnesses:
 //!   * a cut-1 husk is backfilled as an `erased` and a `pending` legacy erasure, the second
@@ -31,6 +31,8 @@
 //!     before it, it records both husks as their derivation implies.
 
 mod common;
+
+use common::erasure_map::d1_1_checksum;
 
 use std::borrow::Cow;
 
@@ -328,6 +330,13 @@ async fn declare(pool: &PgPool, d: &ErasureDeclared) -> Uuid {
 
 /// A resource erasure of one pending member, legacy or not.
 fn resource_declaration(erasure: Uuid, resource: Uuid, legacy: bool) -> ErasureDeclared {
+    let map = vec![ErasureMapEntry {
+        table: ErasureMemberTable::KbResources,
+        id: resource,
+        parent: None,
+        prior_erasure: None,
+        prior_event: None,
+    }];
     ErasureDeclared {
         erasure_id: erasure,
         kind: ErasureKind::Resource,
@@ -336,15 +345,9 @@ fn resource_declaration(erasure: Uuid, resource: Uuid, legacy: bool) -> ErasureD
         request_ref: (!legacy).then(Uuid::now_v7),
         manifest_version: (!legacy).then(|| "1.0.0".to_owned()),
         manifest_digest: (!legacy).then(|| DIGEST.to_owned()),
-        map: vec![ErasureMapEntry {
-            table: ErasureMemberTable::KbResources,
-            id: resource,
-            parent: None,
-            prior_erasure: None,
-            prior_event: None,
-        }],
+        checksum: (!legacy).then(|| d1_1_checksum(erasure, DIGEST, &map)),
+        map,
         counts: None,
-        checksum: None,
         holders: vec![],
         legacy,
     }
@@ -850,7 +853,7 @@ async fn a_completion_record_in_the_backfills_millisecond_replays_as_it_committe
     assert_eq!(
         walk_order(&pool, &[declared, completion]).await,
         vec![declared, completion],
-        "setup: the walk takes the declaration first, as it committed"
+        "setup: the walk takes the declaration first, in append order"
     );
     assert_eq!(
         member_status(&pool, erasure, r).await,

@@ -62,6 +62,11 @@
 --   * The bound is per wait, and a lock once granted is held to commit. So the waits stack: while
 --     this migration waits for 2 or 3 it already holds 1, and appends wait with it, for at most
 --     500ms per wait. A wait that fires rolls everything back and releases every grant.
+--   * THE COST, ACCEPTED. Lock 1 is granted in Section 0 and held to this file's commit, so every
+--     append waits through all of the file's DDL, not only through its lock waits: each write
+--     stalls for the length of the apply. And any transaction that holds a conflicting lock for
+--     more than 500ms (a long job appending events, or one holding a profile row) makes this
+--     migration fail; the deploy is then retried, and succeeds once no such transaction is open.
 
 SET LOCAL lock_timeout = '500ms';
 

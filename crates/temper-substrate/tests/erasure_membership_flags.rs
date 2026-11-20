@@ -25,6 +25,8 @@
 
 mod common;
 
+use common::erasure_map::d1_1_checksum;
+
 use sqlx::PgPool;
 use temper_core::types::ids::EntityId;
 use temper_substrate::affinity::EdgeKind;
@@ -242,6 +244,15 @@ async fn world(pool: &PgPool) -> World {
         table: ErasureMemberTable::KbContexts,
         id: context.uuid(),
     };
+    let map = vec![
+        pending(ErasureMemberTable::KbContexts, context.uuid(), None),
+        pending(
+            ErasureMemberTable::KbResources,
+            resource.uuid(),
+            Some(parent),
+        ),
+        pending(ErasureMemberTable::KbEdges, edge.uuid(), None),
+    ];
     declare(
         pool,
         &ErasureDeclared {
@@ -252,17 +263,9 @@ async fn world(pool: &PgPool) -> World {
             request_ref: Some(Uuid::now_v7()),
             manifest_version: Some("1.0.0".to_owned()),
             manifest_digest: Some(DIGEST.to_owned()),
-            map: vec![
-                pending(ErasureMemberTable::KbContexts, context.uuid(), None),
-                pending(
-                    ErasureMemberTable::KbResources,
-                    resource.uuid(),
-                    Some(parent),
-                ),
-                pending(ErasureMemberTable::KbEdges, edge.uuid(), None),
-            ],
+            checksum: Some(d1_1_checksum(erasure, DIGEST, &map)),
+            map,
             counts: None,
-            checksum: None,
             holders: vec![],
             legacy: false,
         },

@@ -187,13 +187,14 @@ async fn facet(pool: &PgPool, w: &World, r: ResourceId, values: serde_json::Valu
 /// R's `event_type` events, in walk order: a resource event by `resource_id`, a property event by
 /// its owner, and with `key` only those naming it.
 async fn events(pool: &PgPool, event_type: &str, r: ResourceId, key: Option<&str>) -> Vec<Uuid> {
-    sqlx::query_scalar(
+    sqlx::query_scalar(&format!(
         "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
           WHERE t.name = $1 \
-            AND coalesce(e.payload ->> 'resource_id', e.payload #>> '{owner,id}') = $2::text \
+            AND coalesce(e.payload ->> 'resource_id', e.payload #>> '{{owner,id}}') = $2::text \
             AND ($3::text IS NULL OR e.payload ->> 'property_key' = $3) \
-          ORDER BY e.id",
-    )
+          ORDER BY {}",
+        temper_substrate::replay::WALK_ORDER
+    ))
     .bind(event_type)
     .bind(r.uuid())
     .bind(key)

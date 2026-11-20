@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "checksum": {
-      "description": "The map's checksum (`erasure_map_checksum`): required for an estate, optional for any other\nnon-legacy erasure, and verified by the projector whenever present. Absent for a legacy\nerasure.",
+      "description": "The map's checksum (`erasure_map_checksum`): carried by every non-legacy erasure and\nverified by the projector. Absent for a legacy erasure.",
       "type": [
         "string",
         "null"

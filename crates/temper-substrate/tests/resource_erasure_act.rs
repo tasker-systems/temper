@@ -4929,9 +4929,9 @@ async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) 
     );
 }
 
-/// (21, the replay bypass) A lawful write can sort after the act in walk order: its transaction
-/// committed before the act's, but took its transaction id after the act's, and the walk orders
-/// transactions by id (`replay::replay`). The ledger's walk-order shape is built here by appending a `property_set`
+/// (21, the replay bypass) A lawful write can sort after the act in walk order where its append
+/// ran after the act's but its projection landed before the act's (the residual `replay::replay`
+/// states). The ledger's walk-order shape is built here by appending a `property_set`
 /// on R through the real write path AFTER the act commits, inside a transaction that sets
 /// `temper.replaying` — the setting the replay walk sets around each event — so the live write
 /// guard lets it through as the walk's would. The witness is that replay projects that event
@@ -5091,9 +5091,9 @@ async fn simulate_cut1_husk(pool: &PgPool, resource: Uuid) -> Uuid {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    // Its own transaction, after the act's: replay walks transactions in the order they took
-    // their ids, so the backfill's erasure_declared walks after the first record and before
-    // whatever the test appends next.
+    // Its own transaction, after the act's: replay walks events in append order, so the
+    // backfill's erasure_declared walks after the first record and before whatever the test
+    // appends next.
     sqlx::query("SELECT _erasure_legacy_backfill()")
         .execute(pool)
         .await

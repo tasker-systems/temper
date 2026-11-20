@@ -68,7 +68,13 @@
 //!     reader of the class, so a kind added to the class does not fail it. Whether a new consumer
 //!     is a class reader or its own kinds' act is decided by whoever rosters it, in review;
 //!   * SQL outside the five catalog sources above: rules, event triggers, and text a function
-//!     builds and runs with EXECUTE.
+//!     builds and runs with EXECUTE;
+//!   * an erasure kind whose name has none of the shapes the kind closure looks for
+//!     ([`erasure_shaped`]: `*_erased`, `*_scrubbed`, `*erasure*`) and no role in
+//!     `AUTHORITY_BY_ROLE`. A kind named `*_purged`, `*_redacted`, `*_struck` or `*_tombstoned`
+//!     would be in no class and fail nothing. The registry carries no flag that marks a kind as an
+//!     erasure's, so the closure matches names; whoever registers such a kind must add it to a
+//!     class or to `AUTHORITY_BY_ROLE`, in review.
 //!
 //! The checker is a pure function over (consumers, roster, vocabulary), so the bite probes run in
 //! memory over the real bodies with one change each, one probe per failure branch.

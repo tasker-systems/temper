@@ -1825,9 +1825,8 @@ pub struct ErasureDeclared {
     /// The declared member count per table, for an estate. Absent for a legacy erasure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub counts: Option<BTreeMap<ErasureMemberTable, u64>>,
-    /// The map's checksum (`erasure_map_checksum`): required for an estate, optional for any other
-    /// non-legacy erasure, and verified by the projector whenever present. Absent for a legacy
-    /// erasure.
+    /// The map's checksum (`erasure_map_checksum`): carried by every non-legacy erasure and
+    /// verified by the projector. Absent for a legacy erasure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checksum: Option<String>,
     /// The profiles that held the erasure's items when it was declared. Empty for a legacy

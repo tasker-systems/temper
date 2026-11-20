@@ -22,16 +22,18 @@
 //!   * the walk order: with ids forced to invert the order the events were written (in one
 //!     transaction, and across two), replay still rebuilds what the live projectors wrote: an
 //!     arrival after its declaration, a reopening after its completion, a second refusal after the
-//!     first;
-//!   * a declaration's counts, checksum and holders are verified against its map, and a field its
-//!     kind does not carry raises;
+//!     first; and with a transaction that took its `xact_id` before another committed and then
+//!     appended after that commit, replay walks its later append after the other's;
+//!   * a declaration's counts, checksum and holders are verified against its map, a field its
+//!     kind does not carry raises, and so does a non-legacy declaration without its checksum;
 //!   * the edge fold: an edge member folds with its edge-owned properties, an edge folded before
 //!     keeps its own fold, and `relationship_folded` still folds and raises through the shared
 //!     helper.
 
 mod common;
 
-use sha2::Digest;
+use common::erasure_map::d1_1_checksum;
+
 use sqlx::{PgPool, Row};
 use std::collections::BTreeMap;
 use temper_core::types::ids::EntityId;
@@ -175,10 +177,10 @@ async fn fold_edge(pool: &PgPool, emitter: EntityId, edge: EdgeId) -> Uuid {
 /// Append one erasure record event under the system actor and project it in the same
 /// transaction, as the live path does. Returns the event id, or the error either step raised.
 ///
-/// Each record is its own transaction, after the one before it, and replay walks transactions in
-/// the order they took their ids (`replay::replay`), so the records replay in the order they were
-/// written, whatever order `uuid_generate_v7()` gave their ids. The ordering witnesses below force
-/// the ids to disagree with that order.
+/// Each record is its own transaction, after the one before it, and replay walks events in append
+/// order (`replay::replay`), so the records replay in the order they were written, whatever order
+/// `uuid_generate_v7()` gave their ids. The ordering witnesses below force the ids to disagree
+/// with that order.
 async fn try_record(
     pool: &PgPool,
     kind: &str,
@@ -207,14 +209,6 @@ async fn record(pool: &PgPool, kind: &str, payload: &serde_json::Value) -> Uuid 
     try_record(pool, kind, payload)
         .await
         .unwrap_or_else(|e| panic!("{kind} must append and project: {e}"))
-}
-
-fn table_name(table: ErasureMemberTable) -> String {
-    serde_json::to_value(table)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_owned()
 }
 
 fn member(table: ErasureMemberTable, id: Uuid) -> ErasureMemberRef {
@@ -249,34 +243,6 @@ fn born_erased(
         prior_erasure: Some(prior_erasure),
         prior_event: Some(prior_event),
     }
-}
-
-/// D1.1, re-implemented here from the spec's text and independently of `erasure_map_checksum`, so
-/// a test can compare the two. The header names the erasure and its manifest digest; each line is
-/// one declared member, tab-separated, an absent parent or prior erasure written as the empty
-/// string; lines sort by member table as bytes (`COLLATE "C"`), then by member id (a uuid compares
-/// as its bytes in both Postgres and `uuid::Uuid`). Every separator is a single tab or newline
-/// byte.
-fn d1_1_checksum(erasure: Uuid, digest: &str, map: &[ErasureMapEntry]) -> String {
-    let mut lines: Vec<(String, Uuid, String)> = map
-        .iter()
-        .map(|e| {
-            let table = table_name(e.table);
-            let (parent_table, parent_id) = match e.parent {
-                Some(p) => (table_name(p.table), p.id.to_string()),
-                None => (String::new(), String::new()),
-            };
-            let prior = e.prior_erasure.map(|p| p.to_string()).unwrap_or_default();
-            let line = format!("{table}\t{}\t{parent_table}\t{parent_id}\t{prior}\n", e.id);
-            (table, e.id, line)
-        })
-        .collect();
-    lines.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()).then(a.1.cmp(&b.1)));
-    let mut text = format!("temper-erasure-map/v1\t{erasure}\t{digest}\n");
-    for (_, _, line) in lines {
-        text.push_str(&line);
-    }
-    hex::encode(sha2::Sha256::digest(text.as_bytes()))
 }
 
 /// A non-legacy declaration: a fresh request, the fixed manifest, the per-table counts (for an
@@ -1858,7 +1824,7 @@ async fn a_reopening_whose_id_sorts_before_the_completion_replays_as_it_committe
     assert_eq!(
         walk_order(&pool, &[high, low]).await,
         vec![high, low],
-        "setup: the walk takes the completion first, as it committed"
+        "setup: the walk takes the completion first, in append order"
     );
     assert_eq!(
         erasure_events(&pool, erasure).await,
@@ -1925,7 +1891,7 @@ async fn two_refusals_whose_ids_invert_replay_as_they_committed(pool: PgPool) {
     assert_eq!(
         walk_order(&pool, &[high, low]).await,
         vec![high, low],
-        "setup: the walk takes the first refusal first, as it committed"
+        "setup: the walk takes the first refusal first, in append order"
     );
     let (reason, at_first): (Option<String>, bool) = sqlx::query_as(
         "SELECT refusal_reason, first_refused_at = (SELECT occurred_at FROM kb_events WHERE id = $3) \
@@ -1946,6 +1912,95 @@ async fn two_refusals_whose_ids_invert_replay_as_they_committed(pool: PgPool) {
     assert_replay_byte_identical(
         &pool,
         "of two refusals whose ids invert",
+        &["kb_erasures", "kb_erasure_members"],
+    )
+    .await;
+}
+
+/// A transaction takes its `xact_id` at its first write, and an act can then wait while another
+/// transaction appends and commits. Here transaction A appends its first record, which assigns its
+/// id; transaction B then declares an erasure and commits; and A, after B's commit, maps an
+/// arrival into B's erasure and commits. A has the lower `xact_id` and the later arrival. Live,
+/// the arrival's member row references an erasure B had already committed.
+///
+/// FAILS IF: replay walks by `(xact_id, seq)`. It then walks A's whole span, the arrival included,
+/// before B's declaration, and the arrival's member row violates `kb_erasure_members`' foreign key
+/// to an erasure not yet projected, so replay raises.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_append_after_another_transactions_commit_replays_after_it_whatever_its_xact_id(
+    pool: PgPool,
+) {
+    fresh(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_context(&pool, owner, "walk-xact-home").await;
+    let r = make_resource(&pool, owner, emitter, home, "walk-xact-r").await;
+    let own = serde_json::to_value(declaration(
+        Uuid::now_v7(),
+        ErasureKind::Selection,
+        None,
+        vec![],
+        vec![],
+    ))
+    .unwrap();
+    let theirs = Uuid::now_v7();
+    let declared = serde_json::to_value(declaration(
+        theirs,
+        ErasureKind::Selection,
+        None,
+        vec![],
+        vec![],
+    ))
+    .unwrap();
+    let arrived = serde_json::to_value(ErasureMemberArrived {
+        erasure_id: theirs,
+        member: member(ErasureMemberTable::KbResources, r.uuid()),
+        parent: None,
+        source: ErasureArrivalSource::ClosingSurvey,
+    })
+    .unwrap();
+    let (a_first, b_declared, a_arrived) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+
+    // A: its first write assigns its transaction id.
+    let mut a = pool.begin().await.unwrap();
+    append_as(&mut a, emitter, a_first, "erasure_declared", &own).await;
+    // B: begins after A took its id, appends, and commits while A is still open.
+    let mut b = pool.begin().await.unwrap();
+    append_as(&mut b, emitter, b_declared, "erasure_declared", &declared).await;
+    b.commit().await.unwrap();
+    // A: its next statement sees B's commit, and its arrival references B's erasure.
+    append_as(
+        &mut a,
+        emitter,
+        a_arrived,
+        "erasure_member_arrived",
+        &arrived,
+    )
+    .await;
+    a.commit().await.unwrap();
+
+    let (a_before_b, b_before_arrival): (bool, bool) = sqlx::query_as(
+        "SELECT a.xact_id < b.xact_id, b.seq < arr.seq \
+           FROM kb_events a, kb_events b, kb_events arr \
+          WHERE a.id = $1 AND b.id = $2 AND arr.id = $3",
+    )
+    .bind(a_first)
+    .bind(b_declared)
+    .bind(a_arrived)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        a_before_b && b_before_arrival,
+        "setup: A took the lower xact_id, and its arrival was appended after B's declaration"
+    );
+    assert_eq!(
+        walk_order(&pool, &[a_first, b_declared, a_arrived]).await,
+        vec![a_first, b_declared, a_arrived],
+        "setup: the walk takes B's declaration inside A's span, in append order"
+    );
+    assert_replay_byte_identical(
+        &pool,
+        "of an append after another transaction's commit",
         &["kb_erasures", "kb_erasure_members"],
     )
     .await;
@@ -1975,9 +2030,10 @@ async fn honest_estate(
 /// one change, and nothing of it lands; each honest one projects.
 ///
 /// FAILS IF: an estate projects with a checksum or a count that is not its map's, a count for a
-/// table that is not a member table, or no checksum; a non-estate projects with counts, or with a
-/// checksum that is not its map's; a legacy declaration projects with counts, a checksum or
-/// holders; or (the controls) an honest estate, selection or legacy declaration is refused.
+/// table that is not a member table, or no checksum; a non-estate projects with counts, with a
+/// checksum that is not its map's, or with no checksum; a legacy declaration projects with
+/// counts, a checksum or holders; or (the controls) an honest estate, selection or legacy
+/// declaration is refused.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_declaration_whose_claims_are_not_its_maps_is_refused(pool: PgPool) {
     fresh(&pool).await;
@@ -2049,7 +2105,7 @@ async fn a_declaration_whose_claims_are_not_its_maps_is_refused(pool: PgPool) {
     cases.push((
         "an estate with no checksum",
         p,
-        "an estate declaration carries no checksum",
+        "a non-legacy declaration carries no checksum",
     ));
     let mut p = selection();
     p["counts"] = serde_json::json!({"kb_resources": 1, "kb_contexts": 1});
@@ -2057,6 +2113,13 @@ async fn a_declaration_whose_claims_are_not_its_maps_is_refused(pool: PgPool) {
         "a selection with counts",
         p,
         "only an estate declaration carries counts",
+    ));
+    let mut p = selection();
+    p.as_object_mut().unwrap().remove("checksum");
+    cases.push((
+        "a selection with no checksum",
+        p,
+        "a non-legacy declaration carries no checksum",
     ));
     let mut p = selection();
     p["checksum"] = flipped(&p["checksum"]);
@@ -2096,19 +2159,89 @@ async fn a_declaration_whose_claims_are_not_its_maps_is_refused(pool: PgPool) {
         assert_eq!(rows, 0, "{what}: nothing of the refused declaration lands");
     }
 
-    let mut unchecked = selection();
-    unchecked.as_object_mut().unwrap().remove("checksum");
     for (what, payload) in [
         (
             "an honest estate",
             honest_estate(&pool, "claims-6", map()).await,
         ),
         ("an honest selection", selection()),
-        ("a selection with no checksum", unchecked),
         ("an honest legacy declaration", legacy()),
     ] {
         try_record(&pool, "erasure_declared", &payload)
             .await
             .unwrap_or_else(|e| panic!("control: {what} projects: {e}"));
     }
+}
+
+/// Every non-legacy declaration carries its checksum, so D7.5 can re-derive every non-legacy
+/// erasure's map (D1.1 defines the checksum for each one). A resource declaration, neither an
+/// estate nor legacy, without one is refused, and nothing of it lands; the same declaration with
+/// its checksum projects, and a legacy one projects without.
+///
+/// FAILS IF: the projector requires the checksum on an estate only, or verifies it only when it
+/// is present; or (the controls) it requires one of a legacy declaration, or refuses an honest
+/// resource declaration.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_non_estate_declaration_without_its_checksum_is_refused(pool: PgPool) {
+    fresh(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_context(&pool, owner, "unchecked-home").await;
+    let r = make_resource(&pool, owner, emitter, home, "unchecked-r").await;
+    let resource_declaration = || {
+        serde_json::to_value(declaration(
+            Uuid::now_v7(),
+            ErasureKind::Resource,
+            Some(("kb_resources", r.uuid())),
+            vec![pending(ErasureMemberTable::KbResources, r.uuid(), None)],
+            vec![],
+        ))
+        .unwrap()
+    };
+
+    let mut unchecked = resource_declaration();
+    assert!(
+        unchecked
+            .as_object_mut()
+            .unwrap()
+            .remove("checksum")
+            .is_some(),
+        "setup: the honest declaration carried a checksum"
+    );
+    let erasure = unchecked["erasure_id"].clone();
+    let err = try_record(&pool, "erasure_declared", &unchecked)
+        .await
+        .expect_err("a non-legacy declaration without its checksum must be refused");
+    assert!(
+        err.to_string()
+            .contains("a non-legacy declaration carries no checksum"),
+        "unexpected error: {err}"
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_erasures WHERE id = $1::uuid")
+        .bind(erasure.as_str().unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "nothing of the refused declaration lands");
+    assert!(
+        resource_is_active(&pool, r).await,
+        "setup: the refused declaration flagged nothing"
+    );
+
+    try_record(&pool, "erasure_declared", &resource_declaration())
+        .await
+        .expect("control: the same declaration with its checksum projects");
+    let other = make_resource(&pool, owner, emitter, home, "unchecked-legacy").await;
+    let legacy = serde_json::to_value(legacy_declaration(
+        Uuid::now_v7(),
+        other.uuid(),
+        vec![pending(ErasureMemberTable::KbResources, other.uuid(), None)],
+    ))
+    .unwrap();
+    assert!(
+        legacy.get("checksum").is_none(),
+        "setup: a legacy payload has no checksum"
+    );
+    try_record(&pool, "erasure_declared", &legacy)
+        .await
+        .expect("control: a legacy declaration projects without a checksum");
 }

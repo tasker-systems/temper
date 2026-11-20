@@ -445,9 +445,9 @@ async fn simulate_cut1_husk(pool: &PgPool, p: &Person, resource: Uuid) {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    // Its own transaction, after the act's: replay walks transactions in the order they took
-    // their ids, so the backfill's erasure_declared walks after the first record and before
-    // whatever the test appends next.
+    // Its own transaction, after the act's: replay walks events in append order, so the
+    // backfill's erasure_declared walks after the first record and before whatever the test
+    // appends next.
     sqlx::query("SELECT _erasure_legacy_backfill()")
         .execute(pool)
         .await
