@@ -490,7 +490,7 @@ reason = "no estate holds a row: a personal team is never a row's team or anchor
 
 [tables.kb_team_members.grain]
 kind = "declared-out"
-reason = "membership history: a row holds a profile id and a team id, both pseudonymous references, and authorization audit needs who held which team's access and when. An erasure keeps it; the profile it points at is tombstoned"
+reason = "current membership, one row per team and profile, deleted when the membership ends: a row holds a profile id, a team id and a role, the ids pseudonymous references. Authorization needs it while the membership stands, and an erasure keeps it; the profile it points at is tombstoned. The membership's history is the team_membership_changed events"
 
 [tables.kb_principal_standing.grain]
 kind = "declared-out"

@@ -42,8 +42,8 @@ use temper_substrate::replay;
 use temper_substrate::writes::{self, CreateParams};
 use uuid::Uuid;
 
-/// The first migration of slice 1b: the erasure record's schema.
-const FIRST_1B_MIGRATION: i64 = 20261201000010;
+/// The first migration of the erasure record: its schema.
+const FIRST_ERASURE_RECORD_MIGRATION: i64 = 20261201000010;
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -118,7 +118,8 @@ async fn pause(pool: &PgPool) {
 /// first record that carries `targets` and names no `redacted_fields`, appended without the
 /// wrapper as cut 1 appended it, then the projection-side body. The ledger's text is untouched.
 /// A local copy of `resource_erasure_act.rs`'s helper, without its backfill call; it uses only
-/// functions that exist before 1b, so the migration-run test builds one on the older schema.
+/// functions that exist before the erasure record, so the migration-run test builds one on the
+/// older schema.
 /// Returns the first record's id.
 async fn simulate_cut1_husk(pool: &PgPool, resource: Uuid) -> Uuid {
     let (operator, emitter) = system_actor(pool).await;
@@ -218,8 +219,36 @@ async fn declarations(pool: &PgPool) -> Vec<(Uuid, Uuid, serde_json::Value)> {
     .unwrap()
 }
 
-async fn assert_replay_byte_identical(pool: &PgPool, after_what: &str) {
+/// The erasure record's tables: every replay witness here must find each among the dumped
+/// projection tables, or the diff would skip it.
+const RECORD_TABLES: [&str; 4] = [
+    "kb_erasures",
+    "kb_erasure_members",
+    "kb_erasure_estate_snapshots",
+    "kb_erasure_former_holders",
+];
+
+/// Snapshot, reset, replay, and diff every projection table. Every record table must be among the
+/// dumps, and each of `written` (the record tables the sequence under test writes) must be
+/// non-empty before replay, so the diff compared rows rather than two empty arrays.
+async fn assert_replay_byte_identical(pool: &PgPool, after_what: &str, written: &[&str]) {
     let before = replay::dump_projections(pool).await.unwrap();
+    for table in RECORD_TABLES {
+        let dumped = before
+            .iter()
+            .find(|(name, _)| name.as_str() == table)
+            .unwrap_or_else(|| panic!("setup: {table} is among the replay's projection dumps"));
+        if written.contains(&table) {
+            assert!(
+                dumped.1.as_array().is_some_and(|rows| !rows.is_empty()),
+                "setup: {table} holds rows before replay {after_what}, or the diff compares nothing"
+            );
+        }
+    }
+    assert!(
+        written.iter().all(|table| RECORD_TABLES.contains(table)),
+        "setup: {written:?} are record tables"
+    );
     let snap = replay::snapshot(pool).await.unwrap();
     common::reset_schema(pool).await;
     replay::replay(pool, &snap).await.unwrap();
@@ -424,7 +453,12 @@ async fn replay_of_a_backfilled_and_completed_husk_is_byte_identical(pool: PgPoo
         "precondition: the first record, the backfill's erasure_declared and the completion record \
          sort in append order ({first}, {declared}, {completion})"
     );
-    assert_replay_byte_identical(&pool, "after a backfilled husk's completion pass").await;
+    assert_replay_byte_identical(
+        &pool,
+        "after a backfilled husk's completion pass",
+        &["kb_erasures", "kb_erasure_members"],
+    )
+    .await;
 }
 
 /// A second backfill appends nothing and leaves the `pending` row open: the owed pass is already
@@ -446,7 +480,7 @@ async fn a_second_backfill_appends_nothing_and_leaves_the_pending_row_open(pool:
     );
 }
 
-/// The backfill never re-projects a completion record (P11). A husk carries an earlier completion
+/// The backfill never re-projects a completion record. A husk carries an earlier completion
 /// record that rewrote nothing, so it still owes a pass: the backfill declares it `pending`, and a
 /// second call leaves that row open. Re-projecting the earlier completion record would close it.
 ///
@@ -570,6 +604,73 @@ async fn the_backfill_is_a_noop_on_an_empty_ledger(pool: PgPool) {
     assert_eq!(counts().await, before);
 }
 
+/// The backfill takes `kb_events` in SHARE mode in its own transaction, so it waits out every
+/// transaction still appending and holds off every new append until its caller commits.
+///
+/// FAILS IF: after the call, the calling transaction holds no granted ShareLock on `kb_events`
+/// (the control: it held none before the call).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_backfill_takes_the_ledger_in_share_mode(pool: PgPool) {
+    fresh(&pool).await;
+    let share_held = "SELECT EXISTS (SELECT 1 FROM pg_locks                        WHERE locktype = 'relation' AND relation = 'kb_events'::regclass                          AND mode = 'ShareLock' AND granted AND pid = pg_backend_pid())";
+    let mut tx = pool.begin().await.unwrap();
+    let before: bool = sqlx::query_scalar(share_held)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert!(
+        !before,
+        "control: the transaction holds no share lock before the call"
+    );
+    let appended: i32 = sqlx::query_scalar("SELECT _erasure_legacy_backfill()")
+        .fetch_one(&mut *tx)
+        .await
+        .expect("the backfill runs");
+    assert_eq!(appended, 0);
+    let after: bool = sqlx::query_scalar(share_held)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert!(
+        after,
+        "the backfill's transaction holds kb_events in SHARE mode until it commits"
+    );
+    tx.rollback().await.unwrap();
+}
+
+/// A `resource_erased` in the ledger of neither shape raises inside the backfill, so the migration
+/// fails on it rather than a later replay.
+///
+/// FAILS IF: the backfill selects first records by `targets` alone and skips the record.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_backfill_raises_on_a_resource_erased_of_neither_shape(pool: PgPool) {
+    fresh(&pool).await;
+    let r = make_resource(&pool, "neither-in-ledger").await;
+    let mut payload = completion_payload(r);
+    payload["folded_edges"] = serde_json::json!([]);
+    let (_, emitter) = system_actor(&pool).await;
+    // Appended without the wrapper, as no live writer would: the projector would refuse it.
+    let event: Uuid = sqlx::query_scalar(
+        "SELECT _event_append('resource_erased', $1, NULL, NULL, $2, p_correlation => $3)",
+    )
+    .bind(emitter)
+    .bind(&payload)
+    .bind(Uuid::now_v7())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let err = try_backfill(&pool)
+        .await
+        .expect_err("a record of neither shape raises in the backfill");
+    assert!(
+        err.to_string().contains(&format!(
+            "_project_resource_erased_membership: resource_erased {event} is neither a first \
+             record nor a completion record"
+        )),
+        "{err}"
+    );
+}
+
 // ── the membership projector ─────────────────────────────────────────────────────────────────
 
 /// A `resource_erased` that is neither a first record (no `targets`) nor a completion record (a
@@ -660,12 +761,14 @@ async fn a_completion_record_clears_the_drain_columns_of_the_row_it_closes(pool:
     .unwrap();
 
     let completion = record_resource_erased(&pool, &completion_payload(r)).await;
-    let (status, by, next, lease): (
+    // (status, erased_by_event_id, next_attempt_at, lease_expires_at)
+    type ClosedRow = (
         String,
         Option<Uuid>,
         Option<chrono::DateTime<chrono::Utc>>,
         Option<chrono::DateTime<chrono::Utc>>,
-    ) = sqlx::query_as(
+    );
+    let (status, by, next, lease): ClosedRow = sqlx::query_as(
         "SELECT status, erased_by_event_id, next_attempt_at, lease_expires_at \
            FROM kb_erasure_members WHERE erasure_id = $1",
     )
@@ -702,8 +805,9 @@ async fn unmigrated(pool: &PgPool) -> (PgPool, String) {
 }
 
 /// The migration, run over a ledger made on the schema before it: the declared-limitation witness
-/// for the husks a deployment holds. The chain before 1b is applied, a cut-1 husk and a cut-2
-/// erasure are made on it, and then the rest of the chain runs, 20261201000030's backfill among it.
+/// for the husks a deployment holds. The chain before the erasure record is applied, a cut-1 husk
+/// and a cut-2 erasure are made on it, and then the rest of the chain runs, 20261201000030's
+/// backfill among it.
 /// The husk is an `erased` and a `pending` legacy erasure, the cut-2 erasure one `erased`, and
 /// exactly one legacy `erasure_declared` was appended, under the canonical system actor.
 ///
@@ -713,11 +817,11 @@ async fn unmigrated(pool: &PgPool) -> (PgPool, String) {
 async fn the_migration_records_the_husks_of_a_ledger_made_before_it(own: PgPool) {
     let (pool, name) = unmigrated(&own).await;
     let all = &temper_substrate::MIGRATOR;
-    let before_1b = Migrator {
+    let before_record = Migrator {
         migrations: Cow::Owned(
             all.migrations
                 .iter()
-                .filter(|m| m.version < FIRST_1B_MIGRATION)
+                .filter(|m| m.version < FIRST_ERASURE_RECORD_MIGRATION)
                 .cloned()
                 .collect(),
         ),
@@ -725,20 +829,23 @@ async fn the_migration_records_the_husks_of_a_ledger_made_before_it(own: PgPool)
         locking: all.locking,
         no_tx: all.no_tx,
     };
-    before_1b
+    before_record
         .run(&pool)
         .await
-        .expect("the chain before 1b applies");
+        .expect("the chain before the erasure record applies");
     let tables: i64 =
         sqlx::query_scalar("SELECT count(*) FROM pg_tables WHERE tablename = 'kb_erasures'")
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(tables, 0, "setup: the schema is the one before 1b");
+    assert_eq!(
+        tables, 0,
+        "setup: the schema is the one before the erasure record"
+    );
 
-    let husk = make_resource(&pool, "pre-1b-husk").await;
+    let husk = make_resource(&pool, "pre-record-husk").await;
     let first = simulate_cut1_husk(&pool, husk).await;
-    let cut2 = make_resource(&pool, "pre-1b-cut2").await;
+    let cut2 = make_resource(&pool, "pre-record-cut2").await;
     let cut2_event = execute_act(&pool, cut2).await;
     pause(&pool).await;
 

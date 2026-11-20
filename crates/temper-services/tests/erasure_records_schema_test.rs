@@ -4,8 +4,9 @@
 //! the five fence views, the D1.1 map checksum, `kb_event_types.write_retired_at` and the
 //! `WRITE_RETIRED` list held equal to it, and the allowlist's re-issued COMMENT.
 //!
-//! Every row is inserted by hand: nothing writes these tables until the erasure projectors land, and
-//! a schema probe should not depend on them. Each probe row is a valid base row with exactly one
+//! Every row is written by hand, so a schema probe does not depend on the erasure projectors. A
+//! refused member row is written as a projector writes one, inserted pending and then moved to
+//! refused ([`write_member`]), since the status trigger refuses a row born refused. Each probe row is a valid base row with exactly one
 //! field changed, so the constraint it names is the only one it can violate.
 //!
 //! The catalog fences that the new columns meet run unchanged: `sensitivity_scan_surface_test.rs`
@@ -176,12 +177,44 @@ fn refused_changes() -> Value {
            "refusal_routine": "resource_erasure_execute", "first_refused_at": AT})
 }
 
-/// Inserts a valid member from `changes` over [`member_row`] and returns its id.
+/// Writes the member `row`, which names every column of `kb_erasure_members`. A row whose status
+/// is `refused` cannot be inserted so (`kb_erasure_members_status_moves`): it is inserted pending,
+/// with no refusal detail, and then moved to refused by an UPDATE that sets the status, the
+/// refusal's reason, SQLSTATE and routine and first_refused_at from `row`, as the projector moves
+/// one. The result is the UPDATE's, so a constraint the refusal breaks is reported by it.
+async fn write_member(pool: &PgPool, row: &Value) -> Result<(), sqlx::Error> {
+    if row["status"] != "refused" {
+        return insert(pool, "kb_erasure_members", row).await;
+    }
+    let pending = with(
+        row,
+        json!({"status": "pending", "refusal_reason": null, "refusal_sqlstate": null,
+               "refusal_routine": null, "first_refused_at": null}),
+    );
+    insert(pool, "kb_erasure_members", &pending)
+        .await
+        .expect("precondition: the row, pending, is valid");
+    sqlx::query(
+        "UPDATE kb_erasure_members m \
+            SET status = r.status, refusal_reason = r.refusal_reason, \
+                refusal_sqlstate = r.refusal_sqlstate, refusal_routine = r.refusal_routine, \
+                first_refused_at = r.first_refused_at \
+           FROM jsonb_populate_record(NULL::kb_erasure_members, $1) r \
+          WHERE m.erasure_id = r.erasure_id AND m.member_table = r.member_table \
+            AND m.member_id = r.member_id",
+    )
+    .bind(row)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+/// Writes a valid member from `changes` over [`member_row`] and returns its id.
 async fn member(pool: &PgPool, erasure: Uuid, changes: Value) -> Uuid {
     let row = with(&member_row(erasure), changes);
-    insert(pool, "kb_erasure_members", &row)
+    write_member(pool, &row)
         .await
-        .expect("insert a valid member");
+        .expect("write a valid member");
     serde_json::from_value(row["member_id"].clone()).unwrap()
 }
 
@@ -539,7 +572,7 @@ async fn every_member_check_refuses_its_one_violation(pool: PgPool) {
         let valid = with(&member_row(e), shape);
         let row = with(&valid, violation);
         assert_refused(
-            insert(&pool, "kb_erasure_members", &row).await,
+            write_member(&pool, &row).await,
             CHECK_VIOLATION,
             constraint,
             what,
@@ -611,7 +644,7 @@ async fn a_member_references_its_parent_its_reason_and_its_events(pool: PgPool) 
     ] {
         let row = with(&member_row(erasure_id), changes);
         assert_refused(
-            insert(&pool, "kb_erasure_members", &row).await,
+            write_member(&pool, &row).await,
             FOREIGN_KEY_VIOLATION,
             constraint,
             what,
@@ -757,6 +790,32 @@ async fn every_other_status_move_is_refused(pool: PgPool) {
     ] {
         assert_trigger_refused(update_member(&pool, m, &set).await, says, what);
     }
+}
+
+/// FAILS IF: a member row can be inserted refused. A row is born pending or erased, and reaches
+/// refused only by an UPDATE.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_member_row_is_never_born_refused(pool: PgPool) {
+    let ev = event(&pool).await;
+    let e = erasure(&pool, ev, json!({})).await;
+    let row = with(&member_row(e), refused_changes());
+    assert_trigger_refused(
+        insert(&pool, "kb_erasure_members", &row).await,
+        "born pending or erased, never refused",
+        "an INSERT whose status is refused",
+    );
+    write_member(&pool, &row)
+        .await
+        .expect("control: the same row, inserted pending and then refused, is admitted");
+    assert_eq!(
+        member_state(
+            &pool,
+            serde_json::from_value(row["member_id"].clone()).unwrap()
+        )
+        .await
+        .0,
+        "refused"
+    );
 }
 
 /// FAILS IF: a member row can be deleted, or an UPDATE can change its identity, parent,
@@ -1015,7 +1074,7 @@ async fn each_fence_view_lists_every_member_of_its_type_whatever_its_status(pool
                 json!({"member_table": table}),
             );
             let id: Uuid = serde_json::from_value(changes["member_id"].clone()).unwrap();
-            insert(&pool, "kb_erasure_members", &changes).await.unwrap();
+            write_member(&pool, &changes).await.unwrap();
             expected.push((id, e));
         }
         expected.sort();

@@ -12,6 +12,9 @@
 //!     born-erased row, the former holders, the flags of pending members only, and a legacy
 //!     declaration), `erasure_member_arrived`, `erasure_scope_sealed`, `erasure_reopened`,
 //!     `erasure_completed` and `erasure_batch_applied`;
+//!   * the projectors refuse a writer's defect rather than absorb it: a legacy declaration that
+//!     carries a manifest or a request, an estate whose counts omit a table its map holds, a map
+//!     entry with half a prior, and a refusal that names no erasure or a row that is not open;
 //!   * D7.5: replay rebuilds the four record tables byte for byte over a sequence holding a
 //!     refusal and a born-erased row, and the checksum recomputed from the rebuilt map equals the
 //!     `erasure_declared` payload's for every non-legacy erasure;
@@ -452,9 +455,36 @@ async fn erasure_events(pool: &PgPool, erasure: Uuid) -> (Option<Uuid>, Option<U
     (r.get("scope_sealed_event_id"), r.get("completed_event_id"))
 }
 
-/// Snapshot, reset, replay, and diff every projection table.
-async fn assert_replay_byte_identical(pool: &PgPool, after_what: &str) {
+/// The erasure record's tables: every replay witness here must find each among the dumped
+/// projection tables, or the diff would skip it.
+const RECORD_TABLES: [&str; 4] = [
+    "kb_erasures",
+    "kb_erasure_members",
+    "kb_erasure_estate_snapshots",
+    "kb_erasure_former_holders",
+];
+
+/// Snapshot, reset, replay, and diff every projection table. Every record table must be among the
+/// dumps, and each of `written` (the record tables the sequence under test writes) must be
+/// non-empty before replay, so the diff compared rows rather than two empty arrays.
+async fn assert_replay_byte_identical(pool: &PgPool, after_what: &str, written: &[&str]) {
     let before = replay::dump_projections(pool).await.unwrap();
+    for table in RECORD_TABLES {
+        let dumped = before
+            .iter()
+            .find(|(name, _)| name.as_str() == table)
+            .unwrap_or_else(|| panic!("setup: {table} is among the replay's projection dumps"));
+        if written.contains(&table) {
+            assert!(
+                dumped.1.as_array().is_some_and(|rows| !rows.is_empty()),
+                "setup: {table} holds rows before replay {after_what}, or the diff compares nothing"
+            );
+        }
+    }
+    assert!(
+        written.iter().all(|table| RECORD_TABLES.contains(table)),
+        "setup: {written:?} are record tables"
+    );
     let snap = replay::snapshot(pool).await.unwrap();
     common::reset_schema(pool).await;
     replay::replay(pool, &snap).await.unwrap();
@@ -632,11 +662,13 @@ async fn erasure_declared_projects_the_erasure_its_map_its_holders_and_its_flags
     );
 }
 
-/// A legacy declaration records `legacy = true` with no manifest and no request, even when its
-/// payload carries them, and its erasure has no checksum.
+/// A legacy declaration records `legacy = true` with no manifest and no request, and its erasure
+/// has no checksum. A legacy payload that carries a manifest or a request is refused, one key at a
+/// time, and nothing of it lands.
 ///
-/// FAILS IF: a legacy row keeps a stray manifest or request from its payload (the CHECKs would
-/// refuse the insert), gains a snapshot, or has a checksum.
+/// FAILS IF: the legacy row gains a manifest, a request, a snapshot or a checksum; or a legacy
+/// payload carrying `request_ref`, `manifest_version` or `manifest_digest` projects (its stray key
+/// dropped) instead of raising.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_legacy_erasure_declared_has_no_manifest_request_or_checksum(pool: PgPool) {
     fresh(&pool).await;
@@ -644,18 +676,49 @@ async fn a_legacy_erasure_declared_has_no_manifest_request_or_checksum(pool: PgP
     let home = make_context(&pool, owner, "legacy-home").await;
     let r = make_resource(&pool, owner, emitter, home, "legacy-r").await;
 
+    for (key, value) in [
+        ("request_ref", serde_json::json!(Uuid::now_v7())),
+        ("manifest_version", serde_json::json!(MANIFEST_VERSION)),
+        ("manifest_digest", serde_json::json!(DIGEST)),
+    ] {
+        let stray = Uuid::now_v7();
+        let mut payload = serde_json::to_value(legacy_declaration(
+            stray,
+            r.uuid(),
+            vec![pending(ErasureMemberTable::KbResources, r.uuid(), None)],
+        ))
+        .unwrap();
+        payload[key] = value;
+        let err = try_record(&pool, "erasure_declared", &payload)
+            .await
+            .expect_err("a legacy payload carrying a manifest or a request must be refused");
+        assert!(
+            err.to_string()
+                .contains("a legacy declaration carries a manifest or a request"),
+            "{key}: unexpected error: {err}"
+        );
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_erasures WHERE id = $1")
+            .bind(stray)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "{key}: nothing of the refused declaration lands");
+    }
+    assert!(
+        resource_is_active(&pool, r).await,
+        "setup: no refused declaration flagged the resource"
+    );
+
     let erasure = Uuid::now_v7();
-    let mut payload = serde_json::to_value(legacy_declaration(
-        erasure,
-        r.uuid(),
-        vec![pending(ErasureMemberTable::KbResources, r.uuid(), None)],
-    ))
-    .unwrap();
-    // Stray keys a legacy payload should never carry: the projector does not take them.
-    payload["request_ref"] = serde_json::json!(Uuid::now_v7());
-    payload["manifest_version"] = serde_json::json!(MANIFEST_VERSION);
-    payload["manifest_digest"] = serde_json::json!(DIGEST);
-    let event = record(&pool, "erasure_declared", &payload).await;
+    let event = declare(
+        &pool,
+        &legacy_declaration(
+            erasure,
+            r.uuid(),
+            vec![pending(ErasureMemberTable::KbResources, r.uuid(), None)],
+        ),
+    )
+    .await;
 
     let row = sqlx::query(
         "SELECT kind, legacy, request_ref, manifest_version, manifest_digest, declared_event_id \
@@ -685,6 +748,52 @@ async fn a_legacy_erasure_declared_has_no_manifest_request_or_checksum(pool: PgP
     assert_eq!(snapshots, 0);
     assert_eq!(map_checksum(&pool, erasure).await, None);
     assert!(!resource_is_active(&pool, r).await);
+}
+
+/// An estate declaration whose counts omit a table its map holds is refused, and nothing of it
+/// lands.
+///
+/// FAILS IF: the projector fills the missing count with 0 and projects.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_estate_whose_counts_omit_a_mapped_table_is_refused(pool: PgPool) {
+    fresh(&pool).await;
+    let subject = common::insert_profile(&pool, "counts-subject").await;
+    let erasure = Uuid::now_v7();
+    let mut d = declaration(
+        erasure,
+        ErasureKind::Estate,
+        Some(("kb_profiles", subject)),
+        vec![
+            pending(ErasureMemberTable::KbBlobs, Uuid::now_v7(), None),
+            pending(ErasureMemberTable::KbBlobs, Uuid::now_v7(), None),
+        ],
+        vec![],
+    );
+    let counts = d.counts.as_mut().expect("an estate declaration has counts");
+    assert_eq!(
+        counts.remove(&ErasureMemberTable::KbBlobs),
+        Some(2),
+        "setup: the counts held the mapped table"
+    );
+    counts.insert(ErasureMemberTable::KbResources, 0);
+    let err = try_record(
+        &pool,
+        "erasure_declared",
+        &serde_json::to_value(&d).unwrap(),
+    )
+    .await
+    .expect_err("counts that omit a mapped table must be refused");
+    assert!(
+        err.to_string()
+            .contains("the estate counts omit a table its map holds"),
+        "unexpected error: {err}"
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_erasures WHERE id = $1")
+        .bind(erasure)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
 }
 
 /// A map entry that names only one of `prior_erasure` and `prior_event` is refused, and nothing
@@ -1076,7 +1185,47 @@ async fn a_refusal_naming_a_row_that_is_not_open_is_refused(pool: PgPool) {
     );
 }
 
-// ── the edge fold (P3) ───────────────────────────────────────────────────────────────────────
+/// A refused entry that names no erasure is refused, and the batch projects nothing.
+///
+/// FAILS IF: an empty `erasures` array passes as a no-op refusal, so the item's row stays
+/// pending under a batch that claims to have refused it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_refusal_naming_no_erasure_is_refused(pool: PgPool) {
+    fresh(&pool).await;
+    let item = Uuid::now_v7();
+    let erasure = Uuid::now_v7();
+    declare(
+        &pool,
+        &declaration(
+            erasure,
+            ErasureKind::Selection,
+            None,
+            vec![pending(ErasureMemberTable::KbBlobs, item, None)],
+            vec![],
+        ),
+    )
+    .await;
+    let payload = serde_json::to_value(ErasureBatchApplied {
+        member_table: ErasureMemberTable::KbBlobs,
+        entries: vec![refused(item, vec![], ErasureMemberRefusalReason::Defect)],
+    })
+    .unwrap();
+    let err = try_record(&pool, "erasure_batch_applied", &payload)
+        .await
+        .expect_err("a refusal naming no erasure must be refused");
+    assert!(
+        err.to_string().contains("names no erasure"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        member_row(&pool, erasure, "kb_blobs", item)
+            .await
+            .map(|r| r.0),
+        Some("pending".to_owned())
+    );
+}
+
+// ── the edge fold ────────────────────────────────────────────────────────────────────────────
 
 /// An edge member folds under the declaration with its edge-owned properties; an edge folded
 /// before keeps its own fold; a mapped edge that does not exist is refused; and
@@ -1337,7 +1486,7 @@ async fn replay_rebuilds_the_erasure_record_and_the_checksum_re_derives(pool: Pg
     .unwrap();
     assert!(at_first);
 
-    assert_replay_byte_identical(&pool, "of the erasure record").await;
+    assert_replay_byte_identical(&pool, "of the erasure record", &RECORD_TABLES).await;
 
     let declarations: Vec<serde_json::Value> = sqlx::query_scalar(
         "SELECT e.payload FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \

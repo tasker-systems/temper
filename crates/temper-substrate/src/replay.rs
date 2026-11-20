@@ -1175,9 +1175,10 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // The erasure record (erasure estate-membership spec D6 *Replay*, R8; migration
             // 20261201000030_erasure_record_projectors.sql). Each kind projects at its own position
             // through the one function the live path calls after its append. Each takes what it
-            // writes from its payload and its own event's `occurred_at`; the only state it reads is
-            // the row it is about to change (a flag already set, an edge already folded, a member
-            // no longer open), which at this position is what the live call saw.
+            // writes from its payload and its own event's `occurred_at`. Beyond that event's
+            // `occurred_at`, which `erasure_batch_applied` reads from `kb_events`, the only state
+            // it reads is the row it is about to change (a flag already set, an edge already
+            // folded, a member no longer open), which at this position is what the live call saw.
             // `erasure_declared` also sets the bound flags of its pending members: a resource's
             // `is_active` and an edge's fold land in projected tables
             // and are diffed; a context's `is_active` lands in an input table the restore already

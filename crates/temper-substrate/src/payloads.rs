@@ -2494,10 +2494,10 @@ pub const TYPED_EVENT_NAMES: [&str; 47] = [
 /// retired kind keeps its arm. Empty until the first retirement.
 pub const WRITE_RETIRED: [&str; 0] = [];
 
-// The erasure event classes. Every live SQL function and every `crates/*/src` file that names an
-// erasure-family kind is rostered either to one of these classes, and must then name the whole
-// class, or as a reader or writer of its own kinds (temper-services
-// `erasure_event_name_consumers_test`, spec D7.6). A kind added to a class therefore fails every
+// The erasure event classes. Every live SQL function and every `crates/*/src` item (a `fn`,
+// `const` or `static`) that names an erasure-family kind is rostered either to one of these
+// classes, and must then name the whole class, or as a reader or writer of its own kinds
+// (temper-services `erasure_event_name_consumers_test`, spec D7.6). A kind added to a class therefore fails every
 // consumer of that class that does not yet name it.
 
 /// The kinds whose event is an item's own erasure authority: the event that erases one item and

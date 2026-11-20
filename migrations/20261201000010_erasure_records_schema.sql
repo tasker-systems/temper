@@ -45,7 +45,7 @@ INSERT INTO kb_erasure_refusal_reasons (code, meaning) VALUES
 COMMENT ON TABLE kb_erasure_refusal_reasons IS
 $c$The closed vocabulary of an erasure member's refusal_reason. Held set-equal, codes and meanings, to
 policy/erasure/estate.toml [refusal_reasons], the bootseed rows in system.yaml and the Rust
-ErasureRefusalReason. No event writes it: replay restores it as input, like kb_event_types.$c$;
+ErasureMemberRefusalReason. No event writes it: replay restores it as input, like kb_event_types.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 2. The declared act.
@@ -197,9 +197,10 @@ CREATE INDEX kb_erasure_members_refused
 COMMENT ON TABLE kb_erasure_members IS
 $c$An erasure's map: one row per item, keyed by (erasure_id, member_table, member_id), member_table
 holding the DDL name. An item may belong to several erasures. Any row, whatever its status, fences
-its item. Status moves pending -> erased, pending -> refused, refused -> refused and refused ->
-erased only (kb_erasure_members_status_moves). attempts, next_attempt_at and lease_expires_at are
-the drain's working columns and are not replayed; every other column is projected from the ledger.$c$;
+its item. A row is born pending or erased, never refused, and its status moves pending -> erased,
+pending -> refused, refused -> refused and refused -> erased only
+(kb_erasure_members_status_moves). attempts, next_attempt_at and lease_expires_at are the drain's
+working columns and are not replayed; every other column is projected from the ledger.$c$;
 
 COMMENT ON COLUMN kb_erasure_members.parent_table IS
     'The container member (kb_contexts or kb_cogmaps) of the same erasure; with parent_id, a '
@@ -217,9 +218,10 @@ COMMENT ON COLUMN kb_erasure_members.erased_by_event_id IS
     'The item''s authorising event, or for a row born erased the event that erased it before.';
 
 -- The status moves. Modelled on kb_principal_standing_events_append_only (20260720000040): BEFORE,
--- FOR EACH ROW, and refusing rather than repairing. The one rewrite it makes is the refused ->
--- erased move clearing the refusal's reason, SQLSTATE and routine, so the projector that marks an
--- item erased writes the same statement whatever the row's prior status.
+-- FOR EACH ROW, and refusing rather than repairing. An INSERT is checked for its birth status
+-- only: a row is born pending or erased, and reaches refused by an UPDATE. The one rewrite it
+-- makes is the refused -> erased move clearing the refusal's reason, SQLSTATE and routine, so the
+-- projector that marks an item erased writes the same statement whatever the row's prior status.
 CREATE FUNCTION kb_erasure_members_status_moves()
 RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -227,6 +229,14 @@ BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'kb_erasure_members: a member row is never deleted'
             USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.status = 'refused' THEN
+            RAISE EXCEPTION 'kb_erasure_members: a member row is born pending or erased, never refused'
+                USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NEW;
     END IF;
 
     IF (NEW.erasure_id, NEW.member_table, NEW.member_id, NEW.parent_table, NEW.parent_id,
@@ -261,13 +271,14 @@ END;
 $$;
 
 CREATE TRIGGER kb_erasure_members_status_moves
-    BEFORE DELETE OR UPDATE ON kb_erasure_members
+    BEFORE INSERT OR DELETE OR UPDATE ON kb_erasure_members
     FOR EACH ROW
     EXECUTE FUNCTION kb_erasure_members_status_moves();
 
 COMMENT ON FUNCTION kb_erasure_members_status_moves IS
-  'Refuses DELETE on kb_erasure_members, any change to a row''s identity, parent, prior_erasure_id '
-  'or late, any change to first_refused_at once set, and every status move but pending -> pending, '
+  'Refuses an INSERT on kb_erasure_members whose status is refused (a row is born pending or '
+  'erased), DELETE, any change to a row''s identity, parent, prior_erasure_id or late, any '
+  'change to first_refused_at once set, and every status move but pending -> pending, '
   'pending -> erased, pending -> refused, refused -> refused (the same or a changed reason) and '
   'refused -> erased, which it makes clear the refusal''s reason, SQLSTATE and routine. An erased '
   'row is frozen. Raises check_violation naming the move. Enforced under temper.replaying too; '

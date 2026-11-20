@@ -9,10 +9,10 @@
 --   erasure_batch_applied   the drain's non-authority summary of one batch over one member table
 --   erasure_completed       the completion step ran: the redacted hashes and the late digest
 --
--- Each is `admin`, NULL-anchored and typed. A kind is registered in the slice that first projects
--- it (spec R20): their projectors arrive in 20261201000030, before any writer, so registering them
--- turns nothing on. _event_append (20260719000010) validates no payload, and nothing appends these
--- kinds yet. They precede the projectors' migration, which names them.
+-- Each is `admin`, NULL-anchored and typed. A kind is registered with the change that first
+-- projects it (spec R20): their projectors arrive in 20261201000030, before any writer, so
+-- registering them turns nothing on. _event_append (20260719000010) validates no payload, and
+-- nothing appends these kinds yet. They precede the projectors' migration, which names them.
 --
 -- The payload schema literals below are the committed fixtures
 -- crates/temper-substrate/tests/fixtures/payloads/{erasure_declared,erasure_member_arrived,

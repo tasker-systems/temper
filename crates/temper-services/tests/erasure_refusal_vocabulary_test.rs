@@ -10,8 +10,10 @@ use std::collections::BTreeMap;
 use sqlx::PgPool;
 use temper_core::types::erasure::ErasureMemberRefusalReason;
 
-/// Every variant of the enum. A new variant must be added here; the exhaustive `match` in
-/// `enum_code` fails to compile until it is.
+/// Every variant of the enum, listed by hand. Nothing forces a new variant into this list: the
+/// exhaustive `match` in `enum_code` forces an arm only. The set comparison catches the omission
+/// whenever another copy carries the new code; a variant added to the enum and its arm alone, and
+/// to no other copy, is not caught here.
 const VARIANTS: [ErasureMemberRefusalReason; 4] = [
     ErasureMemberRefusalReason::CharterResource,
     ErasureMemberRefusalReason::Defect,
@@ -19,7 +21,7 @@ const VARIANTS: [ErasureMemberRefusalReason; 4] = [
     ErasureMemberRefusalReason::Unclassified,
 ];
 
-/// Exhaustive over the enum, so a variant outside [`VARIANTS`] is a compile error.
+/// Exhaustive over the enum, so a new variant needs an arm here before this test compiles.
 fn enum_code(reason: ErasureMemberRefusalReason) -> &'static str {
     match reason {
         ErasureMemberRefusalReason::CharterResource => "charter_resource",

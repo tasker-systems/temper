@@ -4,10 +4,10 @@
 -- THE CONSTRAINTS A LATER EDIT MUST NOT BREAK:
 --
 --   * EVERY PROJECTOR IS PAYLOAD-DRIVEN (spec R8). What it writes comes from its payload and, for a
---     timestamp, its own event's occurred_at, never now(). The only state it reads is the row it is
---     about to change (a flag already set, an edge already folded, a member no longer open). Replay
---     calls the same function at the event's position (replay.rs), so a live call and a replayed
---     one write the same rows.
+--     timestamp, its own event's occurred_at (read from kb_events), never now(). Beyond that, the
+--     only state it reads is the row it is about to change (a flag already set, an edge already
+--     folded, a member no longer open). Replay calls the same function at the event's position
+--     (replay.rs), so a live call and a replayed one write the same rows.
 --   * A MAP ENTRY CARRIES NO STATUS. An entry with prior_erasure and prior_event is born erased;
 --     every other is born pending. An entry with only one of the two raises.
 --   * THE BOUND FLAGS ARE SET ON PENDING MEMBERS ONLY, through _erasure_member_flag, which both
@@ -100,8 +100,10 @@ _project_erasure_declared and _project_erasure_member_arrived.$c$;
 -- Section 3. erasure_declared.
 -- ---------------------------------------------------------------------------
 -- The erasure row, the estate snapshot (estates only), the map, the former holders, and the flags
--- of the map's pending members. A legacy payload is projected with legacy = true and no manifest
--- and no request, whatever else it carries.
+-- of the map's pending members. A legacy payload that carries a manifest or a request raises, and
+-- so does an estate whose counts omit a table its map holds: each is a writer's defect, and the
+-- projector refuses it rather than dropping or defaulting what it was given. A count the map has no
+-- table for may be absent, and reads as 0.
 CREATE FUNCTION _project_erasure_declared(p_event uuid, p_payload jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -120,6 +122,10 @@ BEGIN
         RAISE EXCEPTION 'erasure_declared event %: a map entry names prior_erasure or prior_event without the other', p_event
             USING ERRCODE = 'check_violation';
     END IF;
+    IF v_legacy AND p_payload ?| ARRAY['request_ref', 'manifest_version', 'manifest_digest'] THEN
+        RAISE EXCEPTION 'erasure_declared event %: a legacy declaration carries a manifest or a request', p_event
+            USING ERRCODE = 'check_violation';
+    END IF;
 
     INSERT INTO kb_erasures (id, kind, subject_table, subject_id, request_ref,
                              manifest_version, manifest_digest, legacy, declared_event_id)
@@ -127,9 +133,9 @@ BEGIN
             v_kind,
             p_payload->>'subject_table',
             (p_payload->>'subject_id')::uuid,
-            CASE WHEN v_legacy THEN NULL ELSE (p_payload->>'request_ref')::uuid END,
-            CASE WHEN v_legacy THEN NULL ELSE p_payload->>'manifest_version' END,
-            CASE WHEN v_legacy THEN NULL ELSE p_payload->>'manifest_digest' END,
+            (p_payload->>'request_ref')::uuid,
+            p_payload->>'manifest_version',
+            p_payload->>'manifest_digest',
             v_legacy,
             p_event);
 
@@ -137,6 +143,11 @@ BEGIN
         IF v_counts IS NULL THEN
             RAISE EXCEPTION 'erasure_declared event %: an estate declaration carries no counts', p_event
                 USING ERRCODE = 'not_null_violation';
+        END IF;
+        IF EXISTS (SELECT 1 FROM jsonb_array_elements(coalesce(p_payload->'map', '[]'::jsonb)) AS m(entry)
+                    WHERE NOT v_counts ? (m.entry->>'table')) THEN
+            RAISE EXCEPTION 'erasure_declared event %: the estate counts omit a table its map holds', p_event
+                USING ERRCODE = 'check_violation';
         END IF;
         INSERT INTO kb_erasure_estate_snapshots (erasure_id, resource_count, context_count,
                                                  cogmap_count, blob_count, edge_count, checksum)
@@ -186,8 +197,10 @@ COMMENT ON FUNCTION _project_erasure_declared(uuid, jsonb) IS
 $c$Projects an erasure_declared payload: the kb_erasures row (declared_event_id = this event), the
 estate snapshot for an estate, one kb_erasure_members row per map entry (born erased when the entry
 names prior_erasure and prior_event, else pending), the former holders, and the bound flags of the
-pending members (_erasure_member_flag). A legacy payload yields legacy = true with no manifest and
-no request_ref. Payload-driven; replay calls it at the event's position.$c$;
+pending members (_erasure_member_flag). A legacy payload yields legacy = true; one that carries a
+manifest or a request_ref raises. An estate whose counts omit a table its map holds raises; a count
+for a table the map does not hold reads as 0 when absent. Payload-driven; replay calls it at the
+event's position.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 4. erasure_member_arrived.
@@ -275,8 +288,9 @@ COMMENT ON FUNCTION _project_erasure_completed(uuid, jsonb) IS
 -- Each refused entry is written to the item's open row in every erasure it names: pending ->
 -- refused, or refused -> refused with the new reason. first_refused_at takes this event's
 -- occurred_at only when it is unset, so a retry keeps the first. A named erasure whose row of the
--- item is missing or already erased raises: the batch locked exactly those open rows. Erased
--- entries are not projected here; each is marked by its own authority event.
+-- item is missing or already erased raises: the batch locked exactly those open rows. A refused
+-- entry that names no erasure raises too. Erased entries are not projected here; each is marked by
+-- its own authority event.
 CREATE FUNCTION _project_erasure_batch_applied(p_event uuid, p_payload jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -300,6 +314,11 @@ BEGIN
         SELECT coalesce(array_agg(DISTINCT x::uuid), '{}')
           INTO v_erasures
           FROM jsonb_array_elements_text(coalesce(v_entry->'erasures', '[]'::jsonb)) AS x;
+        IF cardinality(v_erasures) = 0 THEN
+            RAISE EXCEPTION 'erasure_batch_applied event %: the refusal of % % names no erasure',
+                            p_event, v_table, v_entry->>'member'
+                USING ERRCODE = 'check_violation';
+        END IF;
 
         UPDATE kb_erasure_members
            SET status           = 'refused',
@@ -325,8 +344,9 @@ $$;
 COMMENT ON FUNCTION _project_erasure_batch_applied(uuid, jsonb) IS
 $c$Projects the refusals of an erasure_batch_applied payload onto the item's open row in each erasure
 the entry names, keeping first_refused_at once set (it takes this event's occurred_at otherwise).
-Raises when a named row is missing or erased. Erased entries are not projected here: the batch is
-not an authority, and each erased item is marked by its own authority event.$c$;
+Raises when a named row is missing or erased, or when a refused entry names no erasure. Erased
+entries are not projected here: the batch is not an authority, and each erased item is marked by
+its own authority event.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 7. resource_erased's membership: the legacy erasure.
@@ -413,11 +433,18 @@ the replay arm at the event's position.$c$;
 -- derives in an event (spec R21): a legacy erasure_declared, under the canonical system actor,
 -- whose one-row map makes the resource's member pending.
 --
---   1. Every first record is re-projected through _project_resource_erased_membership, in
---      kb_events id order (replay's order). A completion record is never re-projected: a first
---      record's row is born erased and a completion record touches only open legacy rows, so the
---      only open legacy row is one this function declared, and re-projecting an earlier
---      completion over it on a later call would wrongly close it.
+--   0. It first takes kb_events in SHARE mode. That waits for every transaction still appending,
+--      so a first erasure in flight under the replaced wrapper commits before step 1 reads the
+--      ledger, and step 1 sees its record. It also blocks every new append until the migration
+--      commits, and by then every append runs the re-issued wrapper, which records its own legacy
+--      erasure.
+--   1. Every resource_erased that is not completion-shaped is re-projected through
+--      _project_resource_erased_membership, in kb_events id order (replay's order). A first
+--      record projects; a record of neither shape raises there, so the migration fails on it
+--      rather than a later replay. A completion record is never re-projected: a first record's
+--      row is born erased and a completion record touches only open legacy rows, so the only open
+--      legacy row is one this function declared, and re-projecting an earlier completion over it
+--      on a later call would wrongly close it.
 --   2. Each erased resource, in id order (the person act's lock order), is locked as the acts lock
 --      it: the act queue key, then the row FOR UPDATE.
 --   3. One with a completion pass owed and no open legacy row gets one erasure_declared, projected
@@ -436,12 +463,16 @@ DECLARE
     v_ev       uuid;
     v_appended integer := 0;
 BEGIN
+    LOCK TABLE kb_events IN SHARE MODE;
+
     FOR v_record IN
         SELECT e.id, e.payload
           FROM kb_events e
           JOIN kb_event_types t ON t.id = e.event_type_id
          WHERE t.name = 'resource_erased'
-           AND e.payload ? 'targets'
+           AND EXISTS (SELECT 1 FROM jsonb_object_keys(e.payload) AS k(key)
+                        WHERE k.key NOT IN ('subject_table', 'subject_id', 'actor',
+                                            'redacted_fields'))
          ORDER BY e.id
     LOOP
         PERFORM _project_resource_erased_membership(v_record.id, v_record.payload);
@@ -507,12 +538,15 @@ $$;
 
 COMMENT ON FUNCTION _erasure_legacy_backfill() IS
 $c$Records every old-door resource erasure as a legacy erasure (spec D9, R21), and returns the number
-of erasure_declared events it appended. It re-projects each resource_erased first record through
-_project_resource_erased_membership in id order (never a completion record), then, for each erased
-resource in id order under the acts' locks, appends one legacy erasure_declared under the canonical
-system actor when resource_erasure_completion_fields is non-empty and the resource has no open
-legacy row, and projects it. An erased resource with no resource_erased record raises. Idempotent.
-Called once by 20261201000030_erasure_record_projectors.sql.$c$;
+of erasure_declared events it appended. It takes kb_events in SHARE mode first, so no append is in
+flight while it reads the ledger and none lands before its caller commits. It re-projects each
+resource_erased that is not completion-shaped through _project_resource_erased_membership in id
+order (a first record projects, a record of neither shape raises; never a completion record),
+then, for each erased resource in id order under the acts' locks, appends one legacy
+erasure_declared under the canonical system actor when resource_erasure_completion_fields is
+non-empty and the resource has no open legacy row, and projects it. An erased resource with no
+resource_erased record raises. Idempotent. Called once by
+20261201000030_erasure_record_projectors.sql.$c$;
 
 SELECT _erasure_legacy_backfill();
 
@@ -527,8 +561,9 @@ SELECT declare_migration(
     'each resource_erased as a legacy erasure, and re-issues _project_resource_erased_redactions '
     'with the same signature to call it after the field redactions, whose checks and messages are '
     'unchanged. Adds _erasure_legacy_backfill and runs it once: it projects every existing '
-    'resource_erased first record, and appends one legacy erasure_declared, under the canonical '
-    'system actor, for each erased resource that still owes a completion pass. It raises, aborting '
+    'resource_erased first record under a SHARE lock on kb_events, and appends one legacy '
+    'erasure_declared, under the canonical system actor, for each erased resource that still '
+    'owes a completion pass. It raises, aborting '
     'the migration, on an erased resource with no resource_erased record or on a raise inside '
     'resource_erasure_completion_fields. A binary without this change writes resource_erased '
     'through the same SQL act, which now also records its legacy erasure.'

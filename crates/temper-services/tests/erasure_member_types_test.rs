@@ -13,8 +13,10 @@ use sqlx::PgPool;
 use temper_core::erasure_policy::Grain;
 use temper_core::types::erasure::ErasureMemberTable;
 
-/// Every variant of the enum. A new variant must be added here; the exhaustive `match` in
-/// `enum_table` fails to compile until it is.
+/// Every variant of the enum, listed by hand. Nothing forces a new variant into this list: the
+/// exhaustive `match` in `enum_table` forces an arm only. The set comparison catches the omission
+/// whenever another copy carries the new table; a variant added to the enum and its arm alone, and
+/// to no other copy, is not caught here.
 const VARIANTS: [ErasureMemberTable; 5] = [
     ErasureMemberTable::KbResources,
     ErasureMemberTable::KbContexts,
@@ -23,7 +25,7 @@ const VARIANTS: [ErasureMemberTable; 5] = [
     ErasureMemberTable::KbEdges,
 ];
 
-/// Exhaustive over the enum, so a variant outside [`VARIANTS`] is a compile error.
+/// Exhaustive over the enum, so a new variant needs an arm here before this test compiles.
 fn enum_table(table: ErasureMemberTable) -> &'static str {
     match table {
         ErasureMemberTable::KbResources => "kb_resources",

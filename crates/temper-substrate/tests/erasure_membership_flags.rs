@@ -11,13 +11,13 @@
 //!   * `erased_has_row`: a resource with `erased_at` set and no `erased` member row.
 //!
 //! Not the reverse: ordinary deletes, retirements and folds set the same flags with no member row.
-//! Cogmaps wait for 1c, where `kb_cogmaps.is_active` is born.
+//! Cogmaps carry no conjunct: `kb_cogmaps` has no `is_active` column, so there is no flag to check.
 //!
 //! The world maps a context, a resource homed in it and an estate-homed edge through an appended
 //! `erasure_declared`, and erases one more resource through the resource act, which records its
 //! legacy erasure. The check finds nothing there. Each probe then breaks one conjunct alone, by a
 //! write no projector makes (a member row inserted without its flag, or `erased_at` set with no
-//! record; nothing refuses either until slice 1d's trigger), and asserts the check reports exactly
+//! record; no trigger refuses either), and asserts the check reports exactly
 //! that conjunct on exactly that item.
 
 mod common;
