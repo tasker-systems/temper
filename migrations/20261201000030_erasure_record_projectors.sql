@@ -348,7 +348,9 @@ COMMENT ON FUNCTION _project_erasure_completed(uuid, jsonb) IS
 -- occurred_at only when it is unset, so a retry keeps the first. A named erasure whose row of the
 -- item is missing or already erased raises: the batch locked exactly those open rows. A refused
 -- entry that names no erasure raises too. Erased entries are not projected here; each is marked by
--- its own authority event.
+-- its own authority event. Because the record is never redacted, an entry's routine must be a
+-- routine name (the shape kb_erasure_members_refusal_routine_check holds), checked on every entry,
+-- and an entry that is not a refusal carrying a reason, a SQLSTATE or a routine raises.
 CREATE FUNCTION _project_erasure_batch_applied(p_event uuid, p_payload jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -367,6 +369,21 @@ BEGIN
     FOR v_entry IN
         SELECT e.entry FROM jsonb_array_elements(coalesce(p_payload->'entries', '[]'::jsonb)) AS e(entry)
     LOOP
+        -- The record is never redacted, so no entry may carry text a CHECK never sees: a routine
+        -- must be a routine's name on every entry, and only a refusal carries a refusal's detail.
+        IF v_entry->>'routine' IS NOT NULL
+           AND v_entry->>'routine' !~ '^[a-z_][a-z0-9_]{0,62}(\.[a-z_][a-z0-9_]{0,62})?$' THEN
+            RAISE EXCEPTION 'erasure_batch_applied event %: the routine of % % is not a routine name',
+                            p_event, v_table, v_entry->>'member'
+                USING ERRCODE = 'check_violation';
+        END IF;
+        IF (v_entry->>'outcome') IS DISTINCT FROM 'refused'
+           AND (v_entry->>'reason' IS NOT NULL OR v_entry->>'sqlstate' IS NOT NULL
+                OR v_entry->>'routine' IS NOT NULL) THEN
+            RAISE EXCEPTION 'erasure_batch_applied event %: the % entry of % % carries a refusal''s detail',
+                            p_event, v_entry->>'outcome', v_table, v_entry->>'member'
+                USING ERRCODE = 'check_violation';
+        END IF;
         CONTINUE WHEN (v_entry->>'outcome') IS DISTINCT FROM 'refused';
 
         SELECT coalesce(array_agg(DISTINCT x::uuid), '{}')
@@ -404,7 +421,9 @@ $c$Projects the refusals of an erasure_batch_applied payload onto the item's ope
 the entry names, keeping first_refused_at once set (it takes this event's occurred_at otherwise).
 Raises when a named row is missing or erased, or when a refused entry names no erasure. Erased
 entries are not projected here: the batch is not an authority, and each erased item is marked by
-its own authority event.$c$;
+its own authority event. The record is never redacted, so it also raises when any entry's routine
+is not a routine name, and when an entry that is not a refusal carries a reason, a SQLSTATE or a
+routine.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 7. resource_erased's membership: the legacy erasure.

@@ -216,10 +216,10 @@ async fn declarations(pool: &PgPool) -> Vec<(Uuid, Uuid, serde_json::Value)> {
 
 /// `ids` in replay's walk order (`replay::replay`).
 async fn walk_order(pool: &PgPool, ids: &[Uuid]) -> Vec<Uuid> {
-    sqlx::query_scalar(
-        "SELECT id FROM kb_events WHERE id = ANY($1) \
-          ORDER BY (xact_id IS NULL) DESC, xact_id, seq, id",
-    )
+    sqlx::query_scalar(&format!(
+        "SELECT e.id FROM kb_events e WHERE e.id = ANY($1) ORDER BY {}",
+        replay::WALK_ORDER
+    ))
     .bind(ids)
     .fetch_all(pool)
     .await
@@ -1116,4 +1116,23 @@ async fn the_migration_records_the_husks_of_a_ledger_made_before_it(own: PgPool)
         .execute(&own)
         .await
         .unwrap();
+}
+
+/// The backfill's step 1 re-projects first records in replay's walk order: its live body spells
+/// the order exactly as `replay::WALK_ORDER` does, so the two cannot drift apart unseen.
+///
+/// FAILS IF: `_erasure_legacy_backfill`'s live body does not hold `ORDER BY` followed by the
+/// walk's `ORDER BY` list, as `replay::WALK_ORDER` spells it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_backfill_re_projects_in_replays_walk_order(pool: PgPool) {
+    let body: String =
+        sqlx::query_scalar("SELECT pg_get_functiondef('_erasure_legacy_backfill()'::regprocedure)")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        body.contains(&format!("ORDER BY {}", replay::WALK_ORDER)),
+        "the backfill's step 1 orders by replay's walk order ({}):\n{body}",
+        replay::WALK_ORDER
+    );
 }

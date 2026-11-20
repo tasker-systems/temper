@@ -4825,8 +4825,6 @@ async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) 
 
     let request_ref = Uuid::now_v7();
     let erasure = execute_act_with_ref(&pool, leak.resource.uuid(), request_ref).await;
-    // Separate milliseconds, so each later transaction's event ids sort after the one before.
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
     // A lawful write after the act that the body would undo if it ran again: the soft delete of
     // the husk stamps `updated`.
@@ -4849,7 +4847,6 @@ async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) 
     .fetch_one(&pool)
     .await
     .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
     // A retried request under the same reference, refused as already erased.
     let refused: Uuid =
@@ -4870,13 +4867,14 @@ async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) 
         Uuid,
         chrono::DateTime<chrono::Utc>,
         chrono::DateTime<chrono::Utc>,
-    ) = sqlx::query_as(
-        "SELECT (SELECT s.id FROM kb_events s \
-                  WHERE s.correlation_id = $1 AND s.occurred_at = er.occurred_at \
-                  ORDER BY (s.xact_id IS NULL), s.xact_id DESC, s.seq DESC, s.id DESC LIMIT 1), \
+    ) = sqlx::query_as(&format!(
+        "SELECT (SELECT e.id FROM kb_events e \
+                  WHERE e.correlation_id = $1 AND e.occurred_at = er.occurred_at \
+                  ORDER BY row_number() OVER (ORDER BY {}) DESC LIMIT 1), \
                 rf.correlation_id, er.occurred_at, rf.occurred_at \
            FROM kb_events er, kb_events rf WHERE er.id = $2 AND rf.id = $3",
-    )
+        replay::WALK_ORDER
+    ))
     .bind(request_ref)
     .bind(erasure)
     .bind(refused)
@@ -4891,10 +4889,10 @@ async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) 
         act_at, refused_at,
         "the refusal is not in the act's transaction"
     );
-    let walked: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM kb_events WHERE id = ANY($1) \
-          ORDER BY (xact_id IS NULL) DESC, xact_id, seq, id",
-    )
+    let walked: Vec<Uuid> = sqlx::query_scalar(&format!(
+        "SELECT e.id FROM kb_events e WHERE e.id = ANY($1) ORDER BY {}",
+        replay::WALK_ORDER
+    ))
     .bind(vec![span_last, deleted, refused])
     .fetch_all(&pool)
     .await
@@ -4968,7 +4966,6 @@ async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgP
     .await
     .unwrap();
     let erasure = execute_act(&pool, resource.uuid()).await;
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
     let mut conn = pool.acquire().await.unwrap();
     let mut tx = sqlx::Connection::begin(&mut *conn).await.unwrap();
@@ -5006,10 +5003,10 @@ async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgP
     .fetch_one(&pool)
     .await
     .unwrap();
-    let walked: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM kb_events WHERE id = ANY($1) \
-          ORDER BY (xact_id IS NULL) DESC, xact_id, seq, id",
-    )
+    let walked: Vec<Uuid> = sqlx::query_scalar(&format!(
+        "SELECT e.id FROM kb_events e WHERE e.id = ANY($1) ORDER BY {}",
+        replay::WALK_ORDER
+    ))
     .bind(vec![erasure, late_event])
     .fetch_all(&pool)
     .await

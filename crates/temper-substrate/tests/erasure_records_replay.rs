@@ -1229,6 +1229,110 @@ async fn a_refusal_naming_no_erasure_is_refused(pool: PgPool) {
     );
 }
 
+/// No batch entry carries text a CHECK never sees: the record is never redacted. A routine that is
+/// not a routine name raises on a refused entry and on an erased one, and an erased entry carrying
+/// a reason, a SQLSTATE or a routine raises. Each refused payload is an honest one with one change,
+/// and the item's row stays as it was.
+///
+/// FAILS IF: an erased entry's routine, reason or SQLSTATE lands on the ledger unchecked (the
+/// projector skips non-refused entries before looking at them), a refused entry's message-shaped
+/// routine reaches the column, or (the control) an honest erased entry with none of them is
+/// refused.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn no_batch_entry_carries_free_text_or_a_refusals_detail_it_does_not_own(pool: PgPool) {
+    fresh(&pool).await;
+    let item = Uuid::now_v7();
+    let erasure = Uuid::now_v7();
+    declare(
+        &pool,
+        &declaration(
+            erasure,
+            ErasureKind::Selection,
+            None,
+            vec![pending(ErasureMemberTable::KbBlobs, item, None)],
+            vec![],
+        ),
+    )
+    .await;
+    let erased = || ErasureBatchEntry {
+        member: item,
+        erasures: vec![erasure],
+        outcome: ErasureBatchOutcome::Erased,
+        authority_event: Some(Uuid::now_v7()),
+        reason: None,
+        sqlstate: None,
+        routine: None,
+    };
+    let message = "ERROR: could not erase the blob".to_owned();
+    let mut message_on_refusal = refused(item, vec![erasure], ErasureMemberRefusalReason::Defect);
+    message_on_refusal.routine = Some(message.clone());
+    let mut message_on_erased = erased();
+    message_on_erased.routine = Some(message);
+    let mut routine_on_erased = erased();
+    routine_on_erased.routine = Some("resource_erasure_execute".to_owned());
+    let mut reason_on_erased = erased();
+    reason_on_erased.reason = Some(ErasureMemberRefusalReason::Defect);
+    let mut sqlstate_on_erased = erased();
+    sqlstate_on_erased.sqlstate = Some("XX000".to_owned());
+
+    for (what, entry, says) in [
+        (
+            "a refused entry whose routine is a message",
+            message_on_refusal,
+            "is not a routine name",
+        ),
+        (
+            "an erased entry whose routine is a message",
+            message_on_erased,
+            "is not a routine name",
+        ),
+        (
+            "an erased entry carrying a routine",
+            routine_on_erased,
+            "carries a refusal's detail",
+        ),
+        (
+            "an erased entry carrying a reason",
+            reason_on_erased,
+            "carries a refusal's detail",
+        ),
+        (
+            "an erased entry carrying a SQLSTATE",
+            sqlstate_on_erased,
+            "carries a refusal's detail",
+        ),
+    ] {
+        let payload = serde_json::to_value(ErasureBatchApplied {
+            member_table: ErasureMemberTable::KbBlobs,
+            entries: vec![entry],
+        })
+        .unwrap();
+        let err = try_record(&pool, "erasure_batch_applied", &payload)
+            .await
+            .expect_err(what);
+        assert!(
+            err.to_string().contains(says),
+            "{what}: unexpected error: {err}"
+        );
+        assert_eq!(
+            member_row(&pool, erasure, "kb_blobs", item)
+                .await
+                .map(|r| r.0),
+            Some("pending".to_owned()),
+            "{what}: the row is untouched"
+        );
+    }
+
+    let honest = serde_json::to_value(ErasureBatchApplied {
+        member_table: ErasureMemberTable::KbBlobs,
+        entries: vec![erased()],
+    })
+    .unwrap();
+    try_record(&pool, "erasure_batch_applied", &honest)
+        .await
+        .expect("control: an erased entry with no refusal detail projects");
+}
+
 // ── the edge fold ────────────────────────────────────────────────────────────────────────────
 
 /// An edge member folds under the declaration with its edge-owned properties; an edge folded
@@ -1653,10 +1757,10 @@ async fn append_as(
 
 /// `ids` in replay's walk order (`replay::replay`).
 async fn walk_order(pool: &PgPool, ids: &[Uuid]) -> Vec<Uuid> {
-    sqlx::query_scalar(
-        "SELECT id FROM kb_events WHERE id = ANY($1) \
-          ORDER BY (xact_id IS NULL) DESC, xact_id, seq, id",
-    )
+    sqlx::query_scalar(&format!(
+        "SELECT e.id FROM kb_events e WHERE e.id = ANY($1) ORDER BY {}",
+        replay::WALK_ORDER
+    ))
     .bind(ids)
     .fetch_all(pool)
     .await

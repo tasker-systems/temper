@@ -623,11 +623,25 @@ async fn restore_table(pool: &PgPool, table: &str, rows: &serde_json::Value) -> 
     Ok(())
 }
 
+/// The walk order's `ORDER BY` list over `kb_events e`, as a literal so the walk's query stays a
+/// static string. See [`replay`] for why it is this order.
+macro_rules! walk_order {
+    () => {
+        "(e.xact_id IS NULL) DESC, e.xact_id, e.seq, e.id"
+    };
+}
+
+/// The walk order's `ORDER BY` list, over `kb_events` aliased `e`: the one spelling of the order
+/// [`replay`] walks. Everything that must agree with the walk uses it, Rust and test helpers alike;
+/// `_erasure_legacy_backfill`'s step 1 (20261201000030) spells it in SQL, and a test holds that
+/// copy equal to this one.
+pub const WALK_ORDER: &str = walk_order!();
+
 /// Restore inputs and walk the ledger through the projection halves — the SAME code normal
 /// operation runs. Call against a freshly reset (01+02, un-seeded) namespace.
 ///
-/// **The walk order** is `ORDER BY (e.xact_id IS NULL) DESC, e.xact_id, e.seq, e.id`, the ledger's
-/// recorded order (`20261116000010_kb_events_record_order.sql`):
+/// **The walk order** is `ORDER BY` [`WALK_ORDER`], `(e.xact_id IS NULL) DESC, e.xact_id, e.seq,
+/// e.id`, the ledger's recorded order (`20261116000010_kb_events_record_order.sql`):
 ///
 /// - A row appended since that migration carries `xact_id`, the appending transaction's id, and
 ///   `seq`, its append order from `kb_events_seq`. The walk takes transactions in `xact_id` order
@@ -654,11 +668,12 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
     for (table, rows) in &snap.inputs {
         restore_table(pool, table, rows).await?;
     }
-    let events = sqlx::query(
+    let events = sqlx::query(concat!(
         "SELECT e.id, et.name, e.payload, e.correlation_id, e.occurred_at \
            FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
-          ORDER BY (e.xact_id IS NULL) DESC, e.xact_id, e.seq, e.id",
-    )
+          ORDER BY ",
+        walk_order!()
+    ))
     .fetch_all(pool)
     .await?;
     // The resource erasure act's deferral (spec 2026-09-28, D14: "the replay arm for

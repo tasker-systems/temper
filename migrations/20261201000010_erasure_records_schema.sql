@@ -26,14 +26,25 @@
 -- _erasure_redact_paths()'s COMMENT is re-issued to name its manifest's present path; its body is
 -- unchanged.
 --
--- THE LOCK BOUND. This migration takes strong locks on two tables every write touches: each
--- `REFERENCES kb_events(id)` takes SHARE ROW EXCLUSIVE on kb_events, which conflicts with the ROW
--- EXCLUSIVE every _event_append takes, and `ALTER TABLE kb_event_types ADD COLUMN` takes ACCESS
--- EXCLUSIVE on a table every _event_append reads. An additive migration runs while the previous
--- deployment is still serving (DEPLOYING.md). Unbounded, a request for either lock queues behind
--- every open writer, and every later append queues behind the request, so the deploy would stall
--- the live ledger for as long as the longest open transaction. So the whole migration runs under
--- `SET LOCAL lock_timeout = '500ms'`, below the default `deadlock_timeout` (1s), so the wait gives
+-- THE LOCK BOUND. This migration takes strong locks on tables the live system writes or reads,
+-- in this order:
+--
+--   1. ACCESS EXCLUSIVE on kb_event_types, for `ALTER TABLE ... ADD COLUMN write_retired_at`
+--      (Section 0). Every _event_append reads kb_event_types, so from the grant to the commit
+--      every append waits. It comes first, so its wait is queued before this migration holds any
+--      other lock.
+--   2. SHARE ROW EXCLUSIVE on kb_events, for each `REFERENCES kb_events(id)` (kb_erasures and
+--      kb_erasure_members). It conflicts with the ROW EXCLUSIVE every append takes.
+--   3. SHARE ROW EXCLUSIVE on kb_profiles, for kb_erasure_former_holders' `REFERENCES
+--      kb_profiles(id)`. It conflicts with every write to a profile.
+--   4. SHARE ROW EXCLUSIVE on kb_erasure_refusal_reasons and kb_erasures, tables this migration
+--      creates, which nothing else can hold.
+--
+-- An additive migration runs while the previous deployment is still serving (DEPLOYING.md).
+-- Unbounded, a request for any of these locks queues behind every open transaction holding a
+-- conflicting one, and every later request queues behind it, so the deploy would stall the live
+-- ledger for as long as the longest open transaction. So the whole migration runs under
+-- `SET LOCAL lock_timeout = '500ms'`, below the default `deadlock_timeout` (1s), so each wait gives
 -- up before a deadlock check would even start.
 --
 --   * temper-migrate applies each migration through sqlx's `Migrator`, which wraps one file and
@@ -48,10 +59,21 @@
 --   * It is the first migration to set a lock_timeout, because it is the first additive migration
 --     that adds foreign keys into kb_events and a column to kb_event_types while a deployment
 --     serves.
---   * A lock, once granted, is held to commit: the bound limits how long the migration waits, not
---     how long it blocks. Everything after the grant is DDL on new tables and one COMMENT.
+--   * The bound is per wait, and a lock once granted is held to commit. So the waits stack: while
+--     this migration waits for 2 or 3 it already holds 1, and appends wait with it, for at most
+--     500ms per wait. A wait that fires rolls everything back and releases every grant.
 
 SET LOCAL lock_timeout = '500ms';
+
+-- ---------------------------------------------------------------------------
+-- Section 0. Retiring a kind for writing. First, so its lock is requested before any other.
+-- ---------------------------------------------------------------------------
+ALTER TABLE kb_event_types ADD COLUMN write_retired_at timestamptz;
+
+COMMENT ON COLUMN kb_event_types.write_retired_at IS
+    'When the kind was retired for writing; NULL while it may be appended. A retired kind stays '
+    'registered so old ledgers replay. The Rust WRITE_RETIRED list names exactly the kinds whose '
+    'column is set. _event_append does not read it yet.';
 
 -- ---------------------------------------------------------------------------
 -- Section 1. The closed refusal vocabulary.
@@ -438,17 +460,7 @@ erasure and its manifest digest, then one tab-separated line per member in (memb
 other runtime re-implements it.$c$;
 
 -- ---------------------------------------------------------------------------
--- Section 8. Retiring a kind for writing.
--- ---------------------------------------------------------------------------
-ALTER TABLE kb_event_types ADD COLUMN write_retired_at timestamptz;
-
-COMMENT ON COLUMN kb_event_types.write_retired_at IS
-    'When the kind was retired for writing; NULL while it may be appended. A retired kind stays '
-    'registered so old ledgers replay. The Rust WRITE_RETIRED list names exactly the kinds whose '
-    'column is set. _event_append does not read it yet.';
-
--- ---------------------------------------------------------------------------
--- Section 9. The allowlist's COMMENT names its present manifest.
+-- Section 8. The allowlist's COMMENT names its present manifest.
 -- ---------------------------------------------------------------------------
 COMMENT ON FUNCTION _erasure_redact_paths() IS
 $c$The ledger exception's allowlist: every (event type, path, qualifier) a resource_erased event may

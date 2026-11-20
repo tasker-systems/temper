@@ -1467,29 +1467,53 @@ async fn the_vocabulary_files_are_scanned_outside_their_vocabulary_items(pool: P
     );
 }
 
-/// A view and a CHECK constraint that name a kind are consumers: the catalog beyond functions is
-/// read.
+/// Each catalog source beyond functions is read: a view, a CHECK constraint, a column default, a
+/// row-level security policy and a trigger's WHEN clause, each naming one kind, are each a consumer
+/// under its own key. One object per source, each naming a different kind, so a source query that
+/// returned no rows would lose exactly its line.
+///
+/// FAILS IF: any of the five source queries misses its object (its key is absent from the
+/// report), or reads it under another key.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn a_view_or_a_check_naming_a_kind_is_a_consumer(pool: PgPool) {
+async fn every_catalog_source_naming_a_kind_is_a_consumer(pool: PgPool) {
     for ddl in [
         "CREATE VIEW d76_probe_view AS SELECT 'resource_erased'::text AS kind",
-        "CREATE TABLE d76_probe_table (k text CHECK (k <> 'principal_erased'))",
+        "CREATE TABLE d76_probe_table (k text CHECK (k <> 'principal_erased'), \
+                                       d text DEFAULT 'block_history_scrubbed')",
+        "CREATE POLICY d76_probe_policy ON d76_probe_table USING (k <> 'resource_scrubbed')",
+        "CREATE FUNCTION d76_probe_noop() RETURNS trigger LANGUAGE plpgsql \
+             AS $$ BEGIN RETURN NEW; END $$",
+        "CREATE TRIGGER d76_probe_trigger BEFORE INSERT ON d76_probe_table FOR EACH ROW \
+             WHEN (NEW.k = 'erasure_completed') EXECUTE FUNCTION d76_probe_noop()",
     ] {
         sqlx::query(ddl)
             .execute(&pool)
             .await
             .unwrap_or_else(|e| panic!("{ddl}: {e}"));
     }
-    let found = problems(&all_bodies(&pool).await, ROSTER, &Vocabulary::live());
+    let unrostered = |who: &str, kind: &str| {
+        format!(
+            "{who} names {kind} but is not rostered: assign it a class, or its own kinds with a \
+             reason"
+        )
+    };
     assert_eq!(
-        found,
+        problems(&all_bodies(&pool).await, ROSTER, &Vocabulary::live()),
         vec![
-            "constraint:d76_probe_table.d76_probe_table_k_check names principal_erased but is not \
-             rostered: assign it a class, or its own kinds with a reason"
-                .to_owned(),
-            "view:d76_probe_view names resource_erased but is not rostered: assign it a class, \
-             or its own kinds with a reason"
-                .to_owned(),
+            unrostered(
+                "constraint:d76_probe_table.d76_probe_table_k_check",
+                "principal_erased"
+            ),
+            unrostered("default:d76_probe_table.d", "block_history_scrubbed"),
+            unrostered(
+                "policy:d76_probe_table.d76_probe_policy",
+                "resource_scrubbed"
+            ),
+            unrostered(
+                "trigger:d76_probe_table.d76_probe_trigger",
+                "erasure_completed"
+            ),
+            unrostered("view:d76_probe_view", "resource_erased"),
         ]
     );
 }
