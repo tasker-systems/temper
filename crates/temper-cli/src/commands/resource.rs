@@ -3803,6 +3803,26 @@ mod action_result_tests {
         assert_eq!(v["task_link"]["status"], "linked");
         assert_eq!(v["task_link"]["task_id"], task_id.to_string());
         assert_eq!(v["task_link"]["edge_handle"], edge_handle.to_string());
+
+        result.task_link = Some(TaskLinkOutcome::AssertFailed {
+            requested: "t".into(),
+            task_id,
+            task_ref: format!("t-{task_id}"),
+            detail: "boom".into(),
+        });
+        let out = render_action_result_with_ref(&result, crate::format::OutputFormat::Json)
+            .expect("json render");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(
+            v["task_link"],
+            serde_json::json!({
+                "status": "assert_failed",
+                "requested": "t",
+                "task_id": task_id.to_string(),
+                "task_ref": format!("t-{task_id}"),
+                "detail": "boom",
+            })
+        );
     }
 
     #[test]

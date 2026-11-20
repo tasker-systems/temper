@@ -1,7 +1,8 @@
 #![cfg(feature = "test-db")]
 
 //! End-to-end coverage for session→task linking on the live `resource create`
-//! path (`temper resource create --type session --task <task-slug>`).
+//! path (`temper resource create --type session --task <task>`), where `<task>` is the task's
+//! ref, bare UUID or title slug, and the create's JSON reports the outcome as `task_link`.
 //!
 //! The link is asserted by `commands::resource::create` after the session is
 //! created: a session→task relationship with `edge_kind = LeadsTo`,
@@ -675,10 +676,13 @@ async fn cli_task_flag_accepts_a_title_slug(pool: sqlx::PgPool) {
 
 /// An unmatched `--task` still creates the session, exits 0, and says so on stdout: the JSON's
 /// `task_link.status` is `not_found` for an unknown slug and for a ref that names nothing, and
-/// `lookup_failed` for a ref that names a resource that is not a task. No edge in any case.
+/// `lookup_failed` for an ambiguous slug suffix and for a ref that names a resource that is not a
+/// task. No edge in any case.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn cli_task_flag_unmatched_is_visible_in_the_json(pool: sqlx::PgPool) {
     let (app, _task_id) = app_with_one_task(pool).await;
+    // A second `-widget` task makes the `widget` suffix ambiguous.
+    seed_task(&app.client, "myapp", "other-widget", "Other Widget").await;
 
     let cases = [
         ("does-not-exist-anywhere", "not_found"),
@@ -686,6 +690,7 @@ async fn cli_task_flag_unmatched_is_visible_in_the_json(pool: sqlx::PgPool) {
             "implement-widget-01a1f8f5-4b02-72e2-9ae8-000000000000",
             "not_found",
         ),
+        ("widget", "lookup_failed"),
     ];
     for (i, (needle, status)) in cases.iter().enumerate() {
         let created = create_session_via_cli(&app, &format!("Unlinked Session {i}"), needle).await;

@@ -186,8 +186,9 @@ pub fn find_task(config: &Config, needle: &str, context: Option<&str>) -> Result
 ///
 /// A 404 is `Ok(None)`: the ref names nothing this caller can read. A resource of another doctype
 /// is an error naming what it is, so `--task <a session's ref>` never links a session to a
-/// session. `context` stamps the [`TaskInfo`] only when the row carries no context ref of its own
-/// (a cogmap-homed task).
+/// session. The [`TaskInfo`]'s `context` is the row's own context ref (`@owner/slug`), and the
+/// caller's `context` only when the row carries none (a cogmap-homed task) — so, unlike the
+/// slug path, which stamps the caller's string as given, it is not comparable across paths.
 fn find_task_by_id(
     id: uuid::Uuid,
     needle: &str,
