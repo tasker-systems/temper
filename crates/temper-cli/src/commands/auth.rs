@@ -398,7 +398,8 @@ async fn resolve_access(client: &TemperClient) -> (Option<Identity>, SystemAcces
 struct AuthStatusReport {
     #[serde(flatten)]
     auth: AuthStatus,
-    /// The API base URL this CLI sends requests to, and so the deployment any grant here is for.
+    /// The API base URL this CLI sends requests, and any grant it holds, to. The stored grant
+    /// records no origin of its own, so this is where it will be presented, not where it was minted.
     /// Read off the built client, so it carries the CLI's own precedence (`TEMPER_API_URL`, then
     /// `[cloud] api_url`) without restating it. Present signed in and signed out: it is
     /// configuration, not grant. `null` only for an in-process client, which has no wire origin.
@@ -817,7 +818,10 @@ mod tests {
     #[test]
     fn status_reports_the_temper_api_url_override() {
         let report = signed_out_status_with(Some("http://127.0.0.1:9/from-env"));
-        assert_eq!(report.api_url.as_deref(), Some("http://127.0.0.1:9/from-env"));
+        assert_eq!(
+            report.api_url.as_deref(),
+            Some("http://127.0.0.1:9/from-env")
+        );
     }
 
     // FAILS IF: signed-in status drops the origin the grant is presented to.
