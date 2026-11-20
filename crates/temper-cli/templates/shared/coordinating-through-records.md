@@ -367,6 +367,51 @@ values. So:
   refused, showing the state its own first attempt produced. Compare `current` with what you meant
   to write before treating the refusal as a loss.
 
+### Needs: read both spellings, write `depends_on`, fold a stray
+
+**The convention's default needs key** is `depends_on` in the work item's `open_meta`: an array of
+the work-item ids it waits on. Temper's open-meta schema documents the key, but no write
+normalizes or projects it, so the spelling is your workflow's to keep. As with `claim_id`, any key
+works the same way.
+
+- **Read needs from `depends_on` together with `depends-on`.** Older writers used the hyphen, and
+  both are stored as sent. A work item's needs are the union of the two.
+- **Write `depends_on`.** Never write `depends-on`.
+- **Fold a stray `depends-on`** when you write a work item that carries one, in the same guarded
+  write. Set `depends_on` to the union and `depends-on` to `null`, and expect both keys to hold
+  exactly the values you just read, with `null` for a key that was absent:
+{%- if surface == "cli" %}
+
+  ```bash
+  temper resource meta set <work-item> --managed '{}' \
+    --open '{"depends_on": ["<a>", "<b>"], "depends-on": null}' \
+    --expect '{"open": {"depends_on": ["<a>"], "depends-on": ["<b>"]}}' \
+    --correlation <C> --format json
+  ```
+{%- else %}
+
+  ```json
+  update_resource_meta {"id": "<work item>", "managed_meta": {},
+    "open_meta": {"depends_on": ["<a>", "<b>"], "depends-on": null},
+    "expect": {"open": {"depends_on": ["<a>"], "depends-on": ["<b>"]}},
+    "correlation_id": "<C>"}
+  ```
+{%- endif %}
+
+  - **Echo each array exactly as read, order included.** An array guard holds only when the
+    stored array has the same elements in the same order, so the same ids reordered fail it. This
+    is the one array guard the convention uses; the advice in "Echo values exactly" still holds
+    for every other key.
+  - **A refusal on `depends_on` or `depends-on` means the needs changed since your read.** Read
+    which keys the refusal names first. Then re-read, rebuild the union, and fold again. Never
+    write without the guard: a concurrent writer's need would be lost.
+  - **A refusal can also be your own earlier attempt.** If `depends-on` is now absent and
+    `depends_on` holds the union you meant to write, the fold landed.
+  - **You may add the expectations of your other keys** to the same write, such as `claim_id`
+    equal to your `C`.
+- **Fold only work items.** Leave a hyphenated key on any other resource as it is: how people
+  spell properties on their own records is theirs to choose.
+
 ### Write outcomes with correlation and authorship
 
 - **Commit a `coordination-outcome`**, `{"claim_id": "<C>", "subject": "<work item>", "status": "<your vocabulary>", …}`,
