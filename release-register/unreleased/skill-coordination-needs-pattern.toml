@@ -1,0 +1,19 @@
+title = "The coordination skill teaches a needs pattern: read depends_on with depends-on, write depends_on, fold a stray with a guarded write"
+pr = "self"
+classes = ["additive"]
+surfaces = ["cli-stdout"]
+status = "signal-only"
+
+body = '''
+coordinating-through-records.md, in the skill `temper skill install` writes and in the MCP
+projection under skills/temper-knowledge-base/, gains a "Needs" pattern beside the claim
+patterns. It names open_meta.depends_on as the convention's default needs key, teaches readers to
+take the union of depends_on and the older depends-on spelling, and shows the fold of a stray
+depends-on as one guarded meta write (resource meta set --expect, or update_resource_meta's
+expect) that expects both keys to hold the values just read, refuses on a concurrent change, and
+is retried from a fresh read. Only work items are folded.
+
+No server, CLI or MCP surface changes, and open meta is still not normalized server-side.
+Observed by anyone who installs the skill or the MCP skill bundle. Release relevance: content
+only.
+'''
