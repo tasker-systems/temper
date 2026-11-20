@@ -11,7 +11,8 @@ subscriptions, settings) or when a refusal suggests you lack standing. Flags: `r
   `admin demote` revokes it. Owning the gating team does not make you a system admin; `promote`'s
   `owner` row on a team is a side effect, not the source of admin.
 - **A refusal is the gate working, not a syntax problem.** Check `temper auth status` for your own
-  standing. Escalating past a refusal is an operator decision (a `promote`), never a workaround.
+  standing, and its `api_url` for the deployment you are asking. Escalating past a refusal is an
+  operator decision (a `promote`), never a workaround.
 - **The ledger and erasure deny as 404, never 403.** The ledger is gated per act family; there,
   "you may not read that" and "there is nothing there" are deliberately indistinguishable.
 - **The CLI is the whole operator surface.** The MCP tree carries no admin tools.
