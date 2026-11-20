@@ -1607,7 +1607,7 @@ pub async fn formation_touched_since(
 ///
 /// Deliberately CHEAP — one scalar `count(*)` over the anchor-scoped event slice — so it can gate the
 /// materialize path without itself being as expensive as the load-and-cluster it guards (T4b).
-/// "After" is id order, as [`touched_since`]'s is.
+/// "After" is id order, as `touched_since`'s is.
 pub async fn formation_touched_count_since(
     pool: &PgPool,
     anchor: HomeAnchor,
@@ -1679,7 +1679,7 @@ pub async fn resource_deleted_since(
 /// over-trigger the per-component decomposition removed, kept removed one layer up). Shares the
 /// `CONTENT_EVENTS` set + anchor-scoping with [`formation_touched_since`] so the gates can never
 /// disagree on "what is a content touch". Empty ⇒ no readout-refresh work this pass. "After" is
-/// id order, as [`touched_since`]'s is.
+/// id order, as `touched_since`'s is.
 pub async fn content_touched_resources_since(
     pool: &PgPool,
     anchor: HomeAnchor,
