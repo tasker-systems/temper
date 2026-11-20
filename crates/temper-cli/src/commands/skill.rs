@@ -202,11 +202,12 @@ file (`2>err.log`) and read it separately.
 
 ## A Failed Pipe Is Not a Failed Write
 
-A write can land while its answer is lost. First read `temper`'s own exit code (in a bash pipeline,
-`${PIPESTATUS[0]}`) and stdout: exit 0, or a failure whose stdout carries a `code`, is a known
-outcome. A `jq` error, a timeout, or no readable stdout says only that your side failed to read
-the answer, not that the write failed. Before retrying a create or a commit, check whether it
-landed, and retry only when it did not:
+A write can land while its answer is lost. Read `temper`'s own answer, not the pipe's: write
+stdout to a file (`temper … >out.json 2>err.log; echo $?`) and parse the file. Exit 0, or a
+failure whose `code` is anything but `network`, is a known outcome. A `network` code, a timeout or
+no readable stdout means the outcome is unknown: the write may have landed. Before retrying a
+create or a commit whose outcome is unknown, check whether it landed, and retry only when it did
+not:
 
 - **A resource:** `temper resource list --type <t> --context <ctx> --title-contains "<title>"`.
   A row with your title, created after you sent the write, is almost certainly it; `show` it to
@@ -218,7 +219,7 @@ landed, and retry only when it did not:
   data-artifact list <work-item> --kind <kind>` prints each record's `content`. Look for one
   carrying the `claim_id` you sent.
 - **A guarded meta write** can be retried as it is. If the first attempt landed, the retry comes
-  back refused, and its `current` shows the value you meant to write (see
+  back refused, and its `current` shows the value you meant to write to the guarded key (see
   `coordinating-through-records.md`, *Read the refusal*).
 
 Neither `resource create` nor `data-artifact commit` takes an idempotency key on the CLI, so a
