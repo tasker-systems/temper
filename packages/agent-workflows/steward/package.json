@@ -18,7 +18,7 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "@vercel/connect": "2.9.1",
+    "@vercel/connect": "2.9.4",
     "ai": "^7.0.128",
     "eve": "^0.91.0",
     "openapi-fetch": "^0.17.0",
@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "typescript": "7.0.1-rc",
+    "typescript": "7.0.2",
     "vitest": "^4.1.11"
   },
   "overrides": {
