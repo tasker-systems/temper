@@ -53,11 +53,12 @@ A findings document, not a diary. Its parts, in order:
 
 {% if surface == "cli" -%}
 ```bash
-cat note.md | temper resource create --type session --title "<title>" --context @me/<ctx> --task <task-slug>
+cat note.md | temper resource create --type session --title "<title>" --context @me/<ctx> --task <task-ref>
 ```
-Always pipe the body: without stdin, `create` writes only a title heading. `--task` takes the task's slug
-(its ref without the trailing UUID) and links the note to it, which is how a resume finds the task's
-latest note; an unmatched slug only warns, and the note is saved unlinked. `create` prints the new resource as JSON; its `ref` is what `--from-session` takes.
+Always pipe the body: without stdin, `create` writes only a title heading. `--task` takes the task's ref
+or UUID (or its title slug) and links the note to it, which is how a resume finds the task's latest
+note. An unmatched `--task` still saves the note, unlinked: read `task_link.status` in the JSON, and
+anything but `linked` means no link. `create` prints the new resource as JSON; its `ref` is what `--from-session` takes.
 {%- else -%}
 ```
 Tool: create_resource
