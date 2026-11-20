@@ -202,21 +202,27 @@ file (`2>err.log`) and read it separately.
 
 ## A Failed Pipe Is Not a Failed Write
 
-A write can land while its answer is lost. A `jq` error, a non-zero pipe or a timeout says your
-side failed to read the answer, not that the write failed. Before retrying a create or a commit,
-check whether it landed, and retry only when it did not:
+A write can land while its answer is lost. First read `temper`'s own exit code (in a bash pipeline,
+`${PIPESTATUS[0]}`) and stdout: exit 0, or a failure whose stdout carries a `code`, is a known
+outcome. A `jq` error, a timeout, or no readable stdout says only that your side failed to read
+the answer, not that the write failed. Before retrying a create or a commit, check whether it
+landed, and retry only when it did not:
 
-- **A resource:** `temper resource list --type <t> --context <ctx> --title-contains "<title>"`. A
-  row with your title, created after you sent the write, is it; `show` it to compare its body with
-  what you sent. Two rows with one title and the same `body_hash` are one write landed twice. The
-  stored `body_hash` is not a hash of your local file, so compare rows with each other, not with a
-  hash you compute.
-- **A coordinated write:** look for the `claim_id` it carried. `temper data-artifact list
-  <work-item> --kind <kind>` prints each record's `content`, and a guarded meta write that comes
-  back refused shows your own value as `current` (see `coordinating-through-records.md`).
+- **A resource:** `temper resource list --type <t> --context <ctx> --title-contains "<title>"`.
+  A row with your title, created after you sent the write, is almost certainly it; `show` it to
+  compare its body with what you sent. The match is a substring and the page is 20 rows, so read
+  `truncated`. Two rows with one title and the same `body_hash` are almost certainly one write
+  landed twice, and the later one is the duplicate. The stored `body_hash` is not a hash of your
+  local file, so compare rows with each other, not with a hash you compute.
+- **A data-artifact commit** (such as a `coordination-claim` or `coordination-outcome`): `temper
+  data-artifact list <work-item> --kind <kind>` prints each record's `content`. Look for one
+  carrying the `claim_id` you sent.
+- **A guarded meta write** can be retried as it is. If the first attempt landed, the retry comes
+  back refused, and its `current` shows the value you meant to write (see
+  `coordinating-through-records.md`, *Read the refusal*).
 
-Neither `resource create` nor `data-artifact commit` takes an idempotency key, so a blind retry of
-a write that landed leaves a duplicate.
+Neither `resource create` nor `data-artifact commit` takes an idempotency key on the CLI, so a
+blind retry of a write that landed leaves a duplicate.
 
 ## Skill-Only Commands
 
