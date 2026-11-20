@@ -1,0 +1,19 @@
+title    = "The erasure record tables and the refusal vocabulary land, and the erasure-policy manifest moves to format 2"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["schema", "erasure-policy"]
+status   = "signal-only"
+body = '''
+New tables carry the erasure record (the erasures, their members and their batches) and the closed
+refusal vocabulary, kb_erasure_refusal_reasons, seeded with four codes: charter_resource, defect,
+batch_fatal and unclassified. Nothing writes the record tables yet.
+
+The erasure-policy manifest gains a [refusal_reasons] section in estate.toml, one code per entry with
+its meaning, and its format moves from 1 to 2: manifest.toml and the parser change together, and a
+parser refuses the format it was not written for. The vocabulary has four copies (the manifest, the
+table, the system.yaml bootseed rows and temper-core's ErasureMemberRefusalReason), held equal by
+crates/temper-services/tests/erasure_refusal_vocabulary_test.rs.
+
+Who observes: an operator embedding a manifest of another format, and a reader of the schema. No
+response shape changes. Release relevance: signal-only.
+'''

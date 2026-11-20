@@ -226,6 +226,37 @@ pub enum RecordedRefusalReason {
     ProjectionDisagrees,
 }
 
+/// The drain's closed refusal vocabulary: why an erasure member was set aside rather than erased.
+/// Mirrored by the `kb_erasure_refusal_reasons` table, `policy/erasure/estate.toml`'s
+/// `[refusal_reasons]` and the `erasure_refusal_reasons` seeds in `system.yaml`; a test holds the
+/// four copies equal. Distinct from [`RecordedRefusalReason`], which is the single-resource doors'
+/// ledger vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ErasureMemberRefusalReason {
+    /// The item is a cogmap's telos or charter resource, which only map-grain erasure erases.
+    CharterResource,
+    /// A verifier raised on the item, so only a code or data fix lets it finish.
+    Defect,
+    /// The item failed its batch alone until the reaper set it aside.
+    BatchFatal,
+    /// The item's unit raised an error that no other code names.
+    Unclassified,
+}
+
+/// A table whose rows an erasure member can name. Serializes as the DDL spells the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ErasureMemberTable {
+    KbResources,
+    KbContexts,
+    KbCogmaps,
+    KbBlobs,
+    KbEdges,
+}
+
 impl From<ResourceErasureRefusalReason> for RecordedRefusalReason {
     fn from(reason: ResourceErasureRefusalReason) -> Self {
         match reason {

@@ -13,7 +13,7 @@ This README is the map across the five. Read it first, then the header of the fi
 | File | Declares | At what grain |
 |------|----------|---------------|
 | `manifest.toml` | The manifest's `format`. A parser refuses any format it was not written for. | — |
-| `estate.toml` | What an erasure holds and how it reaches each table's rows. `scope` lists the rules that put containers in an estate. `[tables]` gives every content or identity table exactly one **grain**: `per-item`, `covered`, `identity` or `declared-out`. | table |
+| `estate.toml` | What an erasure holds and how it reaches each table's rows. `scope` lists the rules that put containers in an estate. `[refusal_reasons]` is the closed vocabulary of why an erasure member is set aside, each code with its meaning. `[tables]` gives every content or identity table exactly one **grain**: `per-item`, `covered`, `identity` or `declared-out`. | table, refusal code |
 | `personal-data.toml` | For each column a structural derivation nominates: the **class** of personal data it holds, the **ceiling** on how far erasure could reach it, and the **achieved** reach of the person act. | column |
 | `sensitivity-scan.toml` | Every `text`/`varchar` column that `personal-data.toml` does *not* declare, each with a **disposition**: `scan`, `structural`, `credential` or `out-of-scope`. | column |
 | `resource-erasure.toml` | What the resource-erasure act does with every **carrier** column a resource reaches (`[tables]`), and with every free-text path in that resource's ledger payloads (`[payload]`). | column, payload path |
@@ -127,5 +127,9 @@ Any change to this directory is gated three ways:
   pipeline runs, fences included.
 - **Deploy.** `vercel-ignore-build.sh` deploys on a `policy/` change, because the server embeds
   these files.
+
+The refusal codes have four copies, held equal by `erasure_refusal_vocabulary_test.rs`: `estate.toml`'s
+`[refusal_reasons]`, the `kb_erasure_refusal_reasons` table, the `erasure_refusal_reasons` seeds in
+`system.yaml`, and `ErasureMemberRefusalReason` in temper-core. Adding a code changes all four.
 
 A change to the TOML format itself bumps `format` in `manifest.toml` and the parser together.

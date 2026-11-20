@@ -90,6 +90,19 @@ pub async fn seed_system(pool: &PgPool) -> Result<()> {
         .await?;
     }
 
+    // The drain's refusal vocabulary. The migration seeds it; `reset_schema` truncates it, so this
+    // refills it, idempotently.
+    for r in &boot.erasure_refusal_reasons {
+        sqlx::query!(
+            "INSERT INTO kb_erasure_refusal_reasons (code, meaning) VALUES ($1, $2) \
+             ON CONFLICT (code) DO UPDATE SET meaning = EXCLUDED.meaning",
+            r.code,
+            r.meaning
+        )
+        .execute(pool)
+        .await?;
+    }
+
     // THE ONE DELIBERATE EXCEPTION to D11 (F6). On a fresh instance no admin exists, so nobody
     // could ever be approved and the instance would be permanently unusable. Accepted, not worked
     // around: bootstrapping temper already requires database write access. The `system` profile is

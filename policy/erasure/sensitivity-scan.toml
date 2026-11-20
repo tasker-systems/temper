@@ -167,7 +167,7 @@ declared_count = 173
 "kb_erasure_members.refusal_reason"               = { disposition = "structural", note = "closed vocabulary, FK to kb_erasure_refusal_reasons" }
 "kb_erasure_members.refusal_sqlstate"             = { disposition = "structural", note = "a five-character SQLSTATE (CHECK)" }
 "kb_erasure_members.refusal_routine"              = { disposition = "structural", note = "the name of the routine that raised, never its message" }
-"kb_erasure_refusal_reasons.code"                 = { disposition = "structural", note = "closed vocabulary (ErasureRefusalReason)" }
+"kb_erasure_refusal_reasons.code"                 = { disposition = "structural", note = "closed vocabulary (ErasureMemberRefusalReason)" }
 "kb_erasure_refusal_reasons.meaning"              = { disposition = "structural", note = "the fixed meaning of a code, seeded by migration and held equal to estate.toml" }
 "kb_data_artifact_shapes.artifact_kind"           = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name" }
 "kb_data_artifacts.artifact_kind"                 = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name" }

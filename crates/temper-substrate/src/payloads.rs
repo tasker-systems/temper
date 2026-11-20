@@ -23,9 +23,9 @@ use std::collections::{BTreeMap, HashMap};
 // The erasure family's wire shapes live in temper-core (every wire type does); the ledger payloads
 // below embed some of them, re-exported here so `payloads::` stays a complete vocabulary.
 pub use temper_core::types::erasure::{
-    ErasureAct, ErasureTargetOutcome, RecordedRefusalReason, RedactedEventFields,
-    ResourceErasureRefusalReason, RetainedCategory, RetentionCategory, ScrubFieldKind,
-    ScrubbedField,
+    ErasureAct, ErasureMemberRefusalReason, ErasureMemberTable, ErasureTargetOutcome,
+    RecordedRefusalReason, RedactedEventFields, ResourceErasureRefusalReason, RetainedCategory,
+    RetentionCategory, ScrubFieldKind, ScrubbedField,
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::property_owner::PropertyOwner;

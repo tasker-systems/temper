@@ -1,11 +1,15 @@
 # The erasure estate: what an erasure holds, and how it reaches each table's rows.
 #
 # An estate is the set of containers an erasure takes in, and everything homed in them. This file
-# says two things about it:
+# says three things about it:
 #
 #   * scope   the rules that put containers in an estate, each with the mechanism that selects
 #             its set.
 #   * tables  one grain per table: how an erasure reaches the table's rows.
+#   * refusal_reasons  the closed vocabulary of why an erasure member is set aside rather than
+#             erased: one code per entry, each with its meaning. The same set, codes and meanings,
+#             as the kb_erasure_refusal_reasons table, the `erasure_refusal_reasons` seeds in
+#             system.yaml and temper-core's ErasureMemberRefusalReason; a test holds the four equal.
 #
 # THE GRAINS.
 #
@@ -58,6 +62,9 @@
 # FORMAT (TOML; `#` comments and blank lines ignored)
 #   scope = [ { rule = "<the set, in words>", mechanism = <mechanism> }, … ]
 #
+#   [refusal_reasons]
+#   <code> = { meaning = "<what the code says about the item>" }                (one per code)
+#
 #   [tables.<table>]
 #   note = "<note>"                                                             (optional)
 #   [tables.<table>.grain]
@@ -95,6 +102,12 @@ scope = [
   { rule = "the subject's personal team's contexts (kb_teams.personal_of)", mechanism = { bound = "_erasure_estate_contexts" } },
   { rule = "cogmaps whose only kb_team_cogmaps row is the personal team", mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "cogmaps whose only kb_team_cogmaps row is the personal team" } } },
 ]
+
+[refusal_reasons]
+charter_resource = { meaning = "The item is a cogmap's telos or charter resource, which only map-grain erasure erases." }
+defect = { meaning = "A verifier raised on the item, so only a code or data fix lets it finish." }
+batch_fatal = { meaning = "The item failed its batch alone until the reaper set it aside." }
+unclassified = { meaning = "The item's unit raised an error that no other code names." }
 
 [tables]
 
