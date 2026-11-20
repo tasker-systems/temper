@@ -10,11 +10,12 @@ on `resource update --open-meta` or `--open-meta-add` (or a named add flag such 
 reaches the server, whose `validate_open_meta_shape` refuses it, as `resource create` already did.
 Nothing is written, before or after, and the exit code stays 1.
 
-The stdout error payload changes. Before: code `bad-request`, message `Bad request: invalid
---open-meta shape: /descriptor: 42 is not of type "string". Run ...`. After: code `api`, message
-`API error: server error (400): Bad request: invalid open_meta shape: /descriptor: 42 is not of type
-"string". A recognized open_meta key carries the wrong shape; run ...`, which is how the CLI renders
-every untyped server 400. A caller branching on `bad-request` for this refusal now sees `api`.
+The stdout error payload keeps its kind and changes only its message, which is now the server's.
+Before: code `bad-request`, message `Bad request: invalid --open-meta shape: /descriptor: 42 is not
+of type "string". Run ...`. After: code `bad-request`, message `Bad request: invalid open_meta
+shape: /descriptor: 42 is not of type "string". A recognized open_meta key carries the wrong shape;
+run ...`. The kind holds because a readable server `BAD_REQUEST` reaches the CLI as `bad-request`
+(cli-server-bad-request-keeps-its-kind).
 
 Unchanged: `{"tags":null}` on update still deletes the key; the discouraged-key warning (a bare
 `slug` or `title`) still prints on stderr. Observed by CLI callers that send a mis-shaped recognized
