@@ -59,6 +59,7 @@ It answers in two independent parts. `query` says whether the server could be re
 {
   "authenticated": true,
   "expires_at": "2026-08-27T11:20:24Z",
+  "api_url": "https://<instance>",
   "identity": { "profile_id": "019d4add-…", "handle": "@your-handle" },
   "system_access": {
     "query": "reachable",
@@ -68,7 +69,9 @@ It answers in two independent parts. `query` says whether the server could be re
 ```
 
 `authenticated` is a local check of the cached token against its expiry; `identity` and
-`entitlement` come from the server. `standing` is the authoritative state, and when there is
+`entitlement` come from the server. `api_url` is the API the CLI sends requests to —
+`TEMPER_API_URL` when set, else `[cloud] api_url` — and so the deployment the grant is for; it is
+reported whether or not you are signed in. `standing` is the authoritative state, and when there is
 something you can do about it the command prints the command to run on stderr.
 
 ### 3. Request access

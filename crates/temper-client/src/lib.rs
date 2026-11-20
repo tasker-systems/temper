@@ -139,6 +139,13 @@ impl TemperClient {
         self.http.is_ambient()
     }
 
+    /// The API base URL this client sends every request to — the value
+    /// [`config::api_url`] resolved when the client was built, so a caller reporting it reports
+    /// the same origin the requests use. `None` for an in-process client.
+    pub fn base_url(&self) -> Option<&str> {
+        self.http.base_url()
+    }
+
     /// Create an in-process client with a pre-resolved token override.
     ///
     /// The wire-less counterpart of [`Self::with_token`]: every request is driven through

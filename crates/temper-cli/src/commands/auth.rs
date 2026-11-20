@@ -398,6 +398,11 @@ async fn resolve_access(client: &TemperClient) -> (Option<Identity>, SystemAcces
 struct AuthStatusReport {
     #[serde(flatten)]
     auth: AuthStatus,
+    /// The API base URL this CLI sends requests to, and so the deployment any grant here is for.
+    /// Read off the built client, so it carries the CLI's own precedence (`TEMPER_API_URL`, then
+    /// `[cloud] api_url`) without restating it. Present signed in and signed out: it is
+    /// configuration, not grant. `null` only for an in-process client, which has no wire origin.
+    api_url: Option<String>,
     /// `"ambient"` when the credential is held outside the process (`TEMPER_AUTH=ambient`);
     /// absent otherwise, so the default shape is unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -484,6 +489,7 @@ async fn status_report(client: &TemperClient) -> Result<AuthStatusReport> {
     }
     Ok(AuthStatusReport {
         auth,
+        api_url: client.base_url().map(str::to_owned),
         credential: ambient.then_some("ambient"),
         identity,
         system_access,
@@ -705,8 +711,12 @@ mod tests {
         );
     }
 
-    /// An ambient client against a real server answering `GET /api/profile` with `status`.
-    async fn ambient_status_against(status: u16, body: serde_json::Value) -> AuthStatusReport {
+    /// An ambient client against a real server answering `GET /api/profile` with `status`, and
+    /// that server's URI.
+    async fn ambient_status_against(
+        status: u16,
+        body: serde_json::Value,
+    ) -> (AuthStatusReport, String) {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/api/profile"))
@@ -719,7 +729,8 @@ mod tests {
             &temper_client::auth::AmbientAuth::default(),
         )
         .expect("loopback validates");
-        status_report(&client).await.expect("status assembles")
+        let report = status_report(&client).await.expect("status assembles");
+        (report, server.uri())
     }
 
     // FAILS IF: ambient status skips the round trip (the local store is empty, so without it the
@@ -734,7 +745,7 @@ mod tests {
             "join_request_status": null,
             "standing": "approved"
         });
-        let report = ambient_status_against(200, body).await;
+        let (report, _) = ambient_status_against(200, body).await;
         assert!(report.auth.authenticated);
         assert_eq!(report.credential, Some("ambient"));
         assert_eq!(
@@ -746,7 +757,7 @@ mod tests {
     #[tokio::test]
     async fn ambient_status_is_unauthenticated_when_the_server_refuses() {
         let body = serde_json::json!({"error": {"code": "UNAUTHORIZED", "message": "Missing Authorization header"}});
-        let report = ambient_status_against(401, body).await;
+        let (report, _) = ambient_status_against(401, body).await;
         assert!(!report.auth.authenticated);
         assert_eq!(report.credential, Some("ambient"));
         assert!(report.identity.is_none());
@@ -754,6 +765,74 @@ mod tests {
             report.system_access.as_ref().map(|a| &a.query),
             Some(AccessQuery::Unauthenticated)
         ));
+    }
+
+    /// `auth status` assembled through the CLI's own config → store → client path, signed out
+    /// (an empty auth path, no `TEMPER_TOKEN`), with the global config pinned to a tempdir.
+    fn signed_out_status_with(api_url_env: Option<&str>) -> AuthStatusReport {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let mut config = temper_core::types::config::TemperConfig::default();
+        config.cloud.api_url = "http://127.0.0.1:9/from-config".to_owned();
+        std::fs::write(&config_path, toml::to_string(&config).unwrap()).unwrap();
+        let auth_path = dir.path().join("auth.json");
+        temp_env::with_vars(
+            [
+                ("TEMPER_GLOBAL_CONFIG", Some(config_path.to_str().unwrap())),
+                ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
+                ("TEMPER_AUTH", None),
+                ("TEMPER_TOKEN", None),
+                ("TEMPER_API_URL", api_url_env),
+            ],
+            || {
+                let (_config, _store, client) =
+                    crate::actions::runtime::build_config_store_and_client()
+                        .expect("client builds signed out");
+                tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(status_report(&client))
+                    .expect("status assembles")
+            },
+        )
+    }
+
+    // FAILS IF: signed-out status omits the origin, or reads it from anywhere but the config the
+    // CLI's requests would use.
+    #[test]
+    fn signed_out_status_reports_the_configured_api_url() {
+        let report = signed_out_status_with(None);
+        assert!(!report.auth.authenticated);
+        assert_eq!(
+            report.api_url.as_deref(),
+            Some("http://127.0.0.1:9/from-config")
+        );
+        let out = crate::format::render(&report, OutputFormat::Json).expect("json render");
+        assert!(
+            out.contains("\"api_url\": \"http://127.0.0.1:9/from-config\""),
+            "json: {out}"
+        );
+    }
+
+    // FAILS IF: `TEMPER_API_URL` does not outrank `[cloud] api_url` in what status reports.
+    #[test]
+    fn status_reports_the_temper_api_url_override() {
+        let report = signed_out_status_with(Some("http://127.0.0.1:9/from-env"));
+        assert_eq!(report.api_url.as_deref(), Some("http://127.0.0.1:9/from-env"));
+    }
+
+    // FAILS IF: signed-in status drops the origin the grant is presented to.
+    #[tokio::test]
+    async fn signed_in_status_reports_the_api_url_requests_go_to() {
+        let mut body: serde_json::Value = serde_json::from_str(&profile_body()).unwrap();
+        body["entitlements"] = serde_json::json!({
+            "system_access": true,
+            "is_admin": false,
+            "join_request_status": null,
+            "standing": "approved"
+        });
+        let (report, uri) = ambient_status_against(200, body).await;
+        assert!(report.auth.authenticated, "the server named us");
+        assert_eq!(report.api_url.as_deref(), Some(uri.as_str()));
     }
 
     #[test]
@@ -767,6 +846,7 @@ mod tests {
     fn the_ambient_credential_is_named_in_the_status_payload() {
         let report = AuthStatusReport {
             auth: make_auth_status(false),
+            api_url: None,
             credential: Some("ambient"),
             identity: None,
             system_access: None,

@@ -410,6 +410,15 @@ impl HttpClient {
         self.ambient
     }
 
+    /// The base URL every request is sent to, as the client holds it (trailing `/` trimmed).
+    /// `None` on the in-process transport, which has no wire origin.
+    pub fn base_url(&self) -> Option<&str> {
+        match &self.transport {
+            Transport::Http { base_url } => Some(base_url),
+            Transport::InProcess(_) => None,
+        }
+    }
+
     /// Attach constructor-level default headers — appended to every request this
     /// client sends, both transports, riding retries in one place (see the field's
     /// doc). Consuming-builder style over an already-constructed client, so the
