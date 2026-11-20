@@ -1,0 +1,13 @@
+title    = "`temper auth status` reports the `api_url` the grant is for"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+`temper auth status` gains an `api_url` field: the API base URL the CLI sends requests to, read off
+the built client so it carries the CLI's own precedence (`TEMPER_API_URL`, then `[cloud] api_url`).
+It is present signed in and signed out. Who observes: CLI users and any caller that borrows the
+CLI's grant (`temper auth export-token`) and needs the deployment that grant is for. Rust callers
+of `temperkb-client`: new `TemperClient::base_url` and `HttpClient::base_url`. Release relevance:
+signal-only; no server or wire change.
+'''
