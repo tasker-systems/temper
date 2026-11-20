@@ -58,11 +58,15 @@ cat note.md | temper resource create --type session --title "<title>" --context 
 Always pipe the body: without stdin, `create` writes only a title heading. `--task` takes the task's slug
 (its ref without the trailing UUID) and links the note to it, which is how a resume finds the task's
 latest note; an unmatched slug only warns, and the note is saved unlinked. `create` prints the new resource as JSON; its `ref` is what `--from-session` takes.
+If you cannot read that JSON, the note may still have been saved. Before you save it again, list
+by `--title-contains` and look for it (`reference.md`, *A Failed Pipe Is Not a Failed Write*).
 {%- else -%}
 ```
 Tool: create_resource
 Input: { "context_ref": "@me/<ctx>", "doc_type_name": "session", "title": "<title>", "content": "<the note>" }
 ```
+If the call times out or its answer is lost, the note may still have been saved. Before you create
+it again, `list_resources` sessions in that context and look for a row with your title.
 {%- endif %}
 
 ## The handoff preamble

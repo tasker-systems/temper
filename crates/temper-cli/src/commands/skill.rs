@@ -196,6 +196,28 @@ Check the exit code before reading output. On failure stdout carries
 `message`. A success may
 carry an advisory `diagnostics` array, which is not a failure.
 
+**Parse stdout alone.** Warnings, hints and tracing go to stderr, so `temper … 2>&1 | jq` fails on
+the first warning ahead of the JSON. Never merge the streams into what you parse: send stderr to a
+file (`2>err.log`) and read it separately.
+
+## A Failed Pipe Is Not a Failed Write
+
+A write can land while its answer is lost. A `jq` error, a non-zero pipe or a timeout says your
+side failed to read the answer, not that the write failed. Before retrying a create or a commit,
+check whether it landed, and retry only when it did not:
+
+- **A resource:** `temper resource list --type <t> --context <ctx> --title-contains "<title>"`. A
+  row with your title, created after you sent the write, is it; `show` it to compare its body with
+  what you sent. Two rows with one title and the same `body_hash` are one write landed twice. The
+  stored `body_hash` is not a hash of your local file, so compare rows with each other, not with a
+  hash you compute.
+- **A coordinated write:** look for the `claim_id` it carried. `temper data-artifact list
+  <work-item> --kind <kind>` prints each record's `content`, and a guarded meta write that comes
+  back refused shows your own value as `current` (see `coordinating-through-records.md`).
+
+Neither `resource create` nor `data-artifact commit` takes an idempotency key, so a blind retry of
+a write that landed leaves a duplicate.
+
 ## Skill-Only Commands
 
 Handled by the skill router, not the CLI: `task start <slug>`, `task resume <slug>`, `task create`,

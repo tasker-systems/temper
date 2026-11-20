@@ -276,6 +276,10 @@ a default, so that participants and operators all know where to look.
    - The record is not what decides the claim; the guarded write is.
    - A commit takes no idempotency key, so a retried commit can leave two records with one
      `claim_id`. Readers dedupe by `claim_id`.
+   - **Writers check before retrying.** If a claim or outcome commit's answer is lost, list the
+     work item's records and look for one carrying your `claim_id`:
+     `list_data_artifacts` with `kind`.
+     Commit again only if none does.
 
 **Why only one claimant wins.** The guard is judged under the work item's writer lock, in the
 write's own transaction, so only one write can find `claim_id` absent. A guard checks a value, not a

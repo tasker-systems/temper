@@ -45,6 +45,8 @@ A findings document, not a diary. Its parts, in order:
 Tool: create_resource
 Input: { "context_ref": "@me/<ctx>", "doc_type_name": "session", "title": "<title>", "content": "<the note>" }
 ```
+If the call times out or its answer is lost, the note may still have been saved. Before you create
+it again, `list_resources` sessions in that context and look for a row with your title.
 
 ## The handoff preamble
 
