@@ -1,4 +1,4 @@
-import { WAY_IN_BOUND, WAYS_IN } from '@tasker-systems/temper-design/ways-in';
+import { WAY_IN_BOUND, WAY_IN_MAX, WAYS_IN } from '@tasker-systems/temper-design/ways-in';
 import { describe, expect, it } from 'vitest';
 import type { ContextActivity, ContextRowWithCounts } from '$lib/types';
 import { makeRow } from '../test/fixtures';
@@ -10,7 +10,6 @@ import {
 	recentPath,
 	resumeOf,
 	resumePath,
-	WAY_IN_MAX,
 	wayInMoreHref,
 	wayInShown,
 } from './first-view';

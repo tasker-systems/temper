@@ -1,0 +1,14 @@
+title    = "`@tasker-systems/temper-design/ways-in` exports `WAY_IN_MAX`, the cap Show more grows a way in to; the web imports it from there"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+`./ways-in` gains `WAY_IN_MAX` (200) beside `WAY_IN_BOUND`: the most rows a way in grows to, a
+bound at a time, before a surface stops offering more. The web's first view held the same constant
+locally; it now imports it from the package, so there is one definition. Neither value changed.
+
+Who observes it: a surface importing the package (the Orca rail's Home, which mirrors the web's
+first view, can drop its local copy). User-visible: no. Release relevance: additive (one export).
+Witness: packages/temper-design/src/ways-in.test.ts (grow by the bound, up to a cap above it).
+'''
