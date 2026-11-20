@@ -1,0 +1,23 @@
+title    = "resource create's --task resolves a ref or bare UUID by id, and the create's JSON reports the link as task_link"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+`temper resource create --type session --task <x>` matched only the task's title slug (exact,
+suffix or seq number), so a ref or UUID copied from list output never linked, and the miss showed
+only as a tracing warn on stderr.
+
+- Behavioral (cli-stdout): a `--task` value that parses as a ref (`<slug>-<uuid>`) or a bare UUID
+  is resolved by id, from any context the caller can read; its slug half is ignored. A ref that
+  names nothing is not found, and one naming a resource that is not a task is refused by the
+  lookup. It never falls back to slug matching. Anything else is matched as before.
+- Additive (cli-stdout): when `--task` is given, the create's JSON carries `task_link`, with a
+  `status` of `linked` (`task_id`, `task_ref`, `edge_handle`), `not_found`, `lookup_failed` or
+  `assert_failed` (each with a `detail`), plus `requested`, the value as given. It is absent
+  without `--task`. The exit code is still 0 when the link is skipped: the session was created.
+
+Who observes it: agents that save session notes with `--task`; they can now pass the ref they
+copied, and tell from stdout whether the link landed.
+Release relevance: signal-only.
+'''
