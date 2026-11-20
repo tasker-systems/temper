@@ -2494,6 +2494,33 @@ pub const TYPED_EVENT_NAMES: [&str; 47] = [
 /// retired kind keeps its arm. Empty until the first retirement.
 pub const WRITE_RETIRED: [&str; 0] = [];
 
+// The erasure event classes. Every live SQL function and every `crates/*/src` file that names an
+// erasure-family kind is rostered either to one of these classes, and must then name the whole
+// class, or as a reader or writer of its own kinds (temper-services
+// `erasure_event_name_consumers_test`, spec D7.6). A kind added to a class therefore fails every
+// consumer of that class that does not yet name it.
+
+/// The kinds whose event is an item's own erasure authority: the event that erases one item and
+/// is named as that item's `erased_by_event_id`.
+pub const PER_ITEM_AUTHORITY_KINDS: [&str; 1] = ["resource_erased"];
+
+/// The kinds that authorise a ledger redaction: each projects `kb_event_field_redactions` rows
+/// under its own `authority`, and a reader of those rows maps each authority back to its kind.
+pub const REDACTION_AUTHORITY_KINDS: [&str; 3] =
+    ["resource_erased", "resource_scrubbed", "principal_erased"];
+
+/// The kinds whose payload `targets` name blobs to strike: the blob fence seeds from them.
+pub const STRIKE_SOURCE_KINDS: [&str; 2] = ["resource_erased", "principal_erased"];
+
+/// The admin erasure acts, as `_event_is_admin_act` lists them: an event correlated to one of
+/// these is the act's own work, not a reader-visible change.
+pub const ADMIN_ACT_KINDS: [&str; 4] = [
+    "resource_erased",
+    "principal_erased",
+    "resource_scrubbed",
+    "block_history_scrubbed",
+];
+
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
 /// remote system's, whose shape temper does not control and cannot publish. They are deliberately
 /// absent from [`TYPED_EVENT_NAMES`] (no schema to snapshot, nothing for the boot-seed to stamp).
