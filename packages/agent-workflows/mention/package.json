@@ -25,7 +25,7 @@
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "typescript": "7.0.1-rc",
+    "typescript": "7.0.2",
     "vitest": "^4.1.11"
   },
   "overrides": {
