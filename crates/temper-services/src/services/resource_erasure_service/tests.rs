@@ -644,6 +644,7 @@ async fn a_cut1_husk_surveys_its_completion_and_completes_once(pool: PgPool) {
     sqlx::query(
         "SELECT _resource_erasure_apply_redaction($1, _event_append('resource_erased', $2, NULL, NULL, \
              jsonb_build_object('subject_table', 'kb_resources', 'subject_id', $1, \
+                                'targets', '[]'::jsonb, \
                                 'ledger_remainder', resource_erasure_survey_plan($1)->'redacted_fields')))",
     )
     .bind(r.uuid())

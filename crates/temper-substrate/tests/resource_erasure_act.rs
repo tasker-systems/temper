@@ -4709,13 +4709,7 @@ async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::Pg
 
     // The act's events, erasure first, one transaction (one backend), one correlation id.
     let correlation = Uuid::now_v7();
-    let mut tx = pool.begin().await.unwrap();
-    let erasure: Uuid = sqlx::query_scalar(
-        "SELECT _event_append('resource_erased', $1, NULL, NULL, $2, \
-                              p_references => $3, p_correlation => $4)",
-    )
-    .bind(emitter)
-    .bind(serde_json::json!({
+    let erasure_payload = serde_json::json!({
         "subject_table": "kb_resources",
         "subject_id": r.uuid(),
         "actor": emitter,
@@ -4724,7 +4718,14 @@ async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::Pg
         "targets": [],
         "remainder": [],
         "ledger_remainder": [],
-    }))
+    });
+    let mut tx = pool.begin().await.unwrap();
+    let erasure: Uuid = sqlx::query_scalar(
+        "SELECT _event_append('resource_erased', $1, NULL, NULL, $2, \
+                              p_references => $3, p_correlation => $4)",
+    )
+    .bind(emitter)
+    .bind(&erasure_payload)
     .bind(serde_json::json!([
         {"rel": "subject", "target": {"kind": "kb_resources", "id": r.uuid()}},
         {"rel": "request", "target": {"kind": "kb_events", "id": correlation}},
@@ -4733,6 +4734,14 @@ async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::Pg
     .fetch_one(&mut *tx)
     .await
     .expect("append the erasure first");
+    // Projected as the act projects it: replay calls the same wrapper at this event, so the
+    // live ledger must carry the legacy erasure that wrapper records.
+    sqlx::query("SELECT _project_resource_erased_redactions($1, $2)")
+        .bind(erasure)
+        .bind(&erasure_payload)
+        .execute(&mut *tx)
+        .await
+        .expect("project the erasure as the act does");
     for edge in &edges {
         let payload = serde_json::json!({"edge_id": edge, "reason": "resource_erased"});
         let fold: Uuid = sqlx::query_scalar(
@@ -5012,6 +5021,11 @@ async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgP
 /// names no `redacted_fields` and records every ledger path it left in `ledger_remainder`, then the
 /// projection-side body. The ledger's text is untouched. Cut 2's act no longer makes one, but every
 /// resource erased before it shipped is one until the completion pass reaches it.
+///
+/// After the act commits, `_erasure_legacy_backfill()` runs, as `20261201000030` runs it over a
+/// ledger erased before the erasure record existed: the first record's `erased` legacy erasure,
+/// and a second, `pending`, legacy erasure declared because the husk still owes its completion
+/// pass.
 async fn simulate_cut1_husk(pool: &PgPool, resource: Uuid) -> Uuid {
     let (operator, emitter) = system_actor(pool).await;
     let request_ref = Uuid::now_v7();
@@ -5060,6 +5074,16 @@ async fn simulate_cut1_husk(pool: &PgPool, resource: Uuid) -> Uuid {
         .await
         .unwrap();
     tx.commit().await.unwrap();
+    // Two milliseconds either side: uuid_generate_v7() has no order within a millisecond
+    // (20261116000010), and replay walks in id order, so the backfill's erasure_declared must
+    // sort after the first record and before whatever the test appends next.
+    for statement in [
+        "SELECT pg_sleep(0.002)",
+        "SELECT _erasure_legacy_backfill()",
+        "SELECT pg_sleep(0.002)",
+    ] {
+        sqlx::query(statement).execute(pool).await.unwrap();
+    }
     erased
 }
 
@@ -6825,7 +6849,9 @@ async fn a_cut1_husk_completes_once_and_replays_byte_identical(pool: sqlx::PgPoo
     // The body changed nothing but its two stamps: only the redaction rows (and the ledger,
     // which is not a projection) moved, plus the two columns the body stamps from the erasing
     // event, as replay's arm does at the record's position: `kb_resources.updated` (its
-    // occurred_at, asserted below) and `kb_properties.last_event_id` (its id).
+    // occurred_at, asserted below) and `kb_properties.last_event_id` (its id). The record also
+    // closes the husk's `pending` legacy member, which `_erasure_legacy_backfill` declared:
+    // `status` becomes `erased` and `erased_by_event_id` the completion record.
     let projection_after = replay::dump_projections(&pool).await.unwrap();
     for ((table, a), (_, b)) in projection_before.iter().zip(projection_after.iter()) {
         if table != "kb_event_field_redactions" && a != b {
@@ -6846,6 +6872,11 @@ async fn a_cut1_husk_completes_once_and_replays_byte_identical(pool: sqlx::PgPoo
                                     && k.as_str() == "last_event_id"
                                     && y[k.as_str()] == serde_json::json!(completion)
                                     && **v != y[k.as_str()])
+                                && !(table == "kb_erasure_members"
+                                    && y["member_id"] == serde_json::json!(r)
+                                    && y["erased_by_event_id"] == serde_json::json!(completion)
+                                    && x["status"] == "pending"
+                                    && matches!(k.as_str(), "status" | "erased_by_event_id"))
                         })
                         .map(|(k, v)| format!("{k}: {v} -> {}", y[k.as_str()]))
                         .collect::<Vec<_>>()
@@ -6872,6 +6903,25 @@ async fn a_cut1_husk_completes_once_and_replays_byte_identical(pool: sqlx::PgPoo
     assert!(
         stamped,
         "the husk's updated is the completion record's occurred_at"
+    );
+    let legacy: Vec<(String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT m.status, m.erased_by_event_id FROM kb_erasure_members m \
+           JOIN kb_erasures e ON e.id = m.erasure_id \
+          WHERE e.legacy AND m.member_table = 'kb_resources' AND m.member_id = $1 \
+          ORDER BY e.declared_event_id <> $2",
+    )
+    .bind(r)
+    .bind(first)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        legacy,
+        vec![
+            ("erased".to_owned(), Some(first)),
+            ("erased".to_owned(), Some(completion)),
+        ],
+        "the first record's legacy member, and the backfill's, closed by the completion record"
     );
 
     // A third run has nothing left: refused, nothing changes.

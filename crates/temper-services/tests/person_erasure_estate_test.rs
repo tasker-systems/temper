@@ -409,7 +409,8 @@ async fn two_estate_resources_sharing_an_edge_are_erased_in_one_act(pool: PgPool
 
 /// A husk as cut 1 left it (the substrate witness `simulate_cut1_husk`'s shape): a
 /// `resource_erased` naming no `redacted_fields`, and the projection-side body, with the ledger's
-/// text untouched.
+/// text untouched. After it commits, `_erasure_legacy_backfill()` runs, as `20261201000030` runs it
+/// over a ledger erased before the erasure record existed.
 async fn simulate_cut1_husk(pool: &PgPool, p: &Person, resource: Uuid) {
     let request_ref = Uuid::now_v7();
     let mut tx = pool.begin().await.unwrap();
@@ -444,6 +445,16 @@ async fn simulate_cut1_husk(pool: &PgPool, p: &Person, resource: Uuid) {
         .await
         .unwrap();
     tx.commit().await.unwrap();
+    // Two milliseconds either side: uuid_generate_v7() has no order within a millisecond
+    // (20261116000010), and replay walks in id order, so the backfill's erasure_declared must
+    // sort after the first record and before whatever the test appends next.
+    for statement in [
+        "SELECT pg_sleep(0.002)",
+        "SELECT _erasure_legacy_backfill()",
+        "SELECT pg_sleep(0.002)",
+    ] {
+        sqlx::query(statement).execute(pool).await.unwrap();
+    }
 }
 
 /// W6. FAILS IF an already-erased resource raises or is erased twice: a husk the resource act left
