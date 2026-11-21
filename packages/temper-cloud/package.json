@@ -25,7 +25,7 @@
     "@biomejs/biome": "^2.5.15",
     "@types/node": "^22",
     "@xmldom/xmldom": "^0.9.10",
-    "docx": "^9.15.3",
+    "docx": "^9.15.4",
     "pdf-lib": "^1.17.1",
     "postgres": "^4.1.1",
     "typescript": "^5.8",

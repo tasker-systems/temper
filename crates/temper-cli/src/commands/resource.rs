@@ -29,6 +29,39 @@ pub(crate) struct CreateActionResult {
     /// Absent when the flag was not given or the preserve hook warned out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preserved_source: Option<PreservedSourceOutcome>,
+    /// What `--task` did. Present whenever `--task` was given, so a caller reading the JSON can
+    /// tell a landed link from a skipped one; absent when the flag was not given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_link: Option<TaskLinkOutcome>,
+}
+
+/// The session→task link's outcome, as `create`'s JSON reports it under `task_link`.
+///
+/// Every variant carries `requested`, the `--task` value exactly as given. Only `linked` means the
+/// `advances` edge exists; every other status means the session was created without it, and
+/// `detail` says why.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub(crate) enum TaskLinkOutcome {
+    /// The `advances` edge session → task was asserted.
+    Linked {
+        requested: String,
+        task_id: uuid::Uuid,
+        task_ref: String,
+        edge_handle: uuid::Uuid,
+    },
+    /// No task matched `requested`: no task has that id, or none in the session's context has
+    /// that slug, slug suffix or seq number.
+    NotFound { requested: String, detail: String },
+    /// The lookup itself failed: an ambiguous suffix, a ref naming a non-task, or an API error.
+    LookupFailed { requested: String, detail: String },
+    /// The task was found but the edge assert failed. Re-assert with `temper edge assert`.
+    AssertFailed {
+        requested: String,
+        task_id: uuid::Uuid,
+        task_ref: String,
+        detail: String,
+    },
 }
 
 /// The blob + edge a successful `--preserve-source` created.
@@ -312,8 +345,9 @@ pub struct CreateResourceArgs<'a> {
     /// Goal link target ref (`--goal`). When `Some`, resolved via `parse_ref` and
     /// projected to a live `advances`→goal edge on create.
     pub goal: Option<&'a str>,
-    /// Session→task link target slug (session only). When `Some`, after the
-    /// session is created a session→task `advances` relationship is asserted.
+    /// Session→task link target (session only): the task's ref, bare UUID, title slug,
+    /// unambiguous slug suffix or seq number. When `Some`, after the session is created a
+    /// session→task `advances` relationship is asserted and its outcome reported as `task_link`.
     pub task: Option<&'a str>,
     pub body_flag: Option<String>,
     pub from: Option<String>,
@@ -672,17 +706,17 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // Session→task linking. Only reached for sessions (validated fail-fast
     // above). The session resource is already created; the link is a best-
     // effort tail — an unknown task warns and skips rather than failing the
-    // (already-committed) create.
-    if let Some(task_slug) = task {
+    // (already-committed) create, and the outcome rides the JSON as `task_link`.
+    let task_link = task.map(|task_needle| {
         link_session_to_task(
             config,
             &runtime,
             &client,
             &ctx,
             created_resource.id,
-            task_slug,
-        );
-    }
+            task_needle,
+        )
+    });
 
     // `--sources-as-edges`: one `derived_from` edge per resource-valued source.
     //
@@ -812,6 +846,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         edges_asserted,
         edges_failed,
         preserved_source,
+        task_link,
     };
     let rendered = render_action_result_with_ref(&result, format)?;
     crate::output::plain(rendered);
@@ -853,69 +888,101 @@ fn resolve_create_body(
     }
 }
 
-/// Assert the session→task `advances` link after a session create.
+/// Assert the session→task `advances` link after a session create, and report what happened.
 ///
 /// Best-effort: the session is already committed, so every failure mode
-/// (unknown/ambiguous/errored task lookup, or a failed assert) warns and
-/// returns rather than failing the create. `find_task` owns its own runtime
-/// via `with_client`, so it is called outside `runtime`.
+/// (unknown/ambiguous/errored task lookup, or a failed assert) warns on stderr and
+/// returns its [`TaskLinkOutcome`] rather than failing the create. `find_task` owns
+/// its own runtime via `with_client`, so it is called outside `runtime`.
 fn link_session_to_task(
     config: &Config,
     runtime: &tokio::runtime::Runtime,
     client: &temper_client::TemperClient,
     ctx: &str,
     session_id: temper_core::types::ids::ResourceId,
-    task_slug: &str,
-) {
-    match crate::actions::task::find_task(config, task_slug, Some(ctx)) {
-        Ok(Some(task_info)) => {
-            use temper_core::types::graph::{EdgeKind, Polarity};
-            use temper_core::types::relationship_requests::AssertRelationshipRequest;
-
-            // Edge addressing is id-based now: `find_task` carried the task's
-            // resource id off the listing row, so the link asserts by that
-            // held id directly — no slug→id round-trip.
-            let result = runtime.block_on(async {
-                let req = AssertRelationshipRequest {
-                    source: session_id,
-                    target: task_info.id,
-                    target_table: Default::default(),
-                    edge_kind: EdgeKind::LeadsTo,
-                    polarity: Polarity::Forward,
-                    label: "advances".to_string(),
-                    weight: 1.0,
-                    // System-driven link (not a caller-authored act): empty act context.
-                    act: Default::default(),
-                };
-                client
-                    .relationships()
-                    .assert(&req)
-                    .await
-                    .map_err(crate::actions::runtime::client_err_to_temper)
-            });
-            match result {
-                // stderr: a best-effort tail note on a create whose payload is the created
-                // resource. On stdout it followed that document and broke `--format json`.
-                Ok(_) => output::success_err(format!("Linked session → task {}", task_info.slug)),
-                Err(e) => tracing::warn!(
-                    task = task_slug,
-                    error = %e,
-                    "session→task assert failed; session created without link"
-                ),
-            }
-        }
+    task_needle: &str,
+) -> TaskLinkOutcome {
+    let requested = task_needle.to_string();
+    let task_info = match crate::actions::task::find_task(config, task_needle, Some(ctx)) {
+        Ok(Some(task_info)) => task_info,
         Ok(None) => {
             tracing::warn!(
-                task = task_slug,
+                task = task_needle,
                 "task not found for session link; skipping relationship assert"
             );
+            return TaskLinkOutcome::NotFound {
+                detail: format!(
+                    "no task matched '{task_needle}' (by id, or by slug, slug suffix or seq \
+                     number in {ctx}); session created without a task link"
+                ),
+                requested,
+            };
         }
         Err(e) => {
             tracing::warn!(
-                task = task_slug,
+                task = task_needle,
                 error = %e,
                 "task lookup failed for session link; skipping relationship assert"
             );
+            return TaskLinkOutcome::LookupFailed {
+                detail: format!("{e}; session created without a task link"),
+                requested,
+            };
+        }
+    };
+
+    use temper_core::types::graph::{EdgeKind, Polarity};
+    use temper_core::types::relationship_requests::AssertRelationshipRequest;
+
+    // Edge addressing is id-based: `find_task` carried the task's resource id, so the
+    // link asserts by that held id directly — no slug→id round-trip.
+    let task_id = task_info.id;
+    let task_ref = temper_workflow::operations::decorated_ref(&task_info.title, task_id);
+    let result = runtime.block_on(async {
+        let req = AssertRelationshipRequest {
+            source: session_id,
+            target: task_id,
+            target_table: Default::default(),
+            edge_kind: EdgeKind::LeadsTo,
+            polarity: Polarity::Forward,
+            label: "advances".to_string(),
+            weight: 1.0,
+            // System-driven link (not a caller-authored act): empty act context.
+            act: Default::default(),
+        };
+        client
+            .relationships()
+            .assert(&req)
+            .await
+            .map_err(crate::actions::runtime::client_err_to_temper)
+    });
+    match result {
+        // stderr: a best-effort tail note on a create whose payload is the created
+        // resource. On stdout it followed that document and broke `--format json`.
+        Ok(ack) => {
+            output::success_err(format!("Linked session → task {task_ref}"));
+            TaskLinkOutcome::Linked {
+                requested,
+                task_id: task_id.0,
+                task_ref,
+                edge_handle: ack.edge_handle,
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                task = task_needle,
+                error = %e,
+                "session→task assert failed; session created without link"
+            );
+            TaskLinkOutcome::AssertFailed {
+                requested,
+                task_id: task_id.0,
+                detail: format!(
+                    "{e}; session created without a task link — re-assert with `temper edge \
+                     assert` (idempotent)"
+                ),
+                task_ref,
+            }
         }
     }
 }
@@ -3614,7 +3681,8 @@ mod action_result_tests {
     use temper_core::types::resource_view::ResourceView;
 
     use super::{
-        render_action_result_with_ref, CreateActionResult, DeleteActionResult, UpdateActionResult,
+        render_action_result_with_ref, CreateActionResult, DeleteActionResult, TaskLinkOutcome,
+        UpdateActionResult,
     };
 
     /// Build a minimal `ResourceView` fixture for action result tests.
@@ -3673,6 +3741,7 @@ mod action_result_tests {
             edges_asserted: Vec::new(),
             edges_failed: Vec::new(),
             preserved_source: None,
+            task_link: None,
         };
         let out = render_action_result_with_ref(&result, crate::format::OutputFormat::Json)
             .expect("json render");
@@ -3683,6 +3752,76 @@ mod action_result_tests {
         assert!(
             r.starts_with("test-task-") && r.ends_with(id),
             "ref is the decorated `sluggify(title)-<uuid>` form: {out}"
+        );
+    }
+
+    /// `task_link` is absent without `--task`, and with it names its status in the payload —
+    /// the JSON alone tells a caller whether the link landed.
+    #[test]
+    fn render_create_action_result_reports_the_task_link() {
+        let row = make_resource_row("s", "session", "A Session", "temper");
+        let mut result = CreateActionResult {
+            status: "ok",
+            resource: row,
+            edges_asserted: Vec::new(),
+            edges_failed: Vec::new(),
+            preserved_source: None,
+            task_link: None,
+        };
+        let out = render_action_result_with_ref(&result, crate::format::OutputFormat::Json)
+            .expect("json render");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        assert!(v.get("task_link").is_none(), "absent without --task: {out}");
+
+        result.task_link = Some(TaskLinkOutcome::NotFound {
+            requested: "nope".into(),
+            detail: "no task matched 'nope'".into(),
+        });
+        let out = render_action_result_with_ref(&result, crate::format::OutputFormat::Json)
+            .expect("json render");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(
+            v["task_link"],
+            serde_json::json!({
+                "status": "not_found",
+                "requested": "nope",
+                "detail": "no task matched 'nope'",
+            })
+        );
+
+        let task_id = uuid::Uuid::now_v7();
+        let edge_handle = uuid::Uuid::now_v7();
+        result.task_link = Some(TaskLinkOutcome::Linked {
+            requested: task_id.to_string(),
+            task_id,
+            task_ref: format!("t-{task_id}"),
+            edge_handle,
+        });
+        let out = render_action_result_with_ref(&result, crate::format::OutputFormat::Json)
+            .expect("json render");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(v["task_link"]["status"], "linked");
+        assert_eq!(v["task_link"]["task_id"], task_id.to_string());
+        assert_eq!(v["task_link"]["edge_handle"], edge_handle.to_string());
+
+        result.task_link = Some(TaskLinkOutcome::AssertFailed {
+            requested: "t".into(),
+            task_id,
+            task_ref: format!("t-{task_id}"),
+            detail: "boom".into(),
+        });
+        let out = render_action_result_with_ref(&result, crate::format::OutputFormat::Json)
+            .expect("json render");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(
+            v["task_link"],
+            serde_json::json!({
+                "status": "assert_failed",
+                "requested": "t",
+                "task_id": task_id.to_string(),
+                "task_ref": format!("t-{task_id}"),
+                "detail": "boom",
+            })
         );
     }
 
@@ -3713,6 +3852,7 @@ mod action_result_tests {
             edges_asserted: Vec::new(),
             edges_failed: Vec::new(),
             preserved_source: None,
+            task_link: None,
         };
         let out =
             crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");
@@ -3760,6 +3900,7 @@ mod action_result_tests {
             edges_asserted: Vec::new(),
             edges_failed: Vec::new(),
             preserved_source: None,
+            task_link: None,
         };
         let out =
             crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");
