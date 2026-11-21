@@ -827,24 +827,28 @@ async fn the_survey_predicts_the_edge_step_over_skip_and_complete_husks(pool: Pg
     );
 }
 
-/// W10. An estate context that leaves the estate while the act waits takes its edges out of the
-/// edge step. The act plans with the personal team's context in the estate, then waits on the act
-/// queue of a resource homed there; meanwhile the team stops being personal, so the context leaves
-/// the estate. The edge step re-checks each edge's home under its lock, skips the edge homed in
-/// that context and counts it in the record, and the act completes. FAILS IF the step trusts the
-/// plan's estate: the unit raises `not homed in the estate`, which the service does not retry, and
-/// the act fails.
+/// W10. A context that leaves the estate between the act's plan and its context lock is decided by
+/// two estates, the residual 20261201000070's `principal_erasure_execute` documents at its context
+/// lock (ruling 11 of decision 01a1f6e8-81bd-758c-be87-a6824b66352a, (a)). The act plans with the
+/// personal team's context in the estate, then waits on the act queue of a resource homed there;
+/// meanwhile the team stops being personal, so the context leaves the estate. Then:
+///   * the resource loop re-checks a resource's home against the plan's estate, so the waited
+///     resource is erased;
+///   * `_principal_erasure_contexts_to_erase` reads the plan's estate, so the context gets one
+///     `context_erased`;
+///   * the edge step re-checks each edge's home against the live estate under its lock, so the
+///     edge homed there is skipped, kept and counted in the record;
+///   * `_principal_erasure_context_events` reads the live estate, so the context's earlier
+///     `context_renamed` keeps its name and slug on the ledger.
 ///
-/// The act locks its estate contexts after its resource erasures (the context lock comment in
-/// 20261201000070's `principal_erasure_execute` says why not at its start), so a context leaving
-/// between the plan and that lock is handled by halves that follow different estates. The ledger
-/// rewrites follow the live estate: this edge is skipped and kept, as are the context's earlier
-/// names and slugs. The projection erasure follows the plan: the waited resource is erased and the
-/// context gets a `context_erased`. Only the edge half is asserted here. The route is a stand-in:
-/// no door clears `personal_of`; through a door the context leaves by `context_reassign`, which
-/// does not wait on the act until the act first holds the context's row.
+/// FAILS IF the act decides any of the four by the other estate. The edge step trusting the plan
+/// fails the act, since the unit raises `not homed in the estate`, which the service does not
+/// retry. The route is a stand-in: no door clears `personal_of`. Through a door the context leaves
+/// by `context_reassign`, which waits on the act only once the act holds the context's row.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn an_estate_context_leaving_the_estate_mid_act_skips_its_edges(pool: PgPool) {
+async fn a_context_leaving_the_estate_mid_act_is_decided_by_the_plan_and_the_live_estate(
+    pool: PgPool,
+) {
     let w = world(&pool).await;
     let team = team_context(&pool).await;
     let personal_team = test_support::profile::personal_team(&pool, w.profile).await;
@@ -855,6 +859,16 @@ async fn an_estate_context_leaving_the_estate_mid_act_skips_its_edges(pool: PgPo
     let a = resource_in(&pool, &w, team, "alpha").await;
     let b = resource_in(&pool, &w, team, "beta").await;
     let e = edge_in(&pool, &w, journal, a, b, LABEL, authored(REASONING)).await;
+    writes::rename_context_with(
+        &pool,
+        journal,
+        ("journal", "journal"),
+        (DEPARTED_NAME, DEPARTED_SLUG),
+        EntityId::from(w.emitter),
+        EventContext::default(),
+    )
+    .await
+    .expect("rename through the real path");
     let admin = operator(&pool).await;
 
     // The journal page's act queue, held: the person act plans, then waits for it.
@@ -898,4 +912,50 @@ async fn an_estate_context_leaving_the_estate_mid_act_skips_its_edges(pool: PgPo
         "no edge_erased for the edge whose context left the estate"
     );
     assert_eq!(edge_state(&pool, e).await, (false, Some(LABEL.to_owned())));
+
+    // The projection erasure follows the plan.
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "SELECT erased_at IS NOT NULL FROM kb_resources WHERE id = $1"
+        )
+        .bind(waited.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "the departed context's resource is erased"
+    );
+    let closures: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'context_erased' AND e.producing_anchor_table = 'kb_contexts' \
+            AND e.producing_anchor_id = $1",
+    )
+    .bind(journal.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(closures, 1, "one context_erased for the departed context");
+
+    // The ledger rewrite follows the live estate: the earlier rename keeps its text.
+    let renamed: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT e.payload->>'to_name', e.payload->>'to_slug' \
+           FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'context_renamed' AND e.producing_anchor_table = 'kb_contexts' \
+            AND e.producing_anchor_id = $1",
+    )
+    .bind(journal.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        renamed,
+        (
+            Some(DEPARTED_NAME.to_owned()),
+            Some(DEPARTED_SLUG.to_owned())
+        ),
+        "the departed context's earlier name and slug are kept on the ledger"
+    );
 }
+
+/// W10's rename target: text the ledger keeps for a context that left the estate mid-act.
+const DEPARTED_NAME: &str = "Departed Journal";
+const DEPARTED_SLUG: &str = "departed-journal";
