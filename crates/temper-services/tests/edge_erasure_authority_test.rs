@@ -562,7 +562,7 @@ async fn an_edge_row_under_a_record_naming_a_live_owner_fails_at_commit(pool: Pg
             .await
             .expect("the row's insert lands");
             if tombstoned {
-                tombstone(&mut *tx, owner).await.unwrap();
+                tombstone(&mut tx, owner).await.unwrap();
             }
             tx.commit().await.err().map(|e| e.to_string())
         }

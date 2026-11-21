@@ -151,7 +151,7 @@ async fn replay_of_an_estate_edge_erasure_is_byte_identical(pool: PgPool) {
     // The person act's tombstone, after its edge step: the span commits only for a tombstoned
     // owner. Replay restores the tombstone with kb_profiles, and its commit-time check stands
     // down under temper.replaying, so the replayed records commit event by event.
-    tombstone(&mut *act, w.profile)
+    tombstone(&mut act, w.profile)
         .await
         .expect("tombstone the estate's owner");
     act.commit().await.expect("commit the span");

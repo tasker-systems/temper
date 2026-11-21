@@ -279,7 +279,7 @@ pub async fn erase_edge(
             return Err(err.to_string());
         }
     };
-    tombstone(&mut *tx, estate_of)
+    tombstone(&mut tx, estate_of)
         .await
         .map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;

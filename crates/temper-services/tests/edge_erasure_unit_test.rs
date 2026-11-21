@@ -501,7 +501,7 @@ async fn race(pool: &PgPool, write: Write) {
         .execute(&mut *act)
         .await
         .expect("the unit runs, its transaction held open");
-    tombstone(&mut *act, x.w.profile)
+    tombstone(&mut act, x.w.profile)
         .await
         .expect("the person act's tombstone, after its edge step");
 
@@ -633,7 +633,7 @@ async fn a_reassertion_racing_the_unit_waits_and_then_mints_a_new_edge(pool: PgP
         .fetch_one(&mut *act)
         .await
         .expect("the unit runs, its transaction held open");
-    tombstone(&mut *act, x.w.profile)
+    tombstone(&mut act, x.w.profile)
         .await
         .expect("the person act's tombstone, after its edge step");
 
@@ -786,7 +786,7 @@ async fn unit_then_commit(
         .await
         .expect("the call itself succeeds: the owner is checked at commit");
     if tombstoned {
-        tombstone(&mut *tx, x.w.profile).await.unwrap();
+        tombstone(&mut tx, x.w.profile).await.unwrap();
     }
     (out, tx.commit().await.err().map(|e| e.to_string()))
 }
