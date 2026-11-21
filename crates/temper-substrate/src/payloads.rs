@@ -1805,8 +1805,9 @@ pub struct EdgeErased {
     /// The person whose estate homes the edge.
     pub estate_of: ProfileId,
     /// True when the act folded the edge itself, by a `relationship_folded` appended before this
-    /// event in the act's transaction. Absent means the edge was already folded.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// event in the act's transaction; false when the edge was already folded. The act always
+    /// writes it; a reader takes an absent value as false.
+    #[serde(default)]
     pub folded: bool,
     /// The ledger paths this act redacted to their sentinels, in the shape `resource_erased` uses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
