@@ -1191,11 +1191,13 @@ BEGIN
          ORDER BY e.id
            FOR UPDATE
     LOOP
+        -- A complete edge (one this act's resource erasures already reached) is passed over
+        -- before the home check, so it is never counted as skipped.
+        CONTINUE WHEN _edge_erasure_complete(v_eid);
         IF NOT _edge_homed_in_estate(v_eid, p_subject) THEN
             v_edges_raced := v_edges_raced + 1;
             CONTINUE;
         END IF;
-        CONTINUE WHEN _edge_erasure_complete(v_eid);
         v_out := edge_erasure_execute(v_eid, p_subject, p_operator, p_emitter, p_request_ref);
         v_edge_erasures := v_edge_erasures || jsonb_build_array(jsonb_build_object(
             'edge',  v_eid,
@@ -1269,8 +1271,8 @@ BEGIN
     --    So the estate can change between the plan and this lock: context_reassign moves a context
     --    out until the act first holds its row. For such a context the act's halves follow
     --    different estates (ruling 11 of decision 01a1f6e8-81bd-758c-be87-a6824b66352a, (a)):
-    --      * the ledger rewrites follow the live estate: the edge step skips its edges
-    --        (_edge_homed_in_estate), and _principal_erasure_redacted_fields leaves its earlier
+    --      * the ledger rewrites follow the live estate: the edge step skips the edges its
+    --        resource erasures did not reach (_edge_homed_in_estate), and _principal_erasure_redacted_fields leaves its earlier
     --        names and slugs (_principal_erasure_context_events reads the live estate);
     --      * the projection erasure follows the plan: the resource loop erases its resources (it
     --        re-checks a resource's home against the plan's estate), and
@@ -1379,7 +1381,8 @@ edge erasure; the identity arms (_erasure_apply_redaction), which tombstone the 
 context_erased per estate context, with the ledger rewrite of their names and slugs. Runs with
 lock_timeout = 0 whatever the session, role or database sets. The estate contexts are locked
 after the resource erasures, so a context reassigned out of the estate before the act holds its
-row keeps its edges and its earlier names and slugs on the ledger, while its resources are erased
+row keeps the edges its resource erasures did not reach and its earlier names and slugs on the
+ledger, while its resources are erased
 and it is closed by context_erased. Content committed into a retired
 estate context after the act is a fresh live row that this act does not erase. Does not decide
 legality: the caller's system-admin gate is resolved before any mutation.$c$;
