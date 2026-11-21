@@ -1105,7 +1105,8 @@ impl EventContext {
 /// path refuses.
 ///
 /// The write guard runs first on the same connection (spec 2026-09-28 D13): the edge's
-/// resource endpoints are locked `FOR KEY SHARE` and an erased one refuses the fold.
+/// resource endpoints and then the edge row are locked `FOR KEY SHARE`, and an erased endpoint,
+/// or the edge itself once an `edge_erased` record names it, refuses the fold.
 pub(crate) async fn project_property_retracted(
     conn: &mut sqlx::PgConnection,
     event_id: Uuid,

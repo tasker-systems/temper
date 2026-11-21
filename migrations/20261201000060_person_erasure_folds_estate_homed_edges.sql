@@ -12,6 +12,10 @@
 --      edge not homed in _erasure_estate_contexts(estate_of), derives the ledger redaction, folds
 --      the edge when it is live, appends one edge_erased record, projects its rows, runs the body,
 --      then rewrites the edge's trail in one UPDATE.
+--   3. _resource_write_guard_owner(text, uuid): the kb_edges arm also takes FOR KEY SHARE on the
+--      edge row and refuses a write to an edge that is folded and named by an edge_erased record.
+--   4. sensitivity.erased_place_findings(): admits the label and edge-owned property findings of
+--      an edge an edge_erased record names, so their digests expire.
 --
 -- A later edit must not break:
 --   * derive before fold: _edge_erasure_payload_redaction runs before the fold event exists and
@@ -19,7 +23,9 @@
 --   * the record follows the fold, and the trail UPDATE follows the body: the verifier admits an
 --     `edge` rewrite only of a folded edge, homed in the estate the record names;
 --   * the body reads no payload, so replay can call it at the record's position;
---   * a refusal raises before anything is appended.
+--   * a refusal raises before anything is appended;
+--   * every writer of an edge takes FOR KEY SHARE on the edge row after its resource endpoints,
+--     so it commits before the unit's derivation or waits for the act and is then refused.
 
 -- ---------------------------------------------------------------------------
 -- Section 1. The projection body for one edge.
@@ -59,9 +65,13 @@ run the same body at the edge_erased record's position.$c$;
 -- ---------------------------------------------------------------------------
 -- Section 2. The unit.
 -- ---------------------------------------------------------------------------
--- The edge row lock serializes two units on one edge: the second reads the first's committed
--- state and raises `already erased`. An edge already folded is erased without a new fold, and its
--- record says so (folded false). The record carries `folded` in both cases.
+-- The edge row lock serializes the unit against every writer of the edge. A second unit reads the
+-- first's committed state and raises `already erased`. A property, facet or relationship writer
+-- takes FOR KEY SHARE on the row in _resource_write_guard_owner (Section 3): it either committed
+-- before this lock, so the derivation below sees its event, or it waits for the act to commit and
+-- is then refused, the edge being folded and named by this unit's edge_erased record. An edge
+-- already folded is erased without a new fold, and its record says so (folded false). The record
+-- carries `folded` in both cases.
 CREATE FUNCTION edge_erasure_execute(p_edge uuid, p_estate_of uuid, p_operator uuid,
                                      p_emitter uuid, p_request_ref uuid)
 RETURNS jsonb
@@ -180,11 +190,162 @@ references subject and request), projects its rows, runs _edge_erasure_apply_red
 rewrites the derived events in one UPDATE. Every event carries p_request_ref as its correlation.
 Returns {event_id, folded, redacted_fields}.$c$;
 
+-- ---------------------------------------------------------------------------
+-- Section 3. A writer of an edge waits on the unit, then is refused.
+-- ---------------------------------------------------------------------------
+-- 20260929040730's body; only the kb_edges arm changes. After guarding the edge's resource
+-- endpoints it takes FOR KEY SHARE on the kb_edges row, which conflicts with the unit's FOR UPDATE:
+-- a property, facet or relationship writer of the edge commits before the unit derives its trail,
+-- or waits for the act to commit. A writer that waited then reads, in a later statement and so a
+-- later snapshot, the folded edge and its edge_erased record, and is refused. The endpoints are
+-- locked before the edge because the resource act takes its resource FOR UPDATE before the edges
+-- it folds: the reverse order would deadlock a writer against that act.
+CREATE OR REPLACE FUNCTION _resource_write_guard_owner(p_table text, p_id uuid)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_resource uuid;
+BEGIN
+    -- The owner tables kb_properties admits (kb_properties_owner_table_check) and the edge
+    -- endpoint tables (kb_edges_{source,target}_table_check). kb_cogmaps and kb_blobs write
+    -- into no resource, so they fall through unguarded.
+    IF p_table = 'kb_resources' THEN
+        PERFORM _resource_write_guard(p_id);
+    ELSIF p_table = 'kb_edges' THEN
+        FOR v_resource IN
+            SELECT e.source_id FROM kb_edges e
+             WHERE e.id = p_id AND e.source_table = 'kb_resources'
+            UNION
+            SELECT e.target_id FROM kb_edges e
+             WHERE e.id = p_id AND e.target_table = 'kb_resources'
+            ORDER BY 1
+        LOOP
+            PERFORM _resource_write_guard(v_resource);
+        END LOOP;
+        -- Replay projects a lawful write whose event sorts after the edge's edge_erased record,
+        -- as _resource_write_guard lets one through after a resource_erased.
+        IF current_setting('temper.replaying', true) IS DISTINCT FROM 'on' THEN
+            PERFORM 1 FROM kb_edges e WHERE e.id = p_id FOR KEY SHARE;
+            IF EXISTS (SELECT 1 FROM kb_edges e WHERE e.id = p_id AND e.is_folded)
+               AND EXISTS (SELECT 1 FROM kb_events ev
+                             JOIN kb_event_types et ON et.id = ev.event_type_id
+                            WHERE et.name = 'edge_erased'
+                              AND ev.payload ->> 'subject_table' = 'kb_edges'
+                              AND ev.payload ->> 'subject_id' = p_id::text) THEN
+                RAISE EXCEPTION 'edge % is erased; writes are refused', p_id;
+            END IF;
+        END IF;
+    ELSIF p_table = 'kb_content_blocks' THEN
+        PERFORM _resource_write_guard(
+            (SELECT b.resource_id FROM kb_content_blocks b WHERE b.id = p_id));
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION _resource_write_guard_owner(text, uuid) IS
+'the write guard by owner (spec 2026-09-28 D13): resolves an owner to the resource or resources it
+writes into and guards each — kb_resources itself; kb_edges each endpoint whose table is
+kb_resources; kb_content_blocks the block''s resource_id; kb_cogmaps (and a kb_blobs endpoint)
+nothing. For kb_edges it then takes FOR KEY SHARE on the edge row, which waits out
+edge_erasure_execute''s FOR UPDATE, and RAISEs ''edge % is erased; writes are refused'' when the
+edge is folded and an edge_erased record names it as its subject. Neither the edge lock nor that refusal
+runs while temper.replaying is ''on''.';
+
+-- ---------------------------------------------------------------------------
+-- Section 4. An erased edge's label and property findings give up their digests.
+-- ---------------------------------------------------------------------------
+-- 20261011100000's body, plus two arms: a kb_edges.label finding, or a kb_properties.property_key /
+-- property_value finding on an edge-owned row, whose edge an edge_erased record names as its
+-- subject. Such an edge's endpoints are not erased resources, so the label and property arms that
+-- key on an erased endpoint never hold it.
+CREATE OR REPLACE FUNCTION sensitivity.erased_place_findings() RETURNS TABLE (finding_id uuid)
+LANGUAGE sql STABLE AS $$
+    WITH f AS (
+        SELECT f.* FROM sensitivity.findings f
+         WHERE f.fingerprint_state <> 'expired'
+           AND NOT EXISTS (SELECT 1 FROM sensitivity.erased_closures c WHERE c.finding_id = f.id)
+    )
+    -- A place the scan attributes to an erased resource: its title, origin_uri, blocks, chunks,
+    -- citation reasons, and its own and its blocks' properties.
+    SELECT f.id FROM f
+      JOIN kb_resources r ON r.id = f.resource_id
+     WHERE r.erased_at IS NOT NULL
+    UNION
+    -- An edge's label, with an erased resource at either end (act step 9c).
+    SELECT f.id FROM f
+      JOIN kb_edges e ON e.id = f.target_id
+     WHERE f.surface = 'kb_edges.label'
+       AND EXISTS (SELECT 1 FROM kb_resources r
+                    WHERE r.erased_at IS NOT NULL
+                      AND ((e.source_table = 'kb_resources' AND r.id = e.source_id)
+                        OR (e.target_table = 'kb_resources' AND r.id = e.target_id)))
+    UNION
+    -- An edge-owned property's key or value, on such an edge (act step 9d).
+    SELECT f.id FROM f
+      JOIN kb_properties p ON p.id = f.target_id AND p.owner_table = 'kb_edges'
+      JOIN kb_edges e ON e.id = p.owner_id
+     WHERE f.surface IN ('kb_properties.property_key', 'kb_properties.property_value')
+       AND EXISTS (SELECT 1 FROM kb_resources r
+                    WHERE r.erased_at IS NOT NULL
+                      AND ((e.source_table = 'kb_resources' AND r.id = e.source_id)
+                        OR (e.target_table = 'kb_resources' AND r.id = e.target_id)))
+    UNION
+    -- An edge's label, where an edge_erased record names the edge as its subject
+    -- (edge_erasure_execute).
+    SELECT f.id FROM f
+     WHERE f.surface = 'kb_edges.label'
+       AND EXISTS (SELECT 1 FROM kb_events er
+                     JOIN kb_event_types ert ON ert.id = er.event_type_id
+                    WHERE ert.name = 'edge_erased'
+                      AND er.payload ->> 'subject_table' = 'kb_edges'
+                      AND er.payload ->> 'subject_id' = f.target_id::text)
+    UNION
+    -- An edge-owned property's key or value, on such an edge.
+    SELECT f.id FROM f
+      JOIN kb_properties p ON p.id = f.target_id AND p.owner_table = 'kb_edges'
+     WHERE f.surface IN ('kb_properties.property_key', 'kb_properties.property_value')
+       AND EXISTS (SELECT 1 FROM kb_events er
+                     JOIN kb_event_types ert ON ert.id = er.event_type_id
+                    WHERE ert.name = 'edge_erased'
+                      AND er.payload ->> 'subject_table' = 'kb_edges'
+                      AND er.payload ->> 'subject_id' = p.owner_id::text)
+    UNION
+    -- Block and chunk content an erasure act emptied while the resource lives on: the scrub's
+    -- prior revisions and the principal act's governed content (content_empty, never row_missing).
+    SELECT f.id FROM f
+     WHERE f.surface IN ('kb_block_content.content', 'kb_chunk_content.content', 'kb_chunks.header_path')
+       AND sensitivity.place_closure(f.surface, f.target_id, f.content_hash, f.path) = 'content_empty'
+    UNION
+    -- A remote source the act orphaned and deleted (act step 9e, the only deleter).
+    SELECT f.id FROM f
+     WHERE f.surface = 'kb_remote_sources.uri'
+       AND NOT EXISTS (SELECT 1 FROM kb_remote_sources s WHERE s.id = f.target_id)
+    UNION
+    -- A ledger path a resource erasure rewrote to its sentinel (kb_event_field_redactions).
+    SELECT f.id FROM f
+     WHERE f.surface IN ('kb_events.payload', 'kb_events.metadata')
+       AND sensitivity.place_closure(f.surface, f.target_id, f.content_hash, f.path) = 'sentinel';
+$$;
+
+COMMENT ON FUNCTION sensitivity.erased_place_findings() IS
+'The unexpired findings, not yet in sensitivity.erased_closures, on a place an erasure act emptied or
+reached: any place attributed to an erased resource; an edge''s label, or an edge-owned property''s
+key or value, on an edge with an erased resource at either end or named as the subject of an
+edge_erased record; block, chunk and header content place_closure answers content_empty; a remote
+source row that no longer exists; and a ledger path place_closure answers sentinel.
+sensitivity.expire_erased_fingerprints reads it to start each finding''s window.';
+
+
 SELECT declare_migration(
     20261201000060,
     'additive',
     'Adds the functions _edge_erasure_apply_redaction(uuid, uuid) and '
-    'edge_erasure_execute(uuid, uuid, uuid, uuid, uuid), each with a COMMENT. Nothing existing '
-    'calls them, so every existing answer is unchanged. No table, column, constraint, event type '
-    'or grant changes.'
+    'edge_erasure_execute(uuid, uuid, uuid, uuid, uuid), each with a COMMENT; nothing existing '
+    'calls them. CREATE OR REPLACEs, at unchanged signatures, _resource_write_guard_owner(text, '
+    'uuid), whose kb_edges arm also takes FOR KEY SHARE on the edge row and refuses a write to a '
+    'folded edge an edge_erased record names, and sensitivity.erased_place_findings(), which gains '
+    'an arm for findings on such an edge; it also gains a COMMENT. No edge_erased record exists '
+    'before edge_erasure_execute runs, so every existing answer is unchanged, and the added '
+    'KEY SHARE conflicts only with a FOR UPDATE, a DELETE or an id change of the edge row (its one '
+    'non-partial unique key is the primary key). No table, column, '
+    'constraint, event type or grant changes.'
 );
