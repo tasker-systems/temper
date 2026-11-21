@@ -116,6 +116,7 @@ class BlobsApi:
             '401': "ErrorBody",
             '404': "ErrorBody",
             '409': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -195,6 +196,7 @@ class BlobsApi:
             '401': "ErrorBody",
             '404': "ErrorBody",
             '409': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -274,6 +276,7 @@ class BlobsApi:
             '401': "ErrorBody",
             '404': "ErrorBody",
             '409': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -430,6 +433,7 @@ class BlobsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -505,6 +509,7 @@ class BlobsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -580,6 +585,7 @@ class BlobsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1289,6 +1295,7 @@ class BlobsApi:
             '200': "BlobCommitResponse",
             '400': "ErrorBody",
             '401': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1358,6 +1365,7 @@ class BlobsApi:
             '200': "BlobCommitResponse",
             '400': "ErrorBody",
             '401': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1427,6 +1435,7 @@ class BlobsApi:
             '200': "BlobCommitResponse",
             '400': "ErrorBody",
             '401': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1602,6 +1611,7 @@ class BlobsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1704,6 +1714,7 @@ class BlobsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1806,6 +1817,7 @@ class BlobsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1984,6 +1996,7 @@ class BlobsApi:
             '404': "ErrorBody",
             '409': "ErrorBody",
             '422': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -2064,6 +2077,7 @@ class BlobsApi:
             '404': "ErrorBody",
             '409': "ErrorBody",
             '422': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -2144,6 +2158,7 @@ class BlobsApi:
             '404': "ErrorBody",
             '409': "ErrorBody",
             '422': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

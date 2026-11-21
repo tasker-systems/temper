@@ -3,6 +3,7 @@ pub mod broker_attested;
 pub mod cron_secret;
 pub mod internal_auth;
 pub mod preconditions;
+pub mod principal_rate_limit;
 pub mod relay_trust;
 pub mod surface;
 pub mod system_access;

@@ -3632,6 +3632,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -3718,6 +3728,16 @@
           },
           "404": {
             "description": "Home not found or not readable — indistinguishable by design",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3915,6 +3935,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -4020,6 +4050,16 @@
           },
           "409": {
             "description": "A different segment occupies this seq",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4222,6 +4262,16 @@
           },
           "404": {
             "description": "Blob absent, not visible, or already struck — each indistinguishable from absent by design; no second event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited)",
             "content": {
               "application/json": {
                 "schema": {

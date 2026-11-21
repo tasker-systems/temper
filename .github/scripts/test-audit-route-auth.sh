@@ -181,7 +181,7 @@ python3 - "$FIX/mod.rs" <<'PYEOF2'
 import sys
 p = sys.argv[1]
 s = open(p).read()
-old = 'serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
+old = 'serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },'
 row = [l for l in s.splitlines() if 'key: "webhook_intake_routes"' in l][0]
 assert old in row
 s = s.replace(row, row.replace('Preconditions::Refused', 'Preconditions::Exempt'))
@@ -879,5 +879,57 @@ run_test "precondition layer on the Exempt arm: fails" "$FIX" 1 \
     "does not apply refuse_unhonoured_preconditions to Refused groups before apply_tier"
 
 echo ""
+# --- (z) the per-principal budget's designation and placement ---
+# A blob write group dropping its budget leaves that door unbounded while the operator's limit
+# reads as live; the designation is part of the pinned row.
+FIX="${FIXTURE_DIR}/budget_designation_dropped"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+row = [l for l in s.splitlines() if 'key: "blob_write_routes"' in l][0]
+assert 'rate_limit: Some(PrincipalDoor::BlobWrite)' in row
+s = s.replace(row, row.replace('rate_limit: Some(PrincipalDoor::BlobWrite)', 'rate_limit: None'))
+open(p, "w").write(s)
+PYEOF
+run_test "blob_write_routes budget dropped: fails" "$FIX" 1 \
+    "table row changed"
+
+# The budget applied AFTER apply_tier would be OUTER to the gates, so a refused caller spends it.
+FIX="${FIXTURE_DIR}/budget_outside_tier"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s, n = re.subn(r"    let router = match group\.rate_limit \{.*?\n    \};\n", "", s, count=1, flags=re.S)
+assert n == 1, n
+s = s.replace("    apply_tier(router, group.tier, state)\n}",
+              "    let router = apply_tier(router, group.tier, state);\n    match group.rate_limit {\n        Some(door) => router.route_layer(from_fn_with_state(principal_rate_limit::PrincipalLimit { state: state.clone(), door }, principal_rate_limit::require_principal_rate_limit)),\n        None => router,\n    }\n}", 1)
+assert "let router = apply_tier(router, group.tier, state);" in s
+open(p, "w").write(s)
+PYEOF
+run_test "budget applied outside apply_tier: fails" "$FIX" 1 \
+    "does not apply require_principal_rate_limit from the row's rate_limit before apply_tier"
+
+# A blob write door mounted in gated_routes carries no budget: (b1) must fail it.
+FIX="${FIXTURE_DIR}/blob_write_door_unbudgeted"
+copy_module "$FIX"
+python3 - "$FIX/blob_doors.rs" "$FIX/gated.rs" <<'PYEOF'
+import sys
+doors, gated = sys.argv[1], sys.argv[2]
+s = open(doors).read()
+old = "        .routes(routes!(handlers::blobs::delete))\n"
+assert old in s
+open(doors, "w").write(s.replace(old, "", 1))
+g = open(gated).read()
+anchor = "        .routes(routes!(handlers::blobs::get))\n"
+assert anchor in g
+open(gated, "w").write(g.replace(anchor, anchor + "        .routes(routes!(handlers::blobs::delete))\n", 1))
+PYEOF
+run_test "blob delete mounted outside the budgeted groups: fails" "$FIX" 1 \
+    "not reviewed as unbudgeted"
+
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]

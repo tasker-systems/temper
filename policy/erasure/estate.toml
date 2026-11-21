@@ -508,6 +508,10 @@ reason = "apparatus: a row holds the owning profile's id, a client-minted opaque
 kind = "declared-out"
 reason = "apparatus: a row is keyed by profile id and the identity provider's key, and records when the principal was last reconciled. It holds references and timestamps, not the identifiers the profile's tombstone removes. An erasure keeps it"
 
+[tables.kb_principal_rate_counters.grain]
+kind = "declared-out"
+reason = "apparatus: a row is keyed by profile id and the rate-limit door's name, and holds a request count and the start of its window. It holds a reference, a count and a timestamp, not the identifiers the profile's tombstone removes. An erasure keeps it; a deleted profile row cascades its counters"
+
 [tables.kb_resource_homes.grain]
 kind = "declared-out"
 reason = "a pointer from a resource to the container that homes it, with the owning profile's id: references only. Resource erasure reads it to find the resource's home and an erasure keeps it, since the husk stays homed"
