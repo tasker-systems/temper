@@ -1548,6 +1548,18 @@ $function$
 ;
 
 
+
+COMMENT ON FUNCTION principal_erasure_execute(uuid, uuid, uuid, uuid) IS
+$c$The person erasure act, in one transaction, from one plan (principal_erasure_survey_plan): every
+resource homed in the subject's estate (_erasure_estate_contexts) through resource_erasure_execute,
+in id order; then every edge homed in the estate whose text is not yet erased (_edge_erasure_complete),
+live or folded before the act, through edge_erasure_execute, in id order; the strike of every live
+blob homed in the estate; the one principal_erased record, which references each resource and edge
+erasure; the identity arms (_erasure_apply_redaction), which tombstone the subject; and one
+context_erased per estate context, with the ledger rewrite of their names and slugs. Content committed
+into a retired estate context after the act is a fresh live row that this act does not erase. Does not
+decide legality: the caller's system-admin gate is resolved before any mutation.$c$;
+
 SELECT declare_migration(
     20261201000060,
     'additive',
