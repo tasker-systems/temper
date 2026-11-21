@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# A fake `temper` for test.sh. It answers from the files in FAKE_TEMPER_DIR (goals.json,
+# tasks.json and graph.json, split from records.json), logs every command it is given to
+# FAKE_TEMPER_DIR/calls.log, and saves what a create pipes it to FAKE_TEMPER_DIR/created.md.
+# A missing file makes the read fail, as an unreachable service would.
+#
+# `graph traverse` answers as the live one does at --depth 1: the graph's edges with a seed at
+# either end, and the nodes at their ends and the seeds. A seed the graph has no node for gets
+# none, and the call still succeeds. More than 250 seeds is refused, as the live service refuses
+# it. traverse.fail in FAKE_TEMPER_DIR makes every traverse fail, traverse.fail-2 only the second,
+# and traverse.garbage makes it answer with something that is not JSON.
+#
+# `resource show` is refused, so a per-task read cannot come back unnoticed.
+set -euo pipefail
+
+dir="${FAKE_TEMPER_DIR:?FAKE_TEMPER_DIR is not set}"
+printf '%s\n' "$*" >> "$dir/calls.log"
+case "$1 $2" in
+    "resource list")
+        case "$*" in
+            *"--type goal"*) cat "$dir/goals.json" ;;
+            *"--type task"*) cat "$dir/tasks.json" ;;
+            *)
+                echo "fake temper: unexpected listing: $*" >&2
+                exit 2
+                ;;
+        esac
+        ;;
+    "graph traverse")
+        shift 2
+        seeds=()
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --from)
+                    seeds+=("$2")
+                    shift 2
+                    ;;
+                --depth | --format) shift 2 ;;
+                *)
+                    echo "fake temper: unexpected traverse argument: $1" >&2
+                    exit 2
+                    ;;
+            esac
+        done
+        calls="$(grep -c '^graph traverse ' "$dir/calls.log" || true)"
+        if [ -e "$dir/traverse.fail" ] || [ -e "$dir/traverse.fail-$calls" ]; then
+            echo "Error: the service is unavailable" >&2
+            exit 1
+        fi
+        if [ "${#seeds[@]}" -gt 250 ]; then
+            echo '{"code": "bad-request", "message": "Bad request: at most 250 seeds (--from)"}'
+            exit 1
+        fi
+        if [ -e "$dir/traverse.garbage" ]; then
+            echo "<html>502 Bad Gateway</html>"
+            exit 0
+        fi
+        jq '($ARGS.positional | map({(.): true}) | add // {}) as $seed
+            | (.edges | map(select($seed[.source] or $seed[.target]))) as $edges
+            | ($seed + ([$edges[] | .source, .target] | map({(.): true}) | add // {})) as $keep
+            | {nodes: (.nodes | map(select($keep[.id]))), edges: $edges}' \
+            "$dir/graph.json" --args ${seeds[@]+"${seeds[@]}"}
+        ;;
+    "resource show")
+        echo "fake temper: \`resource show\` is refused here; read edges with \`graph traverse\`" >&2
+        exit 2
+        ;;
+    "resource create")
+        cat > "$dir/created.md"
+        echo '{"id": "50000000-0000-7000-8000-000000000001"}'
+        ;;
+    *)
+        echo "fake temper: unexpected command: $*" >&2
+        exit 2
+        ;;
+esac
+# temper may print more after its JSON document; the reader must take only the first.
+echo "warning: a newer temper is available"
