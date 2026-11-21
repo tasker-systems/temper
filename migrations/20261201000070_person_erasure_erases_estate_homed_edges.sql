@@ -1017,7 +1017,7 @@ BEGIN
                    'target',  'kb_resources',
                    'outcome', 'charter ' || ch || '; held until map-grain erasure (task '
                               || '01a0e960-0ca2-7f42-b33e-1ed19b024e6b); text emptied; title, '
-                              || 'properties, ledger and edges homed outside the estate kept')
+                              || 'properties, its own ledger and edges homed outside the estate kept')
                    ORDER BY ch)
           FROM unnest(v_charters) AS ch), '[]'::jsonb);
     IF (v_counts->>'skip')::integer > 0 THEN
@@ -1053,8 +1053,9 @@ $function$;
 -- redaction (whose step 7 tombstones the subject) and the context closure follow unchanged, so
 -- the tombstone the edge records require at commit is set in the same transaction.
 --
--- It pins lock_timeout = 0, as resource_erasure_execute, edge_erasure_execute and
--- block_history_scrub_execute do (20261015100000_erasure_acts_pin_lock_timeout.sql): the edge
+-- It pins lock_timeout = 0, as resource_erasure_execute and block_history_scrub_execute do
+-- (20261015100000_erasure_acts_pin_lock_timeout.sql) and edge_erasure_execute does
+-- (20261201000060_person_erasure_folds_estate_homed_edges.sql): the edge
 -- step's FOR UPDATE waits on the edges' writers in this function's own body, and a lock_timeout
 -- set on the session, the pool, the role or the database would otherwise end that wait with
 -- 55P03. The service door also sets lock_timeout = 0 on the act's transaction
