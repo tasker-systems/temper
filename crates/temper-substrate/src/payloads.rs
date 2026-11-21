@@ -1782,6 +1782,37 @@ pub struct ResourceScrubbed {
     pub redacted_fields: Vec<RedactedEventFields>,
 }
 
+/// `edge_erased` — one edge of an estate erased: a folded edge homed in a context of the person's
+/// estate, every prior value of its free text on its own trail redacted to the sentinels. One
+/// event per edge, category `admin`, NULL-anchored. It projects `kb_event_field_redactions` rows
+/// under the `edge` authority, whose subject check reads the folded edge's home against
+/// `_erasure_estate_contexts(estate_of)`.
+///
+/// Keyed `subject_table` (`kb_edges`) / `subject_id`, never `edge_id`, and the person by
+/// `estate_of`, never `owner`: no key is a trail join-key shape (`edge_id`, `resource_id`,
+/// `owner`, `source`, `target`, `block_id`), and `_edge_erasure_trail_scope` joins on `edge_id`
+/// and `owner`. Paths only, never values: the record of a redaction must not carry what was
+/// redacted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct EdgeErased {
+    /// Always `kb_edges`.
+    pub subject_table: AnchorTable,
+    pub subject_id: Uuid,
+    /// The acting system admin. `None` only where no actor exists to name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    /// The person whose estate homes the edge.
+    pub estate_of: ProfileId,
+    /// True when the act folded the edge itself, by a `relationship_folded` appended before this
+    /// event in the act's transaction. Absent means the edge was already folded.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub folded: bool,
+    /// The ledger paths this act redacted to their sentinels, in the shape `resource_erased` uses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redacted_fields: Vec<RedactedEventFields>,
+}
+
 /// `erasure_declared` — an erasure declared: its kind, subject, request and manifest, the map of
 /// every item it covers, and the holders who could read them. Projected into `kb_erasures`,
 /// `kb_erasure_members`, `kb_erasure_former_holders` and, for an estate, `kb_erasure_estate_snapshots`.
@@ -2438,7 +2469,7 @@ impl FoldDisposition {
 }
 
 /// The typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 47] = [
+pub const TYPED_EVENT_NAMES: [&str; 48] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -2473,6 +2504,7 @@ pub const TYPED_EVENT_NAMES: [&str; 47] = [
     "resource_erasure_refused",
     "block_history_scrubbed",
     "resource_scrubbed",
+    "edge_erased",
     "team_membership_changed",
     "team_parent_link_changed",
     "team_lifecycle_changed",
@@ -2501,25 +2533,29 @@ pub const WRITE_RETIRED: [&str; 0] = [];
 // (temper-services `erasure_event_name_consumers_test`, spec D7.6). A kind added to a class therefore fails every
 // consumer of that class that does not yet name it.
 
-/// The kinds whose event is an item's own erasure authority: the event that erases one item and
-/// is named as that item's `erased_by_event_id`.
-pub const PER_ITEM_AUTHORITY_KINDS: [&str; 1] = ["resource_erased"];
+/// The kinds whose event is an item's own erasure authority: the event that erases one item.
+pub const PER_ITEM_AUTHORITY_KINDS: [&str; 2] = ["resource_erased", "edge_erased"];
 
 /// The kinds that authorise a ledger redaction: each projects `kb_event_field_redactions` rows
 /// under its own `authority`, and a reader of those rows maps each authority back to its kind.
-pub const REDACTION_AUTHORITY_KINDS: [&str; 3] =
-    ["resource_erased", "resource_scrubbed", "principal_erased"];
+pub const REDACTION_AUTHORITY_KINDS: [&str; 4] = [
+    "resource_erased",
+    "resource_scrubbed",
+    "principal_erased",
+    "edge_erased",
+];
 
 /// The kinds whose payload `targets` name blobs to strike: the blob fence seeds from them.
 pub const STRIKE_SOURCE_KINDS: [&str; 2] = ["resource_erased", "principal_erased"];
 
 /// The admin erasure acts, as `_event_is_admin_act` lists them: an event correlated to one of
 /// these is the act's own work, not a reader-visible change.
-pub const ADMIN_ACT_KINDS: [&str; 4] = [
+pub const ADMIN_ACT_KINDS: [&str; 5] = [
     "resource_erased",
     "principal_erased",
     "resource_scrubbed",
     "block_history_scrubbed",
+    "edge_erased",
 ];
 
 /// The erasure kinds that are an admin act by their kind alone, as `_event_is_admin_act` lists
@@ -2545,7 +2581,7 @@ pub const FOREIGN_EVENT_NAMES: [&str; 1] = ["webhook_received"];
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 25] = [
+pub const ADMIN_EVENT_NAMES: [&str; 26] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
@@ -2558,6 +2594,7 @@ pub const ADMIN_EVENT_NAMES: [&str; 25] = [
     "resource_erasure_refused",
     "block_history_scrubbed",
     "resource_scrubbed",
+    "edge_erased",
     "team_membership_changed",
     "team_parent_link_changed",
     "team_lifecycle_changed",
@@ -2698,6 +2735,10 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 // `resource_field_scrub_execute`.
                 "resource_scrubbed" => {
                     serde_json::from_value::<ResourceScrubbed>(r.payload.clone())?;
+                }
+                // One estate edge's erasure record (erasure estate-homed edges).
+                "edge_erased" => {
+                    serde_json::from_value::<EdgeErased>(r.payload.clone())?;
                 }
                 "team_membership_changed" => {
                     serde_json::from_value::<TeamMembershipChanged>(r.payload.clone())?;
@@ -3120,6 +3161,35 @@ mod tests {
             v.get("owner").is_none(),
             "resource_scrubbed carries no top-level `owner`"
         );
+    }
+
+    /// `edge_erased` round-trips, and no key is a trail join-key shape: not `edge_id`, `owner`,
+    /// `source` or `target`, which `_edge_erasure_trail_scope` and the trail readers join on.
+    #[test]
+    fn edge_erased_round_trips_and_carries_no_trail_join_key() {
+        let erased = EdgeErased {
+            subject_table: AnchorTable::Edges,
+            subject_id: Uuid::now_v7(),
+            actor: Some(ProfileId::from(Uuid::now_v7())),
+            estate_of: ProfileId::from(Uuid::now_v7()),
+            folded: true,
+            redacted_fields: vec![RedactedEventFields {
+                event: EventId::from(Uuid::now_v7()),
+                paths: vec!["label".into()],
+            }],
+        };
+        let v = serde_json::to_value(&erased).unwrap();
+        assert_eq!(
+            serde_json::from_value::<EdgeErased>(v.clone()).unwrap(),
+            erased
+        );
+        no_trail_key(&v, "edge_erased");
+        for key in ["owner", "source", "target"] {
+            assert!(
+                v.get(key).is_none(),
+                "edge_erased carries no top-level `{key}`"
+            );
+        }
     }
 
     /// `team_parent_link_changed` (team-authority fixes D3): both acts round-trip, an absent actor

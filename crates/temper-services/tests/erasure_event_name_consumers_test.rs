@@ -373,6 +373,7 @@ const ROSTER: &[Entry] = &[
             "principal_erased",
             "resource_scrubbed",
             "block_history_scrubbed",
+            "edge_erased",
             "erasure_declared",
             "erasure_member_arrived",
             "erasure_scope_sealed",
@@ -471,6 +472,11 @@ const ROSTER: &[Entry] = &[
     own(
         "rust:crates/temper-substrate/src/payloads.rs#resource_scrubbed_carries_no_trail_join_key_and_no_owner",
         &["resource_scrubbed"],
+        "a unit test of its own kind's payload",
+    ),
+    own(
+        "rust:crates/temper-substrate/src/payloads.rs#edge_erased_round_trips_and_carries_no_trail_join_key",
+        &["edge_erased"],
         "a unit test of its own kind's payload",
     ),
     class(
