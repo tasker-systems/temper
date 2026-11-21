@@ -1,0 +1,18 @@
+title    = "The blob write doors take an optional per-principal request budget, unset by default"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp"]
+status   = "signal-only"
+body = '''
+The five blob write doors (POST /api/blobs, POST /api/blobs/uploads, POST
+/api/blobs/uploads/{id}/segments, POST /api/blobs/uploads/{id}/finalize, DELETE /api/blobs/{id})
+share one request budget per principal when the operator sets RATE_LIMIT_BLOB_WRITE_MAX and
+RATE_LIMIT_BLOB_WRITE_WINDOW_SECS. A call past the budget is refused 429 TOO_MANY_REQUESTS with a
+Retry-After, the seam's existing refusal. Unset, which is the default, the doors behave exactly as
+before and no counter is written.
+
+Shape: each of the five operations gains a documented 429 response in openapi.json (additive);
+the SDKs regenerate accordingly. Who observes: only deployments that set the budget, and on them a
+principal past it, including through the MCP blob_manage commit, which relays to POST /api/blobs.
+Witnesses in crates/temper-api/tests/blob_rate_limit_test.rs. Release relevance: signal-only.
+'''
