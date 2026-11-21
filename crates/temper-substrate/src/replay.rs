@@ -690,7 +690,7 @@ pub const WALK_ORDER: &str = walk_order!();
 /// `resource_update` (20260709000050) and the `property_unset` arm of `fire_with`, which appends
 /// and then runs `_project_property_unset` (20261018100000), take no lock on R before
 /// `_event_append`. Their first lock on R is the write guard inside the projector
-/// (`_resource_write_guard`, as in `_project_resource_updated`, 20261117000010), which runs after
+/// (`_resource_write_guard`, as in `_project_resource_updated`, 20260929040730), which runs after
 /// the `seq` is drawn. Against an erasure act that is harmless: the guard refuses a write that
 /// waited out an act, and the write rolls back. Against a field scrub it is not. A `property_set`
 /// appends at seq 10 and its guard waits on the scrub's `FOR UPDATE`; the scrub appends its clear

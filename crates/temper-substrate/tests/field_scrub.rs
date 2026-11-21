@@ -3014,11 +3014,14 @@ async fn a_clear_that_landed_answers_already_cleared_and_records_nothing(pool: P
 /// `replay::WALK_ORDER` is the Rust one. Over a ledger built to tell them apart, ordering by the key
 /// is the walk. Two rows from before `seq` was recorded carry ids above every recorded row's, so
 /// they walk first only because they are unrecorded, and in id order between themselves. Three
-/// recorded rows carry `seq` against their id order. The rows go in under `temper.replaying`,
-/// which is how a restore writes rows without `seq`.
+/// recorded rows carry `seq` against their id order, and span two transactions: the first holds
+/// the lowest and the highest `seq`, the second the one between, so `xact_id` order is not `seq`
+/// order. The rows go in under `temper.replaying`, which is how a restore writes rows without
+/// `seq`.
 ///
 /// FAILS IF: `_event_walk_key` stops ranking an event as the walk does, or `WALK_ORDER` changes
-/// alone (to id order, to `(xact_id, seq)`, or with unrecorded rows last).
+/// alone (to id order, to `(xact_id, seq)` with or without the unrecorded rows first, or with
+/// unrecorded rows last).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_walk_key_orders_events_as_replay_walks_them(pool: PgPool) {
     let (_owner, emitter, _home) = setup(&pool).await;
@@ -3027,37 +3030,53 @@ async fn the_walk_key_orders_events_as_replay_walks_them(pool: PgPool) {
     let rec_a = Uuid::from_u128(0x0000_0001_0000_0000_0000_0000_0000_0003);
     let rec_b = Uuid::from_u128(0x0000_0001_0000_0000_0000_0000_0000_0002);
     let rec_c = Uuid::from_u128(0x0000_0001_0000_0000_0000_0000_0000_0001);
-    // (id, seq): seq ascends as id descends among the recorded rows.
-    let rows: [(Uuid, Option<i64>); 5] = [
+    // (id, seq) per transaction: seq ascends as id descends among the recorded rows, and the first
+    // transaction (the lower xact_id) holds seq 1 and 3, the second seq 2.
+    let first: [(Uuid, Option<i64>); 4] = [
         (legacy_high, None),
         (legacy_low, None),
         (rec_a, Some(9_000_000_001)),
-        (rec_b, Some(9_000_000_002)),
         (rec_c, Some(9_000_000_003)),
     ];
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    for (id, seq) in rows {
-        sqlx::query(
-            "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, payload, correlation_id, \
-                                    category, xact_id, seq) \
-             SELECT $1, t.id, $2, '{}'::jsonb, $1, t.category, \
-                    CASE WHEN $3::bigint IS NULL THEN NULL ELSE pg_current_xact_id() END, $3 \
-               FROM kb_event_types t WHERE t.name = 'property_set'",
-        )
-        .bind(id)
-        .bind(emitter)
-        .bind(seq)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
+    let second: [(Uuid, Option<i64>); 1] = [(rec_b, Some(9_000_000_002))];
+    for rows in [&first[..], &second[..]] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        for &(id, seq) in rows {
+            sqlx::query(
+                "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, payload, \
+                                        correlation_id, category, xact_id, seq) \
+                 SELECT $1, t.id, $2, '{}'::jsonb, $1, t.category, \
+                        CASE WHEN $3::bigint IS NULL THEN NULL ELSE pg_current_xact_id() END, $3 \
+                   FROM kb_event_types t WHERE t.name = 'property_set'",
+            )
+            .bind(id)
+            .bind(emitter)
+            .bind(seq)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
     }
-    tx.commit().await.unwrap();
 
-    let ids: Vec<Uuid> = rows.iter().map(|(id, _)| *id).collect();
+    let ids = vec![legacy_high, legacy_low, rec_a, rec_b, rec_c];
+    let xacts_differ: bool = sqlx::query_scalar(
+        "SELECT (SELECT xact_id FROM kb_events WHERE id = $1) \
+              < (SELECT xact_id FROM kb_events WHERE id = $2)",
+    )
+    .bind(rec_c)
+    .bind(rec_b)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        xacts_differ,
+        "setup: the second transaction's xact_id is above the first's"
+    );
     let walk: Vec<Uuid> = sqlx::query_scalar(&format!(
         "SELECT e.id FROM kb_events e WHERE e.id = ANY($1) ORDER BY {}",
         replay::WALK_ORDER

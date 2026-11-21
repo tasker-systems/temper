@@ -364,7 +364,7 @@ BEGIN
         -- before another whose projection it then landed after (replay.rs, `replay`, the walk
         -- order's residual); refused, never resolved. resource_update (20260709000050) takes no
         -- lock on R before it appends; its first lock is _resource_write_guard inside
-        -- _project_resource_updated (20261117000010), after its seq is drawn. It is safe only
+        -- _project_resource_updated (20260929040730), after its seq is drawn. It is safe only
         -- under a caller that locks R before the append, as every live caller does: the update
         -- path's lock_resource_for_write (FOR NO KEY UPDATE) and the temper-services write floor
         -- (FOR KEY SHARE). A caller without one can append, wait on a scrub's FOR UPDATE and
