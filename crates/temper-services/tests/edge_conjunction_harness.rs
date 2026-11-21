@@ -273,8 +273,9 @@ const CLASSIFIED: &[(&str, Class)] = &[
     (
         "edge_erasure_execute/5",
         Class::NotCallerFacing(
-            "erasure act: the per-edge unit, called under the person erasure act's authority; \
-             returns its record's id and redacted fields, never an edge",
+            "erasure act: the per-edge unit; today only tests call it, by SQL, and the person \
+             erasure act is to call it under its own authority; returns its record's id and \
+             redacted fields, never an edge",
         ),
     ),
     (
