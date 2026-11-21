@@ -194,6 +194,70 @@ describe('sanitizeMarkdownHtml: no fetch channel survives', () => {
 	});
 });
 
+/**
+ * No authored stylesheet reaches the rendered document. A `<style>` element restyles the whole
+ * document it is inserted into, UI chrome included, and a sanitizer consumer must not depend on
+ * its own CSP to refuse it. Each case keeps a retention face.
+ */
+describe('sanitizeMarkdownHtml: no style element survives', () => {
+	const CSS = '.chrome{display:none}';
+
+	it('removes a top-level style element and its rules, keeping the words around it', () => {
+		const container = render(`Before.\n\n<style>${CSS}</style>\n\nAfter.`);
+		expect(container.querySelector('style')).toBeNull();
+		expect(container.innerHTML).not.toContain('<style');
+		expect(container.textContent).not.toContain(CSS);
+		expect(container.textContent).toContain('Before.');
+		expect(container.textContent).toContain('After.');
+	});
+
+	it('removes an SVG style element, keeping the drawing', () => {
+		const container = render(
+			`Before. <svg viewBox="0 0 10 10"><style>${CSS}</style><circle cx="5" cy="5" r="4"></circle></svg> After.`,
+		);
+		expect(container.querySelector('style')).toBeNull();
+		expect(container.innerHTML).not.toContain('<style');
+		expect(container.textContent).not.toContain(CSS);
+		expect(container.querySelector('svg circle')).not.toBeNull();
+		expect(container.textContent).toContain('Before.');
+		expect(container.textContent).toContain('After.');
+	});
+
+	it('leaves legitimate markdown output unchanged', () => {
+		const html = render(
+			'# Title\n\nA *para* with `code` and a [link](https://example.com).\n\n' +
+				'| a | b |\n|---|---|\n| 1 | 2 |\n\n- [x] done\n- [ ] not yet\n\n' +
+				'> quoted\n\n```ts\nconst x = 1;\n```\n\n<svg viewBox="0 0 4 4"><rect width="4" height="4"></rect></svg>',
+		).innerHTML;
+		expect(html).toMatchInlineSnapshot(`
+			"<h1>Title</h1>
+			<p>A <em>para</em> with <code>code</code> and a <a href="https://example.com">link</a>.</p>
+			<table>
+			<thead>
+			<tr>
+			<th>a</th>
+			<th>b</th>
+			</tr>
+			</thead>
+			<tbody><tr>
+			<td>1</td>
+			<td>2</td>
+			</tr>
+			</tbody></table>
+			<ul>
+			<li><input checked="" disabled="" type="checkbox"> done</li>
+			<li><input disabled="" type="checkbox"> not yet</li>
+			</ul>
+			<blockquote>
+			<p>quoted</p>
+			</blockquote>
+			<pre><code class="hljs language-ts"><span class="hljs-keyword">const</span> x = <span class="hljs-number">1</span>;
+			</code></pre><p><svg viewBox="0 0 4 4"><rect width="4" height="4"></rect></svg></p>
+			"
+		`);
+	});
+});
+
 describe('sanitizeMarkdownHtml — body links', () => {
 	const ID = '019d4add-f49d-7c43-a87d-dda470e5dd9c';
 	const OTHER = '01a16e2a-570d-77fa-9ca5-a905fe467e9a';
