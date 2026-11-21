@@ -453,6 +453,49 @@ async fn an_edge_outside_the_named_estate_is_refused(pool: PgPool) {
     assert_eq!(label.as_deref(), Some(LABEL), "and keeps its label");
 }
 
+/// The edge is re-homed by SQL to `kb_cogmaps` inside the probe's transaction, its
+/// `home_anchor_id` kept at the estate's context, so only the home-table arm can refuse it; the
+/// same unit on the unchanged edge is the admitted twin.
+///
+/// FAILS IF the unit erases an edge whose home is not a context because its anchor id matches one
+/// of the estate's contexts, or appends anything before refusing it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_unit_refuses_an_edge_not_homed_in_a_context(pool: PgPool) {
+    let x = estate(&pool).await;
+    let before = event_count(&pool).await;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("UPDATE kb_edges SET home_anchor_table = 'kb_cogmaps' WHERE id = $1")
+        .bind(x.e.uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("re-home the edge's table in the probe's transaction");
+    let err = sqlx::query_scalar::<_, Value>("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
+        .bind(x.e.uuid())
+        .bind(x.w.profile)
+        .bind(x.op.profile)
+        .bind(x.op.emitter)
+        .bind(Uuid::now_v7())
+        .fetch_one(&mut *tx)
+        .await
+        .expect_err("an edge homed on a cogmap is refused")
+        .to_string();
+    tx.rollback().await.unwrap();
+    assert!(
+        err.contains(&format!(
+            "edge_erasure_execute: edge {} is not homed in the estate of {}",
+            x.e.uuid(),
+            x.w.profile
+        )),
+        "refused for its home table; got {err}"
+    );
+    assert_eq!(event_count(&pool).await, before, "nothing appended");
+
+    let out = unit(&pool, &x, x.w.profile, Uuid::now_v7())
+        .await
+        .expect("the twin: the same unit on the context-homed edge erases it");
+    assert_eq!(out["folded"], json!(true));
+}
+
 /// FAILS IF the unit refuses an edge already folded by the ordinary path, folds it a second time,
 /// claims the fold in its record, or leaves its label, properties or ledger text in place.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
