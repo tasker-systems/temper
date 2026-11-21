@@ -34,7 +34,7 @@ serde_json = "1"
 # Encodes the `Link: rel="next"` target of a bounded artifact list from `ArtifactListParams` itself,
 # the struct `Query` reads back (already in the tree via axum).
 serde_urlencoded = "0.7"
-jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "12", features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v7", "serde"] }
