@@ -416,6 +416,36 @@ GATED_BODY="$(fn_body gated_routes)"
   fail=1
 }
 
+# (b1) Every blob handler is either budgeted or reviewed as unbudgeted. The blob write doors spend
+#      the per-principal blob-write budget, which binds to the three blob write groups through their
+#      rows' `rate_limit:` designation. A blob handler mounted in any other group carries no budget,
+#      so it must be one of the reviewed reads (or `relate`, one edge write with no provider I/O).
+#      A new blob write door mounted outside the budgeted groups fails here until it is placed in
+#      one, or reviewed onto the unbudgeted list.
+BLOB_BUDGETED_GROUPS='blob_commit_routes|blob_segment_routes|blob_write_routes'
+read -r -d '' BLOB_UNBUDGETED <<'EOF2' || true
+handlers::blobs::get
+handlers::blobs::list
+handlers::blobs::relate
+handlers::blobs::relations
+handlers::blobs::upload_progress
+EOF2
+UNBUDGETED_BLOBS="$(printf '%s\n' "$ALL" | awk -F'\t' -v g="^($BLOB_BUDGETED_GROUPS)$" '$2 ~ /^handlers::blobs::/ && $1 !~ g {print $2}' | sort -u)"
+UNREVIEWED_BLOBS="$(comm -23 <(printf '%s\n' "$UNBUDGETED_BLOBS" | sed '/^$/d') <(printf '%s\n' "$BLOB_UNBUDGETED" | sort -u))"
+if [[ -n "$UNREVIEWED_BLOBS" ]]; then
+  echo "audit-route-auth: FAIL — blob handler(s) mounted outside the budgeted blob groups and not reviewed as unbudgeted:" >&2
+  printf '  %s\n' $UNREVIEWED_BLOBS >&2
+  echo "  A blob write door belongs in blob_commit_routes, blob_segment_routes or blob_write_routes," >&2
+  echo "  which spend the per-principal blob-write budget. A read is added to BLOB_UNBUDGETED here." >&2
+  fail=1
+fi
+STRAY_IN_BUDGET="$(printf '%s\n' "$ALL" | awk -F'\t' -v g="^($BLOB_BUDGETED_GROUPS)$" '$1 ~ g && $2 !~ /^handlers::blobs::/ {print $1"\t"$2}')"
+if [[ -n "$STRAY_IN_BUDGET" ]]; then
+  echo "audit-route-auth: FAIL — a non-blob handler is mounted in a budgeted blob group:" >&2
+  printf '  %s\n' "$STRAY_IN_BUDGET" >&2
+  fail=1
+fi
+
 # (b2) The admin group is admin-ONLY by membership, not just by tier. Its tier is the gated stack,
 # which admits any approved principal; what makes a route there admin-only is the handler minting
 # the sealed `&SystemAdmin` proof (`require_system_admin`, or the erasure doors' 404-rendering

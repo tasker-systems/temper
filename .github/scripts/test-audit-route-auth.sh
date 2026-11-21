@@ -913,5 +913,23 @@ PYEOF
 run_test "budget applied outside apply_tier: fails" "$FIX" 1 \
     "does not apply require_principal_rate_limit from the row's rate_limit before apply_tier"
 
+# A blob write door mounted in gated_routes carries no budget: (b1) must fail it.
+FIX="${FIXTURE_DIR}/blob_write_door_unbudgeted"
+copy_module "$FIX"
+python3 - "$FIX/blob_doors.rs" "$FIX/gated.rs" <<'PYEOF'
+import sys
+doors, gated = sys.argv[1], sys.argv[2]
+s = open(doors).read()
+old = "        .routes(routes!(handlers::blobs::delete))\n"
+assert old in s
+open(doors, "w").write(s.replace(old, "", 1))
+g = open(gated).read()
+anchor = "        .routes(routes!(handlers::blobs::get))\n"
+assert anchor in g
+open(gated, "w").write(g.replace(anchor, anchor + "        .routes(routes!(handlers::blobs::delete))\n", 1))
+PYEOF
+run_test "blob delete mounted outside the budgeted groups: fails" "$FIX" 1 \
+    "not reviewed as unbudgeted"
+
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]

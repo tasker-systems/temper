@@ -413,22 +413,13 @@ async fn an_unapproved_caller_spends_no_budget(pool: PgPool) {
 }
 
 /// **Retry-After witness: a refusal never invites an immediate retry.** A budget already spent in
-/// a window 0.2 s from its end is refused with `Retry-After: 1`, the remaining time rounded up,
-/// never `0`.
+/// a window about 1.5 s from its end is refused with the remaining time rounded up: `1` or `2`,
+/// depending on how long the request takes, and never `0`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_refusal_at_the_end_of_the_window_says_retry_after_one(pool: PgPool) {
+async fn a_refusal_near_the_end_of_the_window_never_says_retry_after_zero(pool: PgPool) {
     let app = app_with_budget(pool, budget(1)).await;
-    let email = format!("blob-rl-edge-{}@example.com", Uuid::new_v4());
-    let (profile, ctx) = fixtures::create_test_profile_with_context(&app.pool, &email).await;
-    let token = generate_test_jwt(&format!("test|{profile}"), &email);
-    sqlx::query(
-        "INSERT INTO kb_principal_rate_counters (profile_id, door, window_started_at, call_count) \
-         VALUES ($1, 'blob_write', now() - interval '3599.8 seconds', 1)",
-    )
-    .bind(profile)
-    .execute(&app.pool)
-    .await
-    .expect("seed a spent window");
+    let (profile, ctx, token) = principal_with_id(&app.pool).await;
+    seed_counter(&app.pool, profile, "3598.5 seconds", 1).await;
 
     let resp = commit(&app, &token, ctx, vec![1]).await;
     assert_eq!(resp.status().as_u16(), 429, "the budget is already spent");
@@ -439,5 +430,85 @@ async fn a_refusal_at_the_end_of_the_window_says_retry_after_one(pool: PgPool) {
         .to_str()
         .expect("ascii")
         .to_string();
-    assert_eq!(retry, "1", "the remaining 0.2 s rounds up to one second");
+    assert!(
+        retry == "1" || retry == "2",
+        "about 1.5 s remain, rounded up; got {retry}"
+    );
+}
+
+/// **Window-reset witness.** A budget spent in a window that has since expired is not a refusal:
+/// the next call is admitted and starts a new window as its first call.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_expired_window_resets_the_budget(pool: PgPool) {
+    let app = app_with_budget(pool, budget(1)).await;
+    let (profile, ctx, token) = principal_with_id(&app.pool).await;
+    seed_counter(&app.pool, profile, "7200 seconds", 99).await;
+
+    let resp = commit(&app, &token, ctx, vec![1]).await;
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "an expired window spends nothing"
+    );
+    let count: i64 = sqlx::query_scalar(
+        "SELECT call_count FROM kb_principal_rate_counters WHERE profile_id = $1",
+    )
+    .bind(profile)
+    .fetch_one(&app.pool)
+    .await
+    .expect("the counter row");
+    assert_eq!(count, 1, "the admitted call is the new window's first");
+}
+
+/// **Concurrency witness.** The count is one atomic statement per call, so parallel calls cannot
+/// both read the same count: of eight concurrent commits against a budget of three, exactly three
+/// are admitted.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn concurrent_calls_admit_exactly_the_budget(pool: PgPool) {
+    let app = Arc::new(app_with_budget(pool, budget(3)).await);
+    let (ctx, token) = principal(&app.pool).await;
+
+    let mut calls = tokio::task::JoinSet::new();
+    for i in 0..8u8 {
+        let app = Arc::clone(&app);
+        let token = token.clone();
+        calls.spawn(async move {
+            commit(&app, &token, ctx, vec![i, 42])
+                .await
+                .status()
+                .as_u16()
+        });
+    }
+    let mut statuses = Vec::new();
+    while let Some(status) = calls.join_next().await {
+        statuses.push(status.expect("the call task"));
+    }
+    let admitted = statuses.iter().filter(|s| **s == 200).count();
+    let refused = statuses.iter().filter(|s| **s == 429).count();
+    assert_eq!((admitted, refused), (3, 5), "statuses {statuses:?}");
+}
+
+/// A provisioned principal, with its profile id.
+async fn principal_with_id(pool: &PgPool) -> (Uuid, Uuid, String) {
+    let email = format!("blob-rl-{}@example.com", Uuid::new_v4());
+    let (profile, ctx) = fixtures::create_test_profile_with_context(pool, &email).await;
+    (
+        profile,
+        ctx,
+        generate_test_jwt(&format!("test|{profile}"), &email),
+    )
+}
+
+/// Seed `profile`'s blob-write counter with `count` calls in a window that began `age` ago.
+async fn seed_counter(pool: &PgPool, profile: Uuid, age: &str, count: i64) {
+    sqlx::query(
+        "INSERT INTO kb_principal_rate_counters (profile_id, door, window_started_at, call_count) \
+         VALUES ($1, 'blob_write', now() - $2::interval, $3)",
+    )
+    .bind(profile)
+    .bind(age)
+    .bind(count)
+    .execute(pool)
+    .await
+    .expect("seed the counter");
 }
