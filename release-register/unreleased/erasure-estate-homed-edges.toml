@@ -1,6 +1,6 @@
 title    = "An edge erasure authority and a per-edge erasure unit, which no act calls yet"
 pr       = "self"
-classes  = ["additive"]
+classes  = ["additive", "behavioral"]
 surfaces = ["schema", "erasure-policy"]
 status   = "signal-only"
 body = '''
@@ -27,10 +27,12 @@ kb_edges, stay gaps until an act calls the unit.
 TODO(person-act step): when the person act calls edge_erasure_execute, this entry gains the
 behavioral class for person erasure, names which estate-homed edges it reaches, and says who
 observes the erased edges.
-Who observes: no one outside tests, since no edge_erased record is written in a deployment; the
-lock a writer of an edge now takes waits only on the unit, a delete of the edge row, or a change of
-its id. Witnesses: crates/temper-services/tests/edge_erasure_authority_test.rs,
+Who observes: no edge_erased record is written in a deployment, so no write is refused. A writer of
+an edge's properties, or a retype, reweight or fold of an edge, now takes FOR KEY SHARE on the edge
+row, which conflicts only with a FOR UPDATE, a DELETE or an id change of that row: besides the unit,
+it waits briefly behind relationship_assert's lookup of the active edge, fold_goal_edges, and the
+resource erasure and field scrub edge loops. Witnesses: crates/temper-services/tests/edge_erasure_authority_test.rs,
 edge_erasure_trail_test.rs, edge_erasure_unit_test.rs, edge_erasure_replay_test.rs and
-sensitivity_edge_erasure_bridge_test.rs. Release relevance: additive in schema; no behavior any
-user can reach changes.
+sensitivity_edge_erasure_bridge_test.rs. Release relevance: additive in schema; behavioral only in those short
+lock waits.
 '''
