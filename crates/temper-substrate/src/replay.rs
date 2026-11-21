@@ -681,15 +681,32 @@ pub const WALK_ORDER: &str = walk_order!();
 /// Live, the later appender's projection lands first and the earlier one's over it; the walk does
 /// the reverse. Only writes to the same row can differ this way. Where both writers take that row,
 /// in conflicting modes, before they append, the second waits before it draws its `seq`, and the
-/// walk agrees: the erasure acts and the scrubs take their subject resource `FOR UPDATE` first,
-/// and the resource writers that race them (`block_mutate`, `resource_reblock`, `block_append`,
-/// `resource_finalize`) take it `FOR KEY SHARE` before they append (20261003000110,
-/// 20261004000020). What this leaves is two writers of one row whose locks before the append do not
-/// conflict, two `block_mutate`s of one block, say, each holding only `FOR KEY SHARE` on the
-/// resource when it appends. Id order had the same residual and the intra-millisecond
-/// inversion besides. Where it is hit the walk diverges, which the byte-identity diff reports (a
-/// write guard does not abort it; see `temper.replaying` below), or it raises on a reference,
-/// which fails the replay.
+/// walk agrees. The erasure acts and the scrubs take their subject resource `FOR UPDATE` first.
+/// The block writers that race them (`block_mutate`, `resource_reblock`, `block_append`,
+/// `resource_finalize`) take it `FOR KEY SHARE` in SQL before they append (20261003000110,
+/// 20261004000020).
+///
+/// The property and title writers do not. `property_set` and `facet_set` (20260730000010),
+/// `resource_update` (20260709000050) and the `property_unset` arm of `fire_with`, which appends
+/// and then runs `_project_property_unset` (20261018100000), take no lock on R before
+/// `_event_append`. Their first lock on R is the write guard inside the projector
+/// (`_resource_write_guard`, as in `_project_resource_updated`, 20261117000010), which runs after
+/// the `seq` is drawn. Against an erasure act that is harmless: the guard refuses a write that
+/// waited out an act, and the write rolls back. Against a field scrub it is not. A `property_set`
+/// appends at seq 10 and its guard waits on the scrub's `FOR UPDATE`; the scrub appends its clear
+/// at seq 11 and commits; the set's projection then lands. Live keeps the set's value, and the walk
+/// projects 10 then 11 and keeps the clear. So these writers are safe only when their caller locks
+/// R before the append, and every live caller does: `update_resource_in_tx_prepared` takes
+/// `lock_resource_for_write` (`FOR NO KEY UPDATE`) first, temper-services' resource doors open
+/// through the write floor (`write_floor::modify_floor_in_tx`, `FOR KEY SHARE`), and a create
+/// writes properties only on the resource it is creating, which no other transaction can see. A
+/// new caller of these writers must take one of those locks before it fires them.
+///
+/// What this leaves is two writers of one row whose locks before the append do not conflict, two
+/// `block_mutate`s of one block, say, each holding only `FOR KEY SHARE` on the resource when it
+/// appends. Id order had the same residual and the intra-millisecond inversion besides. Where it is
+/// hit the walk diverges, which the byte-identity diff reports (a write guard does not abort it;
+/// see `temper.replaying` below), or it raises on a reference, which fails the replay.
 pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
     for (table, rows) in &snap.inputs {
         restore_table(pool, table, rows).await?;

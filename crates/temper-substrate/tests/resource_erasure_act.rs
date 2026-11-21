@@ -4929,14 +4929,16 @@ async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) 
     );
 }
 
-/// (21, the replay bypass) A lawful write can sort after the act in walk order where its append
-/// ran after the act's but its projection landed before the act's (the residual `replay::replay`
-/// states). The ledger's walk-order shape is built here by appending a `property_set`
-/// on R through the real write path AFTER the act commits, inside a transaction that sets
-/// `temper.replaying` — the setting the replay walk sets around each event — so the live write
-/// guard lets it through as the walk's would. The witness is that replay projects that event
-/// where it sorts instead of aborting on the write guard, and comes back byte-identical. The
-/// setting is transaction-local: the same connection no longer carries it after the commit.
+/// (21, the replay bypass) A ledger can hold a write to R that sorts after the act in walk order.
+/// No live writer produces one: a writer that locks R before it appends waits on the act's
+/// `FOR UPDATE` and is then refused by the write guard, and so is a writer whose first lock is
+/// the guard in its projector. The shape is forged here, to witness what replay does with it:
+/// a `property_set` on R through the real write path AFTER the act commits, inside a
+/// transaction that sets `temper.replaying` — the setting the replay walk sets around each
+/// event — so the live write guard lets it through as the walk's would. The witness is that
+/// replay projects that event where it sorts instead of aborting on the write guard, and comes
+/// back byte-identical. The setting is transaction-local: the same connection no longer carries
+/// it after the commit.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
