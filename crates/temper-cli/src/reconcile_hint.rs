@@ -49,9 +49,9 @@ use uuid::Uuid;
 
 use crate::cli::{AdminAction, AdminErasureAction, Commands, ResourceAction};
 
-/// The opening every lost-ack hint shares: what a network error on a write can mean.
-const LOST_ACK_PREAMBLE: &str = "\
-note: a write can fail with a network error *after* the server has already committed it.
+/// The opening of a keyed create's hint, which also fires on a server 5xx.
+const KEYED_PREAMBLE: &str = "\
+note: a create can fail with a network error or a server 5xx *after* the server has already committed it.
 This is a lost acknowledgment, not a lost write — it clusters during deploy / cold-start windows.";
 
 /// The multi-line guidance printed after a lost-ack write failure that has no idempotency key to
@@ -82,11 +82,12 @@ prior (keep mode: a plan with no redacted_fields) or that the field is already c
 Re-issue with --execute only if the survey shows the act did not land: a write to the field since
 then would make a retry act on the new value.";
 
-/// The guidance printed after a create sent with `key` fails with a network error: re-issuing it
-/// with the same key is the safe retry, so the hint names the key and needs no reconcile step.
+/// The guidance printed after a create sent with `key` fails with a network error or a server
+/// 5xx: re-issuing it with the same key is the safe retry, so the hint names the key and needs no
+/// reconcile step.
 pub fn keyed_create_hint(key: Uuid) -> String {
     format!(
-        "{LOST_ACK_PREAMBLE}\n\
+        "{KEYED_PREAMBLE}\n\
 This create was sent with idempotency key {key}. Re-issue the same command with `--idempotency-key {key}`:
 if the first attempt landed, the server returns that resource instead of creating a second; if it did not,
 the create runs once."
@@ -218,14 +219,19 @@ pub fn lost_ack_prone(command: &Commands) -> Option<LostAckProne> {
 /// answer already printed, or the server's `409`) and a request refused before it
 /// ran (`BadRequest`: a ref the CLI refused locally), since a gateway's `5xx` can
 /// front an act that completed. A server `400` arrives untyped, as `Api`, so it
-/// gets the hint too. A create whose key is known is told to replay it ([`keyed_create_hint`]).
+/// gets the hint too. A create whose key is known is told to replay it ([`keyed_create_hint`]), on
+/// a network error or a server 5xx: both can hide a create that landed, and the replay is safe.
 pub fn reconcile_hint(prone: Option<LostAckProne>, err: &TemperError) -> Option<Cow<'static, str>> {
     let network = matches!(err, TemperError::Network(_));
+    // A gateway can answer 5xx after the server committed, so a keyed create's outcome is as
+    // unknown there as after a dropped connection. Replaying its key is safe either way.
+    let unknown_outcome =
+        network || matches!(err, TemperError::ServerError { status, .. } if *status >= 500);
     let unrefused = !matches!(err, TemperError::Conflict(_) | TemperError::BadRequest(_));
     match prone? {
         LostAckProne::ResourceCreate {
             idempotency_key: Some(key),
-        } => network.then(|| Cow::Owned(keyed_create_hint(key))),
+        } => unknown_outcome.then(|| Cow::Owned(keyed_create_hint(key))),
         LostAckProne::ResourceCreate {
             idempotency_key: None,
         }
@@ -349,16 +355,45 @@ mod tests {
             &TemperError::Network("connection reset".into()),
         )
         .expect("a network error on a create is hinted");
-        assert!(hint.starts_with(LOST_ACK_PREAMBLE), "{hint}");
+        assert!(hint.starts_with(KEYED_PREAMBLE), "{hint}");
         assert!(hint.contains(&format!("--idempotency-key {key}")), "{hint}");
         assert!(!hint.contains("--title-contains"), "{hint}");
+    }
+
+    /// FAILS IF a keyed create's server 5xx goes unhinted (a gateway can answer 5xx after the
+    /// create committed), or a 4xx-shaped error, a key-less create or an update is hinted on one.
+    #[test]
+    fn a_keyed_create_server_5xx_names_the_key_and_nothing_else_does() {
+        let key = Uuid::now_v7();
+        let keyed = Some(LostAckProne::ResourceCreate {
+            idempotency_key: Some(key),
+        });
+        let gateway = TemperError::ServerError {
+            status: 504,
+            message: "gateway timeout".into(),
+        };
+        let hint = reconcile_hint(keyed, &gateway).expect("a keyed create's 5xx is hinted");
+        assert!(hint.contains(&format!("--idempotency-key {key}")), "{hint}");
+
+        assert_eq!(
+            reconcile_hint(keyed, &TemperError::Api("unclassified".into())),
+            None
+        );
+        for prone in [
+            LostAckProne::ResourceUpdate,
+            LostAckProne::ResourceCreate {
+                idempotency_key: None,
+            },
+        ] {
+            assert_eq!(reconcile_hint(Some(prone), &gateway), None, "{prone:?}");
+        }
     }
 
     /// FAILS IF the key-less hint stops stating present truth: the write path has a key, a create
     /// replays safely with it, and only a caller without it must reconcile first.
     #[test]
     fn the_keyless_hint_names_the_flag_and_keeps_reconcile_first() {
-        assert!(RECONCILE_HINT.starts_with(LOST_ACK_PREAMBLE));
+        assert!(RECONCILE_HINT.starts_with("note: a write can fail with a network error"));
         assert!(RECONCILE_HINT.contains("--idempotency-key"));
         assert!(!RECONCILE_HINT.contains("has no idempotency key"));
         assert!(RECONCILE_HINT.contains("--title-contains"));

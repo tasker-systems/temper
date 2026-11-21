@@ -16,8 +16,9 @@ manifest, it continues under the key that attempt saved: a different `--idempote
 the saved one, which the network-error hint then names. A keyed replay of a large create that
 already finished returns that resource instead of appending into it.
 
-Behavioral: on a network error the error payload's `hint` (stderr in TOON mode) now names the key
-the create sent and says to re-issue with `--idempotency-key <key>`, instead of saying the write
+Behavioral: on a network error, or a server 5xx (code `api`, which a gateway can answer after the
+create committed), the error payload's `hint` (stderr in TOON mode) now names the key the create
+sent and says to re-issue with `--idempotency-key <key>`, instead of saying the write
 path has no key and that a retried create mints a duplicate. The `update` hint, and the key-less
 case, keep "reconcile first". The payload's shape is unchanged; only the hint's text differs.
 

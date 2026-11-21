@@ -108,8 +108,8 @@ fn mock_failing_ingest(rt: &tokio::runtime::Runtime) -> MockServer {
 }
 
 /// FAILS IF `--idempotency-key` is not what the create sends, in the body the server dedups on
-/// and the header the proxy reads, or if an in-process retry of the same invocation sends any
-/// other key.
+/// and the header the proxy reads, if an in-process retry of the same invocation sends any other
+/// key, or if the server 5xx it ends on does not name the key to replay.
 #[test]
 fn the_given_key_is_sent_on_every_attempt_of_one_invocation() {
     let rt = tokio::runtime::Runtime::new().expect("test runtime");
@@ -119,6 +119,13 @@ fn the_given_key_is_sent_on_every_attempt_of_one_invocation() {
 
     let output = run_create(&dir, &server.uri(), &["--idempotency-key", &key]);
     assert!(!output.status.success(), "a 503 create fails");
+    // A gateway can answer 5xx after the create committed: the hint names the key to replay.
+    let payload = stdout_json(&output);
+    assert_eq!(payload["code"], "api", "{payload}");
+    let hint = payload["hint"]
+        .as_str()
+        .expect("a 5xx on a keyed create is hinted");
+    assert!(hint.contains(&format!("--idempotency-key {key}")), "{hint}");
 
     let requests = rt
         .block_on(server.received_requests())
