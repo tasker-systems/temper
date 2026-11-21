@@ -20,55 +20,12 @@ use uuid::Uuid;
 
 use temper_substrate::ids::EdgeId;
 
-use edge_erasure::{asserting_event, authored, edge, facet, resource, world, World};
+use edge_erasure::{
+    asserting_event, authored, edge, facet, historical_reassertion, resource, world,
+};
 
 const LABEL: &str = "jane roe told us";
 const REASONING: &str = "jane roe said so on the call";
-
-/// A re-assertion as every version before 20261117000030 recorded one: the asserting event's
-/// payload under a freshly minted `edge_id`, appended as written, then projected. The projector's
-/// ON CONFLICT answers with the existing edge, so the event names an id with no row.
-async fn historical_reassertion(pool: &PgPool, w: &World, e: EdgeId) -> Uuid {
-    let asserted = asserting_event(pool, e).await;
-    let payload: Value = sqlx::query_scalar(
-        "SELECT jsonb_set(payload, '{edge_id}', to_jsonb($2::text)) FROM kb_events WHERE id = $1",
-    )
-    .bind(asserted)
-    .bind(Uuid::now_v7())
-    .fetch_one(pool)
-    .await
-    .expect("the re-assertion payload");
-    let mut tx = pool.begin().await.unwrap();
-    let ev: Uuid = sqlx::query_scalar(
-        "SELECT _event_append('relationship_asserted', $1, $2->'home'->>'table', \
-                              ($2->'home'->>'id')::uuid, $2)",
-    )
-    .bind(w.emitter)
-    .bind(&payload)
-    .fetch_one(&mut *tx)
-    .await
-    .unwrap();
-    let answered: Uuid = sqlx::query_scalar("SELECT _project_relationship_asserted($1, $2)")
-        .bind(ev)
-        .bind(&payload)
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
-    assert_eq!(
-        answered,
-        e.uuid(),
-        "the projection reweights the existing edge"
-    );
-    let minted: Uuid = payload["edge_id"].as_str().unwrap().parse().unwrap();
-    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_edges WHERE id = $1")
-        .bind(minted)
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    assert_eq!(rows, 0, "the fixture must record a phantom");
-    ev
-}
 
 struct Edged {
     edge: EdgeId,

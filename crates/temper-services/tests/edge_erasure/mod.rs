@@ -1,10 +1,11 @@
 //! The builders the edge-erasure witnesses share: `edge_erasure_trail_test.rs`,
-//! `edge_erasure_authority_test.rs`, `edge_erasure_unit_test.rs`, `edge_erasure_replay_test.rs` and
-//! `sensitivity_edge_erasure_bridge_test.rs`. One copy, so the five build the same world: a profile
-//! whose `@me` context is in its estate, resources homed there, and edges, facets and folds written
-//! through the real write paths. Profiles, entities and contexts come from `test_support`.
+//! `edge_erasure_authority_test.rs`, `edge_erasure_unit_test.rs`, `edge_erasure_replay_test.rs`,
+//! `sensitivity_edge_erasure_bridge_test.rs` and `person_erasure_estate_edges_test.rs`. One copy, so
+//! the six build the same world: a profile whose `@me` context is in its estate, resources homed
+//! there, and edges, facets and folds written through the real write paths. Profiles, entities and
+//! contexts come from `test_support`.
 
-// `allow`, not `expect` (RUST-LINT-3's shared-module exception): this file is compiled into five
+// `allow`, not `expect` (RUST-LINT-3's shared-module exception): this file is compiled into six
 // test binaries, each using a different subset of it (the authority witnesses never fold or
 // facet; the replay witness homes its resources by hand), so `dead_code` fires in some binaries
 // and not others, and an `expect` would be unfulfilled in whichever binary uses everything.
@@ -108,6 +109,20 @@ pub async fn edge(
     label: &str,
     ctx: EventContext,
 ) -> EdgeId {
+    edge_in(pool, w, w.home, src, tgt, label, ctx).await
+}
+
+/// A `leads_to` edge homed in `home`, labelled `label`, asserted by the world's emitter under
+/// `ctx`.
+pub async fn edge_in(
+    pool: &PgPool,
+    w: &World,
+    home: ContextId,
+    src: ResourceId,
+    tgt: ResourceId,
+    label: &str,
+    ctx: EventContext,
+) -> EdgeId {
     let mut conn = pool.acquire().await.expect("acquire");
     fire_with(
         &mut conn,
@@ -118,7 +133,7 @@ pub async fn edge(
             polarity: EdgePolarity::Forward,
             label: Some(label),
             weight: 1.0,
-            home: EdgeHome::Context(w.home),
+            home: EdgeHome::Context(home),
             emitter: EntityId::from(w.emitter),
         },
         ctx,
@@ -169,6 +184,52 @@ pub async fn fold(pool: &PgPool, w: &World, e: EdgeId) {
     )
     .await
     .expect("fold the edge");
+}
+
+/// A re-assertion as every version before 20261117000030 recorded one: the asserting event's
+/// payload under a freshly minted `edge_id`, appended as written, then projected. The projector's
+/// ON CONFLICT answers with the existing edge, so the event names an id with no row
+/// (`_edge_phantom_reassertions`). Returns the re-assertion's event.
+pub async fn historical_reassertion(pool: &PgPool, w: &World, e: EdgeId) -> Uuid {
+    let asserted = asserting_event(pool, e).await;
+    let payload: Value = sqlx::query_scalar(
+        "SELECT jsonb_set(payload, '{edge_id}', to_jsonb($2::text)) FROM kb_events WHERE id = $1",
+    )
+    .bind(asserted)
+    .bind(Uuid::now_v7())
+    .fetch_one(pool)
+    .await
+    .expect("the re-assertion payload");
+    let mut tx = pool.begin().await.unwrap();
+    let ev: Uuid = sqlx::query_scalar(
+        "SELECT _event_append('relationship_asserted', $1, $2->'home'->>'table', \
+                              ($2->'home'->>'id')::uuid, $2)",
+    )
+    .bind(w.emitter)
+    .bind(&payload)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    let answered: Uuid = sqlx::query_scalar("SELECT _project_relationship_asserted($1, $2)")
+        .bind(ev)
+        .bind(&payload)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        answered,
+        e.uuid(),
+        "the projection reweights the existing edge"
+    );
+    let minted: Uuid = payload["edge_id"].as_str().unwrap().parse().unwrap();
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_edges WHERE id = $1")
+        .bind(minted)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "the fixture must record a phantom");
+    ev
 }
 
 /// The edge's `asserted_by_event_id`.

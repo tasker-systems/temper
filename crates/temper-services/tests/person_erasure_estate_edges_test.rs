@@ -1,0 +1,720 @@
+#![cfg(feature = "test-db")]
+//! Witnesses for the person act's edge step (migration 20261201000060, `principal_erasure_execute`):
+//! after its resource erasures, the act runs `edge_erasure_execute` for every edge homed in an
+//! estate context whose text is not yet erased (`_edge_erasure_complete`), live or folded before
+//! the act, whatever the edge points at.
+//!
+//! Each world is built through the real write paths (`edge_erasure`'s builders) and erased through
+//! `erasure_service::execute_erasure`, as `person_erasure_estate_test.rs` does. Only the historical
+//! re-assertion is appended by SQL, as every version before 20261117000030 recorded one. "The base"
+//! below is the act before the edge step: it reached an edge only through an estate resource at
+//! either end.
+
+mod edge_erasure;
+
+use serde_json::{json, Value};
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use temper_core::types::ids::ProfileId;
+use temper_core::types::property_owner::PropertyOwner;
+use temper_services::services::erasure_service::{
+    execute_erasure, survey_erasure, ErasureCompletion,
+};
+use temper_services::services::resource_erasure_service::{
+    execute_resource_erasure, ResourceErasureOutcome, ResourceErasureRequest,
+};
+use temper_services::test_support;
+use temper_substrate::events::{fire, EventContext, SeedAction};
+use temper_substrate::ids::{ContextId, EdgeId, EntityId};
+use temper_substrate::payloads::AnchorRef;
+use temper_substrate::replay;
+use temper_substrate::writes;
+use temper_workflow::operations::Surface;
+
+use edge_erasure::{
+    asserting_event, authored, edge, edge_in, facet, fold, historical_reassertion, resource,
+    resource_in, world, World,
+};
+
+const LABEL: &str = "jane roe told us";
+const REASONING: &str = "jane roe said so on the call";
+const SCALAR: &str = "jane roe diagnosis";
+const UNSET: &str = "jane roe remark, retracted";
+/// Text the erased edge alone carries: its label, its authorship reasoning, a facet mark's value,
+/// a scalar property's value and a retracted property's value.
+const NEEDLES: [&str; 5] = [LABEL, REASONING, "confided", SCALAR, UNSET];
+/// `_principal_erasure_edges_outcome(1)`.
+const ONE_EDGE: &str = "1 edge(s) homed in the estate erased: folded, labels cleared, edge-owned \
+                        properties and ledger text sentinel-scrubbed";
+
+/// A context of a team that is not the person's personal team: outside the estate.
+async fn team_context(pool: &PgPool) -> ContextId {
+    let team = test_support::team::insert(pool, &format!("team-{}", Uuid::now_v7())).await;
+    ContextId::from(test_support::context::insert_team(pool, team, "shared", "shared").await)
+}
+
+async fn operator(pool: &PgPool) -> temper_services::auth::SystemAdmin {
+    let op = world(pool).await;
+    test_support::grant_governance(pool, op.profile).await;
+    test_support::system_admin_proof_for(pool, op.profile).await
+}
+
+/// The person act on `subject` through the service, under a fresh operator and request.
+async fn erase(pool: &PgPool, subject: Uuid) -> ErasureCompletion {
+    let admin = operator(pool).await;
+    execute_erasure(
+        pool,
+        &admin,
+        ProfileId::from(subject),
+        Uuid::now_v7(),
+        Surface::ApiHttp,
+        &Default::default(),
+    )
+    .await
+    .expect("the person act completes")
+}
+
+/// Ledger rows (payload or metadata) whose text contains `needle`.
+async fn ledger_quoting(pool: &PgPool, needle: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events \
+          WHERE strpos(payload::text, $1) > 0 OR strpos(coalesce(metadata::text, ''), $1) > 0",
+    )
+    .bind(needle)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// The `relationship_folded` events naming the edge: (payload, correlation id), in order.
+async fn folds_of(pool: &PgPool, e: EdgeId) -> Vec<(Value, Option<Uuid>)> {
+    sqlx::query_as(
+        "SELECT ev.payload, ev.correlation_id FROM kb_events ev \
+           JOIN kb_event_types et ON et.id = ev.event_type_id \
+          WHERE et.name = 'relationship_folded' AND (ev.payload ->> 'edge_id')::uuid = $1 \
+          ORDER BY ev.id",
+    )
+    .bind(e.uuid())
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// The `edge_erased` records naming the edge: (event id, payload), in order.
+async fn records_of(pool: &PgPool, e: EdgeId) -> Vec<(Uuid, Value)> {
+    sqlx::query_as(
+        "SELECT ev.id, ev.payload FROM kb_events ev \
+           JOIN kb_event_types et ON et.id = ev.event_type_id \
+          WHERE et.name = 'edge_erased' AND (ev.payload ->> 'subject_id')::uuid = $1 \
+          ORDER BY ev.id",
+    )
+    .bind(e.uuid())
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// The edge's (is_folded, label).
+async fn edge_state(pool: &PgPool, e: EdgeId) -> (bool, Option<String>) {
+    sqlx::query_as("SELECT is_folded, label FROM kb_edges WHERE id = $1")
+        .bind(e.uuid())
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// The edge is folded with no label, and every property row it owns is folded at the sentinels.
+async fn assert_sentinelled(pool: &PgPool, e: EdgeId) {
+    let (folded, label) = edge_state(pool, e).await;
+    assert!(folded, "the edge is folded");
+    assert_eq!(label, None, "the edge's label is NULL");
+    let props: Vec<(String, Value, bool)> = sqlx::query_as(
+        "SELECT property_key, property_value, is_folded FROM kb_properties \
+          WHERE owner_table = 'kb_edges' AND owner_id = $1",
+    )
+    .bind(e.uuid())
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert!(!props.is_empty(), "the fixture gave the edge properties");
+    for (key, value, folded) in &props {
+        let n = key
+            .strip_prefix("erased-key-")
+            .unwrap_or_else(|| panic!("key {key:?} is not a sentinel"));
+        assert!(
+            !n.is_empty() && !n.starts_with('0') && n.chars().all(|c| c.is_ascii_digit()),
+            "key {key:?} is erased-key-<n>"
+        );
+        assert_eq!(*value, json!("erased"), "{key}: value at the sentinel");
+        assert!(*folded, "{key}: the row is folded");
+    }
+}
+
+/// One labelled edge, homed in `home`, between `src` and `tgt`, with authorship reasoning, a scalar
+/// property, a two-mark facet, a property set then retracted, and a historical re-assertion.
+async fn rich_edge(
+    pool: &PgPool,
+    w: &World,
+    home: ContextId,
+    src: temper_substrate::ids::ResourceId,
+    tgt: temper_substrate::ids::ResourceId,
+) -> EdgeId {
+    let e = edge_in(pool, w, home, src, tgt, LABEL, authored(REASONING)).await;
+    writes::assert_keyed_property_with(
+        pool,
+        PropertyOwner::Edge { id: e },
+        "diagnosis",
+        &json!(SCALAR),
+        1.0,
+        EntityId::from(w.emitter),
+        EventContext::default(),
+    )
+    .await
+    .expect("a scalar property on the edge");
+    facet(
+        pool,
+        w,
+        e,
+        json!({ "node_label": "jane roe", "status": "confided" }),
+    )
+    .await;
+    let unset = writes::assert_keyed_property_with(
+        pool,
+        PropertyOwner::Edge { id: e },
+        "remark",
+        &json!(UNSET),
+        1.0,
+        EntityId::from(w.emitter),
+        EventContext::default(),
+    )
+    .await
+    .expect("a property to retract");
+    writes::retract_property_with(
+        pool,
+        e,
+        unset,
+        EntityId::from(w.emitter),
+        EventContext::default(),
+    )
+    .await
+    .expect("retract the property");
+    historical_reassertion(pool, w, e).await;
+    for needle in NEEDLES {
+        assert!(
+            ledger_quoting(pool, needle).await > 0,
+            "setup: the ledger holds {needle:?}"
+        );
+    }
+    e
+}
+
+/// The `erasure` references of the act's record.
+async fn erasure_references(pool: &PgPool, completion: &ErasureCompletion) -> Vec<Uuid> {
+    let refs: Value = sqlx::query_scalar("SELECT \"references\" FROM kb_events WHERE id = $1")
+        .bind(completion.event_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    refs.as_array()
+        .expect("references")
+        .iter()
+        .filter(|r| r["rel"] == "erasure")
+        .map(|r| r["target"]["id"].as_str().unwrap().parse().unwrap())
+        .collect()
+}
+
+/// W1. FAILS on the base because the edge stays live and labelled: an edge homed in the subject's
+/// `@me` context between two team resources has no estate endpoint, so no resource erasure reaches
+/// it. Through the act it must end folded, its label NULL, its owned properties at the sentinels,
+/// no ledger copy of its text, one `edge_erased` record (estate_of the subject, folded true) that
+/// the act's record references, and the record's kb_edges target naming one edge. The act
+/// committing at all shows the deferred owner check passed inside it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_edge_homed_in_the_estate_between_team_resources_is_folded_and_erased(pool: PgPool) {
+    let w = world(&pool).await;
+    let team = team_context(&pool).await;
+    let r = resource_in(&pool, &w, team, "alpha").await;
+    let t = resource_in(&pool, &w, team, "beta").await;
+    let e = rich_edge(&pool, &w, w.home, r, t).await;
+
+    let completion = erase(&pool, w.profile).await;
+
+    assert_sentinelled(&pool, e).await;
+    for needle in NEEDLES {
+        assert_eq!(
+            ledger_quoting(&pool, needle).await,
+            0,
+            "no ledger row quotes {needle:?} after the act"
+        );
+    }
+    let records = records_of(&pool, e).await;
+    assert_eq!(records.len(), 1, "one edge_erased record, committed");
+    let (record_id, record) = &records[0];
+    assert_eq!(record["estate_of"], json!(w.profile));
+    assert_eq!(
+        record["folded"],
+        json!(true),
+        "the act folded the live edge"
+    );
+    let folds = folds_of(&pool, e).await;
+    assert_eq!(folds.len(), 1, "one fold");
+    assert_eq!(folds[0].0["reason"], json!("estate_erased"));
+    let request: Option<Uuid> =
+        sqlx::query_scalar("SELECT correlation_id FROM kb_events WHERE id = $1")
+            .bind(completion.event_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(folds[0].1, request, "the fold is the act's");
+    assert!(
+        erasure_references(&pool, &completion)
+            .await
+            .contains(record_id),
+        "the act's record references the edge_erased"
+    );
+    assert!(
+        completion
+            .targets
+            .iter()
+            .any(|x| x.target == "kb_edges" && x.outcome == ONE_EDGE),
+        "the record counts the edge: {:?}",
+        completion.targets
+    );
+    let tombstoned: bool =
+        sqlx::query_scalar("SELECT tombstoned_at IS NOT NULL FROM kb_profiles WHERE id = $1")
+            .bind(w.profile)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(tombstoned, "the act committed with its subject tombstoned");
+    for (res, what) in [(r, "the source"), (t, "the target")] {
+        let erased: bool =
+            sqlx::query_scalar("SELECT erased_at IS NOT NULL FROM kb_resources WHERE id = $1")
+                .bind(res.uuid())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!erased, "{what}, a team resource, is not erased");
+    }
+}
+
+/// W2. FAILS on the base because the edge stays live and labelled: a resource in `@me` asserts an
+/// edge to a team resource, homed in `@me`, and is then moved to a team context through the real
+/// rehome write. The edge keeps its home, so the act reaches it by that home and erases it as in
+/// W1, and both resources stay live.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_moved_out_resource_leaves_its_estate_homed_edge_to_the_act(pool: PgPool) {
+    let w = world(&pool).await;
+    let team = team_context(&pool).await;
+    let r = resource(&pool, &w, "moving page").await;
+    let t = resource_in(&pool, &w, team, "team page").await;
+    let e = rich_edge(&pool, &w, w.home, r, t).await;
+    let mut conn = pool.acquire().await.unwrap();
+    fire(
+        &mut conn,
+        SeedAction::ResourceRehome {
+            resource: r,
+            home: AnchorRef::context(team),
+            emitter: EntityId::from(w.emitter),
+        },
+    )
+    .await
+    .expect("move the resource out of the estate");
+    drop(conn);
+    let home: (String, Uuid) =
+        sqlx::query_as("SELECT home_anchor_table, home_anchor_id FROM kb_edges WHERE id = $1")
+            .bind(e.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        home,
+        ("kb_contexts".to_owned(), w.home.uuid()),
+        "setup: the move leaves the edge homed in the estate"
+    );
+
+    let completion = erase(&pool, w.profile).await;
+
+    assert!(
+        completion.resource_erasures.is_empty(),
+        "no estate resource is left to erase"
+    );
+    assert_sentinelled(&pool, e).await;
+    for needle in NEEDLES {
+        assert_eq!(ledger_quoting(&pool, needle).await, 0, "{needle:?}");
+    }
+    assert_eq!(
+        records_of(&pool, e).await.len(),
+        1,
+        "one edge_erased record"
+    );
+    for res in [r, t] {
+        let erased: bool =
+            sqlx::query_scalar("SELECT erased_at IS NOT NULL FROM kb_resources WHERE id = $1")
+                .bind(res.uuid())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!erased, "resource {} is untouched", res.uuid());
+    }
+}
+
+/// W3. FAILS on the base because R8 counts the edge's label (and its property values) as text the
+/// subject kept outside the estate: the subject authored the edge, and its events are on no estate
+/// resource's trail. The plan's trail now holds every estate-homed edge's own trail, so the survey
+/// names no `edge labels` or `property values` entry, and it predicts the edge step's kb_edges
+/// target exactly as the act then records it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn r8_counts_an_estate_homed_edge_label_inside_the_estate(pool: PgPool) {
+    let w = world(&pool).await;
+    let team = team_context(&pool).await;
+    let r = resource_in(&pool, &w, team, "alpha").await;
+    let t = resource_in(&pool, &w, team, "beta").await;
+    rich_edge(&pool, &w, w.home, r, t).await;
+    let admin = operator(&pool).await;
+
+    let survey = survey_erasure(&pool, &admin, ProfileId::from(w.profile), None)
+        .await
+        .expect("survey");
+
+    for class in ["edge labels", "property values"] {
+        let target = format!("kb_events.payload ({class})");
+        assert!(
+            !survey.targets.iter().any(|x| x.target == target),
+            "no {target} remainder for the estate-homed edge: {:?}",
+            survey.targets
+        );
+    }
+    let predicted: Vec<_> = survey
+        .targets
+        .iter()
+        .filter(|x| x.target == "kb_edges")
+        .collect();
+    assert_eq!(
+        predicted.len(),
+        1,
+        "one kb_edges target: {:?}",
+        survey.targets
+    );
+    assert_eq!(predicted[0].outcome, ONE_EDGE);
+
+    let completion = erase(&pool, w.profile).await;
+    assert_eq!(
+        survey.targets, completion.targets,
+        "the survey predicted the record's targets"
+    );
+}
+
+/// W4. A team-homed edge into the estate is resource erasure's, as before: folded once, reason
+/// `resource_erased`, label NULL, properties at the sentinels, and no `edge_erased` record. Beside
+/// it an estate-homed edge between team resources is erased by the edge step. FAILS on the base
+/// because that second edge stays live; FAILS IF the edge step selects by anything but the estate
+/// home (an `edge_erased` record, or a second fold, for the team-homed edge).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_team_homed_edge_into_the_estate_is_handled_as_before(pool: PgPool) {
+    let w = world(&pool).await;
+    let team = team_context(&pool).await;
+    let estate_page = resource(&pool, &w, "estate page").await;
+    let t = resource_in(&pool, &w, team, "team page").await;
+    let into = edge_in(&pool, &w, team, t, estate_page, LABEL, authored(REASONING)).await;
+    facet(
+        &pool,
+        &w,
+        into,
+        json!({ "node_label": "jane roe", "status": "confided" }),
+    )
+    .await;
+    let a = resource_in(&pool, &w, team, "alpha").await;
+    let b = resource_in(&pool, &w, team, "beta").await;
+    let homed = edge(
+        &pool,
+        &w,
+        a,
+        b,
+        "an estate edge's label",
+        authored("its reasoning"),
+    )
+    .await;
+    facet(&pool, &w, homed, json!({ "status": "homed here" })).await;
+
+    erase(&pool, w.profile).await;
+
+    assert_sentinelled(&pool, into).await;
+    let folds = folds_of(&pool, into).await;
+    assert_eq!(folds.len(), 1, "one fold of the team-homed edge");
+    assert_eq!(folds[0].0["reason"], json!("resource_erased"));
+    assert!(
+        records_of(&pool, into).await.is_empty(),
+        "no edge_erased for the team-homed edge"
+    );
+    assert_sentinelled(&pool, homed).await;
+    assert_eq!(
+        records_of(&pool, homed).await.len(),
+        1,
+        "the estate-homed edge is erased by the edge step"
+    );
+}
+
+/// W5. FAILS on the base because the act appends no `estate_erased` fold, so there is none to keep.
+/// After the act erases an estate-homed edge R→T, a second live edge between the same pair is
+/// asserted in a team context, and T is then erased by a standalone resource erasure. That later
+/// act must leave the first edge's `estate_erased` fold as it is and not fold it again, and must
+/// number the second edge's label after the first's sentinel: `erased-label-2`, never a second
+/// `erased-label-1`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_later_erasure_of_an_endpoint_leaves_the_edge_act_record(pool: PgPool) {
+    let w = world(&pool).await;
+    let team = team_context(&pool).await;
+    let r = resource_in(&pool, &w, team, "alpha").await;
+    let t = resource_in(&pool, &w, team, "beta").await;
+    let first = rich_edge(&pool, &w, w.home, r, t).await;
+    erase(&pool, w.profile).await;
+    let first_asserted = asserting_event(&pool, first).await;
+    let first_label: Option<String> =
+        sqlx::query_scalar("SELECT payload ->> 'label' FROM kb_events WHERE id = $1")
+            .bind(first_asserted)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(first_label.as_deref(), Some("erased-label-1"));
+
+    let member = world(&pool).await;
+    let second = edge_in(
+        &pool,
+        &member,
+        team,
+        r,
+        t,
+        "a later label on the same pair",
+        EventContext::default(),
+    )
+    .await;
+    assert_ne!(second, first, "a new edge between the same pair");
+    let admin = operator(&pool).await;
+    let outcome = execute_resource_erasure(
+        &pool,
+        None,
+        &admin,
+        ResourceErasureRequest {
+            resource: t,
+            also_strike_blobs: &[],
+            surface: Surface::ApiHttp,
+        },
+    )
+    .await
+    .expect("the resource act runs");
+    assert!(matches!(outcome, ResourceErasureOutcome::Completed(_)));
+
+    let folds = folds_of(&pool, first).await;
+    assert_eq!(folds.len(), 1, "the erased edge is not folded again");
+    assert_eq!(
+        folds[0].0["reason"],
+        json!("estate_erased"),
+        "the edge act's fold reason is kept"
+    );
+    let second_label: Option<String> =
+        sqlx::query_scalar("SELECT payload ->> 'label' FROM kb_events WHERE id = $1")
+            .bind(asserting_event(&pool, second).await)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        second_label.as_deref(),
+        Some("erased-label-2"),
+        "the second edge's label gets a fresh number"
+    );
+    let first_again: Option<String> =
+        sqlx::query_scalar("SELECT payload ->> 'label' FROM kb_events WHERE id = $1")
+            .bind(first_asserted)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(first_again.as_deref(), Some("erased-label-1"));
+    assert_eq!(edge_state(&pool, second).await, (true, None));
+}
+
+/// W6. FAILS on the base because an edge folded before the act keeps its label and its trail's
+/// text: the base selected no edge by its home. Ruling 8 of decision
+/// 01a1f6e8-81bd-758c-be87-a6824b66352a: the act erases it too, with no new fold, and its record
+/// says folded false.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_estate_edge_folded_before_the_act_is_erased_without_a_new_fold(pool: PgPool) {
+    let w = world(&pool).await;
+    let team = team_context(&pool).await;
+    let r = resource_in(&pool, &w, team, "alpha").await;
+    let t = resource_in(&pool, &w, team, "beta").await;
+    let e = rich_edge(&pool, &w, w.home, r, t).await;
+    fold(&pool, &w, e).await;
+    assert_eq!(edge_state(&pool, e).await, (true, Some(LABEL.to_owned())));
+
+    let completion = erase(&pool, w.profile).await;
+
+    assert_sentinelled(&pool, e).await;
+    for needle in NEEDLES {
+        assert_eq!(ledger_quoting(&pool, needle).await, 0, "{needle:?}");
+    }
+    let folds = folds_of(&pool, e).await;
+    assert_eq!(folds.len(), 1, "no new fold: only the ordinary one");
+    assert_ne!(
+        folds[0].0["reason"],
+        json!("estate_erased"),
+        "the ordinary fold, not one the act appended"
+    );
+    let records = records_of(&pool, e).await;
+    assert_eq!(records.len(), 1, "one edge_erased record");
+    assert_eq!(
+        records[0].1["folded"],
+        json!(false),
+        "the record folded nothing"
+    );
+    assert!(completion
+        .targets
+        .iter()
+        .any(|x| x.target == "kb_edges" && x.outcome == ONE_EDGE));
+}
+
+/// W7. An estate-homed edge from an estate resource to a team resource is folded and erased by
+/// that resource's erasure earlier in the same act. It is then complete (`_edge_erasure_complete`),
+/// so the edge step skips it: the act completes, the edge has exactly one fold (reason
+/// `resource_erased`) and no `edge_erased` record. Beside it an estate-homed edge with no estate
+/// endpoint is erased by the step. FAILS on the base because that second edge stays live; FAILS
+/// IF the step selects the first edge too, because the unit then raises `already erased` and the
+/// act aborts.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_edge_a_resource_erasure_folds_in_the_same_act_is_not_erased_twice(pool: PgPool) {
+    let w = world(&pool).await;
+    let team = team_context(&pool).await;
+    let estate_page = resource(&pool, &w, "estate page").await;
+    let t = resource_in(&pool, &w, team, "team page").await;
+    let reached = rich_edge(&pool, &w, w.home, estate_page, t).await;
+    let a = resource_in(&pool, &w, team, "alpha").await;
+    let b = resource_in(&pool, &w, team, "beta").await;
+    let stranded = edge(
+        &pool,
+        &w,
+        a,
+        b,
+        "a stranded label",
+        authored("its reasoning"),
+    )
+    .await;
+    facet(&pool, &w, stranded, json!({ "status": "stranded" })).await;
+
+    let completion = erase(&pool, w.profile).await;
+
+    assert_eq!(completion.resource_erasures.len(), 1, "the estate page");
+    assert_sentinelled(&pool, reached).await;
+    let folds = folds_of(&pool, reached).await;
+    assert_eq!(folds.len(), 1, "exactly one fold");
+    assert_eq!(folds[0].0["reason"], json!("resource_erased"));
+    assert!(
+        records_of(&pool, reached).await.is_empty(),
+        "no edge_erased for the edge the resource erasure erased"
+    );
+    assert_sentinelled(&pool, stranded).await;
+    assert_eq!(records_of(&pool, stranded).await.len(), 1);
+    assert!(completion
+        .targets
+        .iter()
+        .any(|x| x.target == "kb_edges" && x.outcome == ONE_EDGE));
+}
+
+/// Reset the schema in the current database to a clean, un-seeded baseline (the erasure replay
+/// suite's helper; the substrate's own lives in its test tree, which this crate cannot import).
+async fn reset_namespace(pool: &PgPool) {
+    use sqlx::Executor;
+    pool.execute("DROP SCHEMA IF EXISTS sensitivity CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        .await
+        .expect("drop sensitivity, recreate public schema");
+    temper_substrate::MIGRATOR
+        .run(pool)
+        .await
+        .expect("re-apply the migration chain");
+    pool.execute(
+        "DO $$ DECLARE r record; BEGIN \
+           FOR r IN SELECT tablename FROM pg_tables \
+                     WHERE schemaname = 'public' AND tablename LIKE 'kb\\_%' \
+           LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE'; \
+           END LOOP; END $$;",
+    )
+    .await
+    .expect("truncate kb_ data tables to a seed-free baseline");
+}
+
+/// The count of events of `kind` correlated with `request`.
+async fn span_count(pool: &PgPool, kind: &str, request: Option<Uuid>) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id \
+          WHERE et.name = $1 AND ev.correlation_id = $2",
+    )
+    .bind(kind)
+    .bind(request)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// W8. FAILS on the base because the act's span holds no `edge_erased` record. The person act's
+/// own span holds a resource erasure (with the fold of its estate-homed edge), an edge erasure of a
+/// live estate-homed edge and one of an edge folded before the act, and the record. Replay must
+/// rebuild every projection table byte for byte; it FAILS too IF replay places an edge body where
+/// the live act did not leave it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_of_the_person_act_with_estate_edges_is_byte_identical(pool: PgPool) {
+    let w = world(&pool).await;
+    let team = team_context(&pool).await;
+    let estate_page = resource(&pool, &w, "estate page").await;
+    let t = resource_in(&pool, &w, team, "team page").await;
+    edge(
+        &pool,
+        &w,
+        estate_page,
+        t,
+        "the estate page's own label",
+        authored("the estate page's reasoning"),
+    )
+    .await;
+    let a = resource_in(&pool, &w, team, "alpha").await;
+    let b = resource_in(&pool, &w, team, "beta").await;
+    rich_edge(&pool, &w, w.home, a, b).await;
+    let c = resource_in(&pool, &w, team, "gamma").await;
+    let d = resource_in(&pool, &w, team, "delta").await;
+    let folded = edge(
+        &pool,
+        &w,
+        c,
+        d,
+        "another free label",
+        authored("folded first"),
+    )
+    .await;
+    facet(&pool, &w, folded, json!({ "status": "folded first" })).await;
+    fold(&pool, &w, folded).await;
+
+    let completion = erase(&pool, w.profile).await;
+    let request: Option<Uuid> =
+        sqlx::query_scalar("SELECT correlation_id FROM kb_events WHERE id = $1")
+            .bind(completion.event_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(span_count(&pool, "resource_erased", request).await, 1);
+    assert_eq!(
+        span_count(&pool, "edge_erased", request).await,
+        2,
+        "the live and the folded estate-homed edges"
+    );
+    assert_eq!(span_count(&pool, "principal_erased", request).await, 1);
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    reset_namespace(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+    assert_eq!(before.len(), after.len(), "the same projection tables");
+    for ((table_a, x), (table_b, y)) in before.iter().zip(after.iter()) {
+        assert_eq!(table_a, table_b);
+        assert_eq!(x, y, "projection table {table_a} diverged under replay");
+    }
+}

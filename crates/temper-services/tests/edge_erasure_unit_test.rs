@@ -7,11 +7,11 @@
 //! record, projects its `edge`-authority redaction rows, sets the edge's label to NULL and its
 //! owned properties to the sentinels, and rewrites every event of the edge's trail to the
 //! sentinels. Each world is built through the real write paths; the unit is called by SQL
-//! directly, since no act calls it yet. The operator and its emitter are a second profile's. A
-//! lawful run tombstones the estate's owner in the unit's transaction before it commits, as the
-//! person act does after its edge step: the owner is checked at commit
-//! (`edge_erasure_requires_an_erased_owner`).
-//! TODO(person-act step): once the person act calls the unit, witness it through that act too.
+//! directly, so each witness isolates the unit. The person act calls it for every edge homed in
+//! its estate; `person_erasure_estate_edges_test` witnesses it through that act. The operator and
+//! its emitter are a second profile's. A lawful run tombstones the estate's owner in the unit's
+//! transaction before it commits, as the person act does after its edge step: the owner is
+//! checked at commit (`edge_erasure_requires_an_erased_owner`).
 
 mod edge_erasure;
 
