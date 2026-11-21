@@ -343,7 +343,7 @@ async fn bump_principal(
 /// Count one call by `profile_id` against `door`, and refuse it past the operator's limit.
 ///
 /// No limit set ⇒ `Ok(())` with no database touch: default off means the seam is absent,
-/// not a check that always passes. With a limit, the count is [`bump_principal`], and the
+/// not a check that always passes. With a limit, the count is `bump_principal`, and the
 /// refusal is the seam's one refusal shape: `429 TOO_MANY_REQUESTS` with a `Retry-After`
 /// taken from the database's clock.
 ///
