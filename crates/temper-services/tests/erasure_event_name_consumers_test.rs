@@ -368,6 +368,11 @@ const ROSTER: &[Entry] = &[
         "the write guard refuses a write to a folded edge its own edge_erased record names",
     ),
     own(
+        "_project_relationship_folded(uuid,jsonb)",
+        &["edge_erased"],
+        "the fold projection refuses a fold of an edge its own edge_erased record names",
+    ),
+    own(
         "sensitivity.erased_place_findings()",
         &["edge_erased"],
         "holds the label and property findings of an edge its own edge_erased record names",

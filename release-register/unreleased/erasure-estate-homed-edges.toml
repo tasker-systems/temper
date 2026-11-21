@@ -14,10 +14,12 @@ homed in the estate: it folds the edge if it is live (relationship_folded, reaso
 appends one edge_erased record, nulls the edge's label, sets every property the edge owns to its
 sentinels, and rewrites the edge's labels, properties, earlier fold reasons and corrections, and
 the authorship metadata on its events, to their sentinels on the ledger; the estate_erased reason of
-the fold it appends is kept. The person act runs it for each
-edge homed in the estate that no resource erasure reached, whatever the edge points at. A property
-or relationship write to such an edge waits for the act's lock on the edge and is then refused, and
-the sweep's findings on its label and properties give up their digests as an erased resource's do.
+the fold it appends is kept. The person act runs it for each edge homed in the estate that no
+resource erasure reached, whatever the edge points at. Once it commits, a property write
+(property_set, facet_set, a keyed assert, property_retracted), relationship_retype,
+relationship_reweight or relationship_fold of the edge is refused; one in flight while the unit
+holds the edge waits for the act and is then refused. The sweep's findings on its label and
+properties give up their digests as an erased resource's do.
 TODO(open ruling): the sentence naming which estate-homed edges the person act reaches: live ones only,
 or also those folded before the act.
 Replay projects edge_erased as it projects resource_erased. The erasure policy binds kb_edges'
