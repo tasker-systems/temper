@@ -306,17 +306,16 @@ const ROSTER: &[Entry] = &[
         }),
     },
     class(
-        "_resource_erasure_payload_redaction(uuid)",
+        "_erasure_trail_payload_redaction(uuid[],jsonb)",
         Class::PerItemAuthority,
-        "the resource act's ledger derivation, which leaves out the events an item's own \
-         correlated erasure authority appended",
+        "the shared ledger derivation, which leaves out the events an item's own correlated \
+         erasure authority appended",
     ),
-    union_of(
+    own(
         "resource_erasure_survey_plan(uuid)",
-        &[Class::PerItemAuthority],
-        &["blob_erased"],
-        "reads one item's own erasure authority record, and names blob_erased as the kind its \
-         blobs are struck under",
+        &["resource_erased", "blob_erased"],
+        "reads one resource's own erasure record, and names blob_erased as the kind its blobs \
+         are struck under",
     ),
     own(
         "_principal_erasure_contexts_to_erase(uuid[])",
@@ -353,6 +352,11 @@ const ROSTER: &[Entry] = &[
         "resource_erasure_execute(uuid,uuid,uuid,uuid,uuid[])",
         &["resource_erased", "blob_erased"],
         "the resource erasure act, appending its own kinds: the record and each struck blob",
+    ),
+    own(
+        "edge_erasure_execute(uuid,uuid,uuid,uuid,uuid)",
+        &["edge_erased"],
+        "the edge erasure act, appending its own kind",
     ),
     own(
         "resource_field_scrub_execute(uuid,text,uuid,boolean,uuid,uuid,uuid)",
@@ -1145,7 +1149,7 @@ async fn place_closures_declared_gap_is_still_real(pool: PgPool) {
 // ── the bite probes ──────────────────────────────────────────────────────────────────────────
 
 /// An unrostered consumer fails, and rostered to a class it covers only in part it fails for the
-/// kind it leaves out.
+/// kinds it leaves out.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_consumer_naming_two_of_the_redaction_class_fails(pool: PgPool) {
     sqlx::query(
@@ -1176,9 +1180,10 @@ async fn a_consumer_naming_two_of_the_redaction_class_fails(pool: PgPool) {
     assert_eq!(
         problems(&bodies, &roster, &vocabulary),
         vec![format!(
-            "{who} is rostered to RedactionAuthority but does not name principal_erased"
+            "{who} is rostered to RedactionAuthority but does not name edge_erased, \
+             principal_erased"
         )],
-        "rostered to the redaction class, the probe fails for the kind it leaves out"
+        "rostered to the redaction class, the probe fails for the kinds it leaves out"
     );
 }
 
