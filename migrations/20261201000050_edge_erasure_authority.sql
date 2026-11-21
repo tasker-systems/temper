@@ -11,11 +11,13 @@
 --      leaves every event correlated with a resource_erased or edge_erased other than itself.
 --   2. _edge_erasure_trail_scope(uuid) is an edge's own events, domain only, and
 --      _edge_erasure_payload_redaction(uuid) the shared loop over it.
---   3. edge_erased, admin and NULL-anchored, and the redaction authority `edge`.
+--   3. edge_erased, admin and NULL-anchored, and the redaction authority `edge`; the predicates
+--      _edge_is_erased(uuid) (a record names the edge) and _edge_homed_in_estate(uuid, uuid).
 --   4. _project_edge_erased_redactions projects its rows through _project_field_redactions.
 --   5. The guard: an `edge` row admits a rewrite when its record's edge is folded and homed in a
---      context of _erasure_estate_contexts(estate_of), the event is on that edge's trail, and the
---      value is the sentinel `erasure` would write. The person act's classes stay its own.
+--      context of _erasure_estate_contexts(estate_of) (_edge_homed_in_estate), the event is on
+--      that edge's trail, and the value is the sentinel `erasure` would write. The person act's
+--      classes stay its own.
 --   6. edge_erased joins the admin acts the change readers leave out, and place_closure's arms.
 --
 -- A later edit must not break:
@@ -340,7 +342,8 @@ metadata of each event to "erased". Raises when a location has no sentinel numbe
 -- Admin, NULL-anchored, typed. The payload schema literal is the committed fixture
 -- crates/temper-substrate/tests/fixtures/payloads/edge_erased.v1.schema.json, and
 -- `the_migration_literal_matches_the_committed_fixture` pins the pair. _event_append validates no
--- payload, and nothing appends this kind yet.
+-- payload, so an appender of this kind must write one the fixture admits: the typed
+-- payloads::EdgeErased, which verify_ledger_roundtrip and replay parse every row through.
 INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALUES
   ('edge_erased', $JS$
 {
@@ -460,6 +463,52 @@ lean on it for another authority. A row mislabelled `erasure` would occupy the k
 'erasure'): a later erasure of that path would collide on kb_event_field_redactions_pkey, which
 resource_erasure_service reads as a concurrent completion and retries, colliding again every
 time.$c$;
+
+-- The two subject predicates of an edge erasure, each spelled once. _edge_is_erased answers for
+-- an edge's writers and the sweep (20261201000060): whether an erasure record exists. The
+-- verifier, place_closure and the unit instead check the subject of a record being written or
+-- read, folded and homed in the estate it names, and share _edge_homed_in_estate for the home.
+CREATE FUNCTION _edge_is_erased(p_edge uuid)
+RETURNS boolean
+LANGUAGE sql STABLE
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+          FROM kb_events ev
+          JOIN kb_event_types et ON et.id = ev.event_type_id
+         WHERE et.name = 'edge_erased'
+           AND ev.payload ->> 'subject_table' = 'kb_edges'
+           AND ev.payload ->> 'subject_id' = p_edge::text);
+$$;
+
+COMMENT ON FUNCTION _edge_is_erased(uuid) IS
+$c$Whether an edge is erased: some edge_erased record names it, payload subject_table 'kb_edges'
+and subject_id the edge's id as text. Never NULL. It does not also require kb_edges.is_folded:
+edge_erasure_execute appends its record only after the edge is folded, in the same transaction,
+and no write path unfolds an edge, so a record implies a folded edge, and a second conjunct would
+change no answer for any record the unit writes. The one predicate of the edge's writers (_resource_write_guard_owner's kb_edges
+arm, _project_relationship_folded) and of the sweep's erased_place_findings edge arms, so they
+agree on which edges are erased.$c$;
+
+CREATE FUNCTION _edge_homed_in_estate(p_edge uuid, p_profile uuid)
+RETURNS boolean
+LANGUAGE sql STABLE
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+          FROM kb_edges e
+         WHERE e.id = p_edge
+           AND e.home_anchor_table = 'kb_contexts'
+           AND e.home_anchor_id IN (SELECT _erasure_estate_contexts(p_profile)));
+$$;
+
+COMMENT ON FUNCTION _edge_homed_in_estate(uuid, uuid) IS
+$c$Whether an edge is homed in a context of p_profile's estate (_erasure_estate_contexts). Never
+NULL: false for a missing edge, an edge homed outside kb_contexts, or a NULL profile. The `edge`
+authority's home conjunct, read by edge_erasure_execute before it erases the edge, and with
+is_folded by kb_events_append_only and sensitivity.place_closure on an `edge` row.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 4. The projector.
@@ -732,11 +781,9 @@ BEGIN
                                WHEN 'edge' THEN
                                    EXISTS (SELECT 1 FROM kb_edges s
                                             WHERE s.id = (e.payload ->> 'subject_id')::uuid
-                                              AND s.is_folded
-                                              AND s.home_anchor_table = 'kb_contexts'
-                                              AND s.home_anchor_id IN (
-                                                      SELECT _erasure_estate_contexts(
-                                                                 (e.payload ->> 'estate_of')::uuid)))
+                                              AND s.is_folded)
+                                   AND _edge_homed_in_estate((e.payload ->> 'subject_id')::uuid,
+                                                             (e.payload ->> 'estate_of')::uuid)
                                ELSE
                                    EXISTS (SELECT 1 FROM kb_resources s
                                             WHERE s.id = (e.payload ->> 'subject_id')::uuid
@@ -1084,11 +1131,9 @@ AS $function$
                                          WHEN 'edge' THEN
                                              EXISTS (SELECT 1 FROM kb_edges s
                                                       WHERE s.id = (e.payload ->> 'subject_id')::uuid
-                                                        AND s.is_folded
-                                                        AND s.home_anchor_table = 'kb_contexts'
-                                                        AND s.home_anchor_id IN (
-                                                                SELECT _erasure_estate_contexts(
-                                                                           (e.payload ->> 'estate_of')::uuid)))
+                                                        AND s.is_folded)
+                                             AND _edge_homed_in_estate((e.payload ->> 'subject_id')::uuid,
+                                                                       (e.payload ->> 'estate_of')::uuid)
                                          ELSE
                                              EXISTS (SELECT 1 FROM kb_resources s
                                                       WHERE s.id = (e.payload ->> 'subject_id')::uuid
@@ -1177,7 +1222,8 @@ SELECT declare_migration(
     20261201000050,
     'additive',
     'Adds the functions _erasure_trail_payload_redaction(uuid[], jsonb), '
-    '_edge_erasure_trail_scope(uuid), _edge_erasure_payload_redaction(uuid) and '
+    '_edge_erasure_trail_scope(uuid), _edge_erasure_payload_redaction(uuid), '
+    '_edge_is_erased(uuid), _edge_homed_in_estate(uuid, uuid) and '
     '_project_edge_erased_redactions(uuid, jsonb), and the admin event type edge_erased with its '
     'payload_schema. Widens kb_event_field_redactions_authority_check to admit ''edge'' (every '
     'existing row still passes), under SET LOCAL lock_timeout = 500ms: if its lock is not granted in '
@@ -1186,8 +1232,8 @@ SELECT declare_migration(
     'trail with the same numbering, so its rows are unchanged), _project_field_redactions, '
     '_erasure_sentinel_admits, kb_events_append_only, kb_events_redaction_in_trail, '
     '_event_is_admin_act, _profile_change_events and sensitivity.place_closure. Each gains an arm '
-    'for edge_erased or the `edge` authority; nothing appends edge_erased yet, so every existing '
-    'answer is unchanged: no row carries `edge`, and the trail trigger''s resource loop, now read '
+    'for edge_erased or the `edge` authority; no edge_erased record exists when this migration '
+    'runs, so every existing answer is unchanged: no row carries `edge`, and the trail trigger''s resource loop, now read '
     'for erasure and scrub rows by name, already skipped every principal row. Comments on the '
     'authority column and every replaced function. No table, column or grant changes.'
 );
