@@ -3,20 +3,23 @@
 -- 20261201000060's per-edge unit, edge_erasure_execute, becomes a step of the person act, and the
 -- `edge` authority (20261201000050_edge_erasure_authority.sql) holds only for a tombstoned estate
 -- owner, checked at commit. By section:
---   1-2. _edge_erasure_complete(uuid): whether an edge's text is already erased. The unit raises
---      `already erased` on it (edge_erasure_execute, re-issued) and the act's step skips by it.
+--   1-2. _edge_projection_erased(uuid), the projection half, and _edge_erasure_complete(uuid):
+--      whether an edge's text is already erased. The unit raises `already erased` on the same
+--      test (edge_erasure_execute, re-issued) and the act's step skips by it.
 --   3. edge_erasure_requires_an_erased_owner(), behind two DEFERRABLE INITIALLY DEFERRED
 --      constraint triggers (Section 7): the record's estate_of must be tombstoned at commit.
---   4-6. _principal_erasure_edges_outcome(integer), the record's prose; principal_erasure_survey_plan
---      predicts the step as one kb_edges target and counts every estate-homed edge's trail inside
---      the estate for R8; principal_erasure_execute runs the step and references each edge_erased.
+--   4-6. _principal_erasure_edges_outcome(integer), the record's prose;
+--      principal_erasure_survey_plan predicts the step as one kb_edges target and counts every
+--      estate-homed edge's trail inside the estate for R8; principal_erasure_execute runs the
+--      step, references each edge_erased, and pins lock_timeout = 0.
 --   7. The two triggers, and the authority column's COMMENT, which names the owner check.
 --
 -- A later edit must not break:
 --   * the owner check runs at commit, never in the unit: the person act tombstones its subject
 --     after its edge step. It stands down only under temper.replaying;
 --   * the person act's edge step runs after every resource erasure, selects by
---     _edge_erasure_complete under each edge's lock, and locks in id order;
+--     _edge_erasure_complete under each edge's lock, locks in id order, and skips and counts an
+--     edge whose home has left the estate since the plan;
 --   * an assertion of an edge's identity racing the step mints a new live edge at the same home
 --     (20261201000060's header says how): a fresh write, lawful as it stands, which the act that
 --     erased the first edge does not erase (ruling 9 of decision
@@ -30,22 +33,34 @@
 -- ---------------------------------------------------------------------------
 -- Section 1. Whether an edge's text is already erased.
 -- ---------------------------------------------------------------------------
--- One test, so the unit's refusal and the act's skip agree.
+-- One test, so the unit's refusal and the act's skip agree. The projection half is its own
+-- function: the unit has already derived the ledger rewrite when it asks, so it reads this half
+-- and its own derivation, and the derivation runs once there.
+CREATE FUNCTION _edge_projection_erased(p_edge uuid)
+RETURNS boolean
+LANGUAGE sql STABLE
+SET search_path TO 'public', 'pg_temp'
+AS $function$
+    SELECT EXISTS (SELECT 1 FROM kb_edges e
+                    WHERE e.id = p_edge AND e.is_folded AND e.label IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM kb_properties p
+                        WHERE p.owner_table = 'kb_edges' AND p.owner_id = p_edge
+                          AND p.property_key !~ '^erased-key-[1-9][0-9]*$');
+$function$;
+
+COMMENT ON FUNCTION _edge_projection_erased(uuid) IS
+$c$The projection half of _edge_erasure_complete: the edge is folded, its label is NULL, and every
+kb_properties row it owns has an erased-key-<n> key. False for a missing edge. edge_erasure_execute
+reads it with its own derivation of _edge_erasure_payload_redaction.$c$;
+
 CREATE FUNCTION _edge_erasure_complete(p_edge uuid)
 RETURNS boolean
 LANGUAGE plpgsql STABLE
 SET search_path TO 'public', 'pg_temp'
 AS $function$
 BEGIN
-    -- The projection first: the derivation runs only for a folded edge with no label and every
-    -- owned key at its sentinel.
-    IF NOT EXISTS (SELECT 1 FROM kb_edges e
-                    WHERE e.id = p_edge AND e.is_folded AND e.label IS NULL) THEN
-        RETURN false;
-    END IF;
-    IF EXISTS (SELECT 1 FROM kb_properties p
-                WHERE p.owner_table = 'kb_edges' AND p.owner_id = p_edge
-                  AND p.property_key !~ '^erased-key-[1-9][0-9]*$') THEN
+    -- The projection first: the derivation runs only for an edge whose projection is erased.
+    IF NOT _edge_projection_erased(p_edge) THEN
         RETURN false;
     END IF;
     RETURN NOT EXISTS (SELECT 1 FROM _edge_erasure_payload_redaction(p_edge));
@@ -53,8 +68,8 @@ END;
 $function$;
 
 COMMENT ON FUNCTION _edge_erasure_complete(uuid) IS
-$c$Whether one edge's text is already erased: the edge is folded, its label is NULL, every
-kb_properties row it owns has an erased-key-<n> key, and _edge_erasure_payload_redaction finds
+$c$Whether one edge's text is already erased: its projection is erased (_edge_projection_erased:
+folded, label NULL, every owned key at erased-key-<n>), and _edge_erasure_payload_redaction finds
 nothing on its trail to rewrite. False for a missing edge. edge_erasure_execute raises `already
 erased` when it holds, and the person act's edge step skips an edge when it holds, so the two
 agree.$c$;
@@ -63,7 +78,8 @@ agree.$c$;
 -- Section 2. The unit reads that test.
 -- ---------------------------------------------------------------------------
 -- 20261201000060's body and attributes; only the `already erased` test changes, to
--- _edge_erasure_complete, which answers what the inline test answered.
+-- _edge_projection_erased and the unit's own derivation being empty: _edge_erasure_complete's
+-- test, which answers what the inline test answered.
 CREATE OR REPLACE FUNCTION edge_erasure_execute(p_edge uuid, p_estate_of uuid, p_operator uuid,
                                                 p_emitter uuid, p_request_ref uuid)
 RETURNS jsonb
@@ -116,7 +132,8 @@ BEGIN
       INTO v_fields
       FROM jsonb_array_elements(v_redact) r;
 
-    IF _edge_erasure_complete(p_edge) THEN
+    -- _edge_erasure_complete over the derivation just made.
+    IF _edge_projection_erased(p_edge) AND jsonb_array_length(v_redact) = 0 THEN
         RAISE EXCEPTION 'edge_erasure_execute: already erased';
     END IF;
 
@@ -168,13 +185,14 @@ $function$;
 COMMENT ON FUNCTION edge_erasure_execute(uuid, uuid, uuid, uuid, uuid) IS
 $c$Erase one edge homed in a context of _erasure_estate_contexts(p_estate_of), under the `edge`
 authority. Locks the edge row; raises when it is missing, not homed in that estate, or already
-erased (_edge_erasure_complete). Derives _edge_erasure_payload_redaction, folds a live edge
-(relationship_folded, reason estate_erased), appends one edge_erased record (subject, actor, estate_of, folded, redacted_fields;
-references subject and request), projects its rows, runs _edge_erasure_apply_redaction, then
-rewrites the derived events in one UPDATE. Every event carries p_request_ref as its correlation.
-Its transaction commits only if p_estate_of is then tombstoned (edge_erasure_requires_an_erased_owner).
-Returns {event_id, folded, redacted_fields}. principal_erasure_execute calls it for each edge homed
-in the estate whose text is not yet erased.$c$;
+erased (_edge_erasure_complete's test). Derives _edge_erasure_payload_redaction, folds a live edge
+(relationship_folded, reason estate_erased), appends one edge_erased record (subject, actor,
+estate_of, folded, redacted_fields; references subject and request), projects its rows, runs
+_edge_erasure_apply_redaction, then rewrites the derived events in one UPDATE. Every event carries
+p_request_ref as its correlation. Its transaction commits only if p_estate_of is then tombstoned
+(edge_erasure_requires_an_erased_owner). Returns {event_id, folded, redacted_fields}.
+principal_erasure_execute calls it for each edge homed in the estate whose text is not yet
+erased.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 3. The edge authority holds only for a tombstoned estate owner, at commit.
@@ -211,18 +229,24 @@ BEGIN
     ELSE
         v_record := NEW.redacted_by;
     END IF;
-    SELECT t.name = 'edge_erased', (e.payload ->> 'estate_of')::uuid
-      INTO v_is_edge, v_estate_of
+    SELECT t.name = 'edge_erased'
+      INTO v_is_edge
       FROM kb_events e
       JOIN kb_event_types t ON t.id = e.event_type_id
      WHERE e.id = v_record;
-    IF TG_TABLE_NAME = 'kb_events' AND NOT coalesce(v_is_edge, false) THEN
+    v_is_edge := coalesce(v_is_edge, false);
+    IF TG_TABLE_NAME = 'kb_events' AND NOT v_is_edge THEN
         RETURN NULL;
     END IF;
-    IF coalesce(v_is_edge, false)
-       AND EXISTS (SELECT 1 FROM kb_profiles p
+    -- estate_of is read as a uuid only from an edge_erased record, whose payload carries one.
+    IF v_is_edge THEN
+        SELECT (e.payload ->> 'estate_of')::uuid INTO v_estate_of
+          FROM kb_events e
+         WHERE e.id = v_record;
+        IF EXISTS (SELECT 1 FROM kb_profiles p
                     WHERE p.id = v_estate_of AND p.tombstoned_at IS NOT NULL) THEN
-        RETURN NULL;
+            RETURN NULL;
+        END IF;
     END IF;
     RAISE EXCEPTION 'edge erasure: the estate''s owner % is not erased', v_estate_of
         USING ERRCODE = 'check_violation', CONSTRAINT = 'edge_erasure_requires_an_erased_owner';
@@ -230,12 +254,14 @@ END;
 $$;
 
 COMMENT ON FUNCTION edge_erasure_requires_an_erased_owner() IS
-$c$At commit (DEFERRABLE INITIALLY DEFERRED constraint triggers trg_edge_erased_requires_an_erased_owner
-on kb_events and trg_edge_redaction_requires_an_erased_owner on kb_event_field_redactions): refuses
-the transaction unless the edge_erased record (the inserted event, or an `edge` row's redacted_by)
-names in estate_of a profile whose tombstoned_at is set. An `edge` row whose redacted_by is no
-edge_erased record is refused too; another kind of event on kb_events passes. Raises 'edge erasure:
-the estate''s owner % is not erased' (check_violation). Stands down while temper.replaying is 'on'.$c$;
+$c$At commit (DEFERRABLE INITIALLY DEFERRED constraint triggers
+trg_edge_erased_requires_an_erased_owner on kb_events and
+trg_edge_redaction_requires_an_erased_owner on kb_event_field_redactions): refuses the transaction
+unless the edge_erased record (the inserted event, or an `edge` row's redacted_by) names in
+estate_of a profile whose tombstoned_at is set. Confirms the type by name before it reads
+estate_of. An `edge` row whose redacted_by is no edge_erased record is refused too; another kind of
+event on kb_events passes. Raises 'edge erasure: the estate''s owner % is not erased'
+(check_violation). Stands down while temper.replaying is 'on'.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 4. The record's prose for the edges erased.
@@ -257,9 +283,10 @@ principal_erasure_execute with the count it erased.$c$;
 -- Section 5. The plan: the edge step's count, and R8 by home.
 -- ---------------------------------------------------------------------------
 -- 20261127000010_block_content_hash_follows_redaction.sql's body. It adds the kb_edges target
--- (would_erase_edges), and v_trail gains the trail of every edge homed in the estate, folded or
+-- (would_erase_edges); v_trail gains the trail of every edge homed in the estate, folded or
 -- not: the edge step rewrites it, so the R8 counts no longer name its labels and property values
--- as kept outside the estate.
+-- as kept outside the estate; and a charter's outcome names as kept only its edges homed outside
+-- the estate.
 CREATE OR REPLACE FUNCTION public.principal_erasure_survey_plan(p_subject uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -289,6 +316,7 @@ DECLARE
     v_retained   jsonb  := _erasure_retention_snapshot();
     v_kept       text;
     v_erasing    uuid[] := '{}';
+    v_completing uuid[] := '{}';
 BEGIN
     SELECT id INTO v_exists FROM kb_profiles WHERE id = p_subject;
     IF v_exists IS NULL THEN
@@ -865,19 +893,34 @@ BEGIN
                        || ' admin event(s) about the subject; reasons and refusal details erased and Slack ids sentinel-scrubbed'));
     END IF;
 
-    -- The edges principal_erasure_execute's edge step erases, predicted: every edge homed in an
-    -- estate context whose text is not yet erased (_edge_erasure_complete), live or folded, with
-    -- neither endpoint a resource the act erases or completes. An edge with such an endpoint is
-    -- that resource erasure's, and complete once it runs. The act replaces this entry in place
-    -- with the count it erased, and drops it at zero.
+    -- The edges principal_erasure_execute's edge step erases, predicted by the step's own
+    -- selection (homed in an estate context, not _edge_erasure_complete) over the state the
+    -- resource erasures before it leave:
+    --   * an edge touching an `erase` resource is complete then: that erasure folds every live
+    --     edge touching its resource, nulls its label, sets its owned properties to their
+    --     sentinels and rewrites its trail;
+    --   * an edge touching a `complete` resource is complete then only if it is already folded:
+    --     the completion pass does the rest of that but folds nothing, so a live one is the
+    --     step's;
+    --   * a `skip` or `charter` resource is not reached, so an edge touching one is decided by
+    --     its own state.
+    -- The act replaces this entry in place with the count it erased, and drops it at zero. The
+    -- count differs from this prediction only when the state changes after the plan: a resource
+    -- erased or moved by another act, an estate context leaving the estate.
     v_erasing := ARRAY(SELECT (r ->> 'resource_id')::uuid FROM jsonb_array_elements(v_resrows) r
-                        WHERE r ->> 'disposition' IN ('erase', 'complete'));
+                        WHERE r ->> 'disposition' = 'erase');
+    v_completing := ARRAY(SELECT (r ->> 'resource_id')::uuid
+                            FROM jsonb_array_elements(v_resrows) r
+                           WHERE r ->> 'disposition' = 'complete');
     SELECT count(*) INTO v_n
       FROM kb_edges e
      WHERE e.home_anchor_table = 'kb_contexts'
        AND e.home_anchor_id = ANY(v_governed)
        AND NOT (e.source_table = 'kb_resources' AND e.source_id = ANY(v_erasing))
        AND NOT (e.target_table = 'kb_resources' AND e.target_id = ANY(v_erasing))
+       AND NOT (e.is_folded
+                AND ((e.source_table = 'kb_resources' AND e.source_id = ANY(v_completing))
+                  OR (e.target_table = 'kb_resources' AND e.target_id = ANY(v_completing))))
        AND NOT _edge_erasure_complete(e.id);
     IF v_n > 0 THEN
         v_targets := v_targets || jsonb_build_array(jsonb_build_object(
@@ -967,13 +1010,15 @@ BEGIN
                 'outcome','recompute-marked'));
     END IF;
 
-    -- The charters held (2a), and the resources already complete (2f), named in the record.
+    -- The charters held (2a), and the resources already complete (2f), named in the record. The
+    -- edge step erases a charter's edges homed in the estate, so only the others are kept.
     v_targets := v_targets || coalesce((
         SELECT jsonb_agg(jsonb_build_object(
                    'target',  'kb_resources',
                    'outcome', 'charter ' || ch || '; held until map-grain erasure (task '
                               || '01a0e960-0ca2-7f42-b33e-1ed19b024e6b); text emptied; title, '
-                              || 'properties, edges and ledger kept') ORDER BY ch)
+                              || 'properties, ledger and edges homed outside the estate kept')
+                   ORDER BY ch)
           FROM unnest(v_charters) AS ch), '[]'::jsonb);
     IF (v_counts->>'skip')::integer > 0 THEN
         v_targets := v_targets || jsonb_build_array(jsonb_build_object(
@@ -1007,9 +1052,16 @@ $function$;
 -- erased, and references each edge_erased from the record. The strikes, the record, the
 -- redaction (whose step 7 tombstones the subject) and the context closure follow unchanged, so
 -- the tombstone the edge records require at commit is set in the same transaction.
+--
+-- It pins lock_timeout = 0, as resource_erasure_execute, edge_erasure_execute and
+-- block_history_scrub_execute do (20261015100000_erasure_acts_pin_lock_timeout.sql): the edge
+-- step's FOR UPDATE waits on the edges' writers in this function's own body, and a lock_timeout
+-- set on the pool, the role or the database would otherwise end that wait with 55P03, which the
+-- service does not retry.
 CREATE OR REPLACE FUNCTION principal_erasure_execute(p_subject uuid, p_operator uuid, p_emitter uuid, p_request_ref uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
+ SET lock_timeout TO '0'
 AS $function$
 DECLARE
     v_plan     jsonb;
@@ -1036,6 +1088,7 @@ DECLARE
     v_eid      uuid;
     v_edge_erasures jsonb := '[]'::jsonb;
     v_n        integer;
+    v_edges_raced integer := 0;
 BEGIN
     -- The request reference is the correlation id of every event the act appends: the resource
     -- erasures' events, the strikes and the completion. Replay finds the act's span by it (D7).
@@ -1110,16 +1163,22 @@ BEGIN
     --    sentinels (steps 9c and 9d of _resource_erasure_apply_redaction), and rewrites the
     --    edge's trail, which is inside the resource's: _resource_erasure_trail_scope reads the
     --    edge's events by edge_id, its owned properties' events, and every event with the
-    --    resource as source or target, so its phantom re-assertions too. Such an edge is then complete by _edge_erasure_complete, the one test
-    --    the unit raises `already erased` on, so the completeness check below is the exclusion of
-    --    the edges a resource erasure of this act already erased: the selection and the unit
-    --    cannot disagree.
+    --    resource as source or target, so its phantom re-assertions too. Such an edge is then
+    --    complete by _edge_erasure_complete, the one test the unit raises `already erased` on, so
+    --    the completeness check below is the exclusion of the edges a resource erasure of this act
+    --    already erased: the selection and the unit cannot disagree.
     --
-    --    The edges are locked FOR UPDATE in id order, as two person acts and the write guard's
-    --    endpoints-then-edge order require, and each is decided under its lock. A deadlock
-    --    against a writer of two edges aborts one side with 40P01, which the service retries.
-    --    Their records' estate_of is the subject, tombstoned below in this transaction: the
-    --    owner check runs at commit (edge_erasure_requires_an_erased_owner). ──────────────────
+    --    The edges are locked FOR UPDATE in id order, and each is decided under its lock. The
+    --    order is not global across the two loops: a resource erasure above has already locked
+    --    the edges touching its resource. So two person acts whose estates share edges, or the act
+    --    and a writer of two edges, can deadlock; Postgres aborts one side with 40P01, and the
+    --    service retries it.
+    --
+    --    The selection reads the plan's estate, so an edge is homed in the estate again under its
+    --    lock (_edge_homed_in_estate, the unit's own check): an edge whose context has left the
+    --    estate since the plan is skipped and counted, as the resource loop skips a resource
+    --    moved out. Its records' estate_of is the subject, tombstoned below in this transaction:
+    --    the owner check runs at commit (edge_erasure_requires_an_erased_owner). ──────────────
     FOR v_eid IN
         SELECT e.id FROM kb_edges e
          WHERE e.home_anchor_table = 'kb_contexts'
@@ -1127,6 +1186,10 @@ BEGIN
          ORDER BY e.id
            FOR UPDATE
     LOOP
+        IF NOT _edge_homed_in_estate(v_eid, p_subject) THEN
+            v_edges_raced := v_edges_raced + 1;
+            CONTINUE;
+        END IF;
         CONTINUE WHEN _edge_erasure_complete(v_eid);
         v_out := edge_erasure_execute(v_eid, p_subject, p_operator, p_emitter, p_request_ref);
         v_edge_erasures := v_edge_erasures || jsonb_build_array(jsonb_build_object(
@@ -1134,7 +1197,8 @@ BEGIN
             'event', v_out->>'event_id'));
     END LOOP;
     -- The plan's predicted entry is replaced in place with the count erased here, the strike
-    -- loop's pattern, and dropped at zero; a count the plan did not predict is appended.
+    -- loop's pattern, and dropped at zero; a count the plan did not predict is appended. The
+    -- edges skipped for their home are counted in their own entry.
     v_n := jsonb_array_length(v_edge_erasures);
     v_i := (SELECT t.ord - 1 FROM jsonb_array_elements(v_targets) WITH ORDINALITY AS t(x, ord)
              WHERE t.x ? 'would_erase_edges' ORDER BY t.ord LIMIT 1);
@@ -1148,6 +1212,12 @@ BEGIN
         v_targets := v_targets || jsonb_build_array(jsonb_build_object(
             'target',  'kb_edges',
             'outcome', _principal_erasure_edges_outcome(v_n)));
+    END IF;
+    IF v_edges_raced > 0 THEN
+        v_targets := v_targets || jsonb_build_array(jsonb_build_object(
+            'target',  'kb_edges',
+            'outcome', v_edges_raced || ' edge(s) homed in a context that left the estate '
+                       || 'after the plan; skipped'));
     END IF;
 
     -- ── The strike loop: the plan's would-strike rows, IN ORDER, through the wrapper —
@@ -1174,12 +1244,13 @@ BEGIN
     -- ── The estate contexts are locked here, after the resource erasures and before anything
     --    reads them for the record (R7). context_rename, context_retire, context_restore and
     --    context_reassign take the same row lock before they read the row, so one that races the
-    --    act waits for it and then finds the context erased; without it, a rename could land a real
-    --    name back on an erased context, or a retirement write a real slug onto the ledger after the
-    --    rewrite below. After the resource erasures, not before: each takes its resource's locks and
-    --    then its home context's row, the order a standalone resource erasure takes them, so the
-    --    two acts cannot deadlock on the pair. In id order, so two person acts cannot either. What
-    --    the act erases and rewrites is read under the lock, not taken from the plan.
+    --    act waits for it and then finds the context erased; without it, a rename could land a
+    --    real name back on an erased context, or a retirement write a real slug onto the ledger
+    --    after the rewrite below. After the resource erasures, not before: each takes its
+    --    resource's locks and then its home context's row, the order a standalone resource
+    --    erasure takes them, so the two acts cannot deadlock on the pair. In id order, so two
+    --    person acts cannot either. What the act erases and rewrites is read under the lock, not
+    --    taken from the plan.
     PERFORM 1 FROM kb_contexts c
       WHERE c.id = ANY(v_estate)
       ORDER BY c.id
@@ -1275,13 +1346,15 @@ $function$
 COMMENT ON FUNCTION principal_erasure_execute(uuid, uuid, uuid, uuid) IS
 $c$The person erasure act, in one transaction, from one plan (principal_erasure_survey_plan): every
 resource homed in the subject's estate (_erasure_estate_contexts) through resource_erasure_execute,
-in id order; then every edge homed in the estate whose text is not yet erased (_edge_erasure_complete),
-live or folded before the act, through edge_erasure_execute, in id order; the strike of every live
-blob homed in the estate; the one principal_erased record, which references each resource and edge
-erasure; the identity arms (_erasure_apply_redaction), which tombstone the subject; and one
-context_erased per estate context, with the ledger rewrite of their names and slugs. Content committed
-into a retired estate context after the act is a fresh live row that this act does not erase. Does not
-decide legality: the caller's system-admin gate is resolved before any mutation.$c$;
+in id order; then every edge homed in the estate whose text is not yet erased
+(_edge_erasure_complete), live or folded before the act, through edge_erasure_execute, in id order,
+skipping and counting an edge whose context has left the estate since the plan; the strike of every
+live blob homed in the estate; the one principal_erased record, which references each resource and
+edge erasure; the identity arms (_erasure_apply_redaction), which tombstone the subject; and one
+context_erased per estate context, with the ledger rewrite of their names and slugs. Runs with
+lock_timeout = 0 whatever the session, role or database sets. Content committed into a retired
+estate context after the act is a fresh live row that this act does not erase. Does not decide
+legality: the caller's system-admin gate is resolved before any mutation.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 7. The two constraint triggers, under the lock bound.
@@ -1294,9 +1367,9 @@ $c$The authorising event's type: `erasure` (resource_erased, whose subject must 
 profile must be tombstoned; context names and slugs, principal reasons and Slack ids only) or
 `edge` (edge_erased, whose subject edge must be folded and homed in a context of the estate its
 record names, and whose estate_of must be tombstoned at commit,
-edge_erasure_requires_an_erased_owner). Written by that type's projector. A structural token, never a value. The DEFAULT
-'erasure' is the backfill and the reading of a binary that names no authority; a writer must never
-lean on it for another authority. A row mislabelled `erasure` would occupy the key (event_id, path,
+edge_erasure_requires_an_erased_owner). Written by that type's projector. A structural token,
+never a value. The DEFAULT 'erasure' is the backfill and the reading of a binary that names no
+authority; a writer must never lean on it for another authority. A row mislabelled `erasure` would occupy the key (event_id, path,
 'erasure'): a later erasure of that path would collide on kb_event_field_redactions_pkey, which
 resource_erasure_service reads as a concurrent completion and retries, colliding again every
 time.$c$;
@@ -1327,24 +1400,28 @@ tombstoned profile (edge_erasure_requires_an_erased_owner).$c$;
 SELECT declare_migration(
     20261201000070,
     'additive',
-    'Adds the functions _edge_erasure_complete(uuid) and _principal_erasure_edges_outcome(integer), '
-    'each with a COMMENT, and the trigger function edge_erasure_requires_an_erased_owner() with a '
+    'Adds the functions _edge_projection_erased(uuid), _edge_erasure_complete(uuid) and '
+    '_principal_erasure_edges_outcome(integer), each with a COMMENT, and the trigger function '
+    'edge_erasure_requires_an_erased_owner() with a '
     'COMMENT and two DEFERRABLE INITIALLY DEFERRED constraint triggers behind it, on kb_events '
     '(WHEN category = admin) and on kb_event_field_redactions (WHEN authority = edge), each with a '
     'COMMENT, created under SET LOCAL lock_timeout = 500ms: if a lock is not granted in time, the '
     'migration rolls back and the serving deployment is untouched. At commit an edge_erased record, '
     'or an edge row''s record, must name a tombstoned estate_of; no edge_erased record or edge row '
     'exists when this migration runs, and any other admin event passes, so no existing write is '
-    'refused. CREATE OR REPLACE, each signature, return type and SET clause unchanged: '
-    'edge_erasure_execute(uuid, uuid, uuid, uuid, uuid), whose already-erased test reads '
-    '_edge_erasure_complete and answers as before, and whose COMMENT names the owner check; '
-    'principal_erasure_survey_plan(uuid), which predicts the edge step as one kb_edges target and '
-    'counts the trails of edges homed in the estate inside it; and '
-    'principal_erasure_execute(uuid, uuid, uuid, uuid), which gains a COMMENT and runs '
-    'edge_erasure_execute for every edge homed in the estate whose text is not yet erased, after '
-    'its resource erasures and before its record: a person erasure now erases those edges, and its '
-    'record gains a kb_edges target and one erasure reference per edge. The record''s payload keys '
-    'are unchanged. An older binary calls the same signatures and reads the same payload keys; its '
-    'survey and act answer with the added kb_edges target. Rewrites the COMMENT of '
-    'kb_event_field_redactions.authority. No table, column, event type or grant changes.'
+    'refused. CREATE OR REPLACE, each signature and return type unchanged: '
+    'edge_erasure_execute(uuid, uuid, uuid, uuid, uuid), SET clauses unchanged, whose '
+    'already-erased test reads _edge_projection_erased and its own derivation and answers as '
+    'before, and whose COMMENT names the owner check; principal_erasure_survey_plan(uuid), which '
+    'predicts the edge step as one kb_edges target, counts the trails of edges homed in the estate '
+    'inside it, and names as kept only a charter''s edges homed outside the estate; and '
+    'principal_erasure_execute(uuid, uuid, uuid, uuid), whose COMMENT is rewritten, which gains '
+    'SET lock_timeout = 0, as the other erasure acts carry, and which runs edge_erasure_execute '
+    'for every edge homed in the estate whose text is not yet erased, after its resource erasures '
+    'and before its record, skipping and counting one whose context has left the estate since '
+    'the plan: a person erasure now erases those edges, and its record gains a kb_edges target '
+    'and one erasure reference per edge. The record''s payload keys are unchanged. An older binary '
+    'calls the same signatures and reads the same payload keys; its survey and act answer with '
+    'the added kb_edges target. Rewrites the COMMENT of kb_event_field_redactions.authority. No '
+    'table, column, event type or grant changes.'
 );

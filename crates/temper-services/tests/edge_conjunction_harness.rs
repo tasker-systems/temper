@@ -278,17 +278,19 @@ const CLASSIFIED: &[(&str, Class)] = &[
         ),
     ),
     (
-        "_edge_erasure_complete/1",
+        "_edge_projection_erased/1",
         Class::NotCallerFacing(
-            "erasure predicate: whether one edge's text is already erased, for the edge unit and \
-             the person act's edge step; returns a boolean, never an edge",
+            "erasure predicate: whether one edge's projection is erased (folded, label NULL, owned \
+             keys at their sentinels), for the edge unit and _edge_erasure_complete; returns a \
+             boolean, never an edge",
         ),
     ),
     (
         "principal_erasure_execute/4",
         Class::NotCallerFacing(
-            "erasure act: selects the edges homed in its estate for the edge unit; authorized in \
-             erasure_service; returns its record, never an edge",
+            "erasure act: selects the edges homed in its estate for the edge unit, skipping one \
+             whose home has left the estate; authorized in erasure_service; returns its record, \
+             never an edge",
         ),
     ),
     (
