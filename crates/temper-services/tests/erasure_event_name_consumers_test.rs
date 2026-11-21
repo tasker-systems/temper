@@ -79,7 +79,10 @@
 //!     kind. `sensitivity.erased_place_findings` names no kind: its arms for an erased resource and
 //!     an edge's erased endpoint read `kb_resources.erased_at`, and its erased-edge arms, the write
 //!     guard's kb_edges arm and the fold projection call `_edge_is_erased`, which is rostered for
-//!     the `edge_erased` it names. A kind missing from any of those callers fails nothing here.
+//!     the `edge_erased` it names. A kind missing from any of those callers fails nothing here,
+//!     and neither does a caller that stops calling `_edge_is_erased`: the static roster names only
+//!     the helper. The run-time witnesses catch that (`edge_erasure_unit_test`'s race tests for the
+//!     guard and the fold, `sensitivity_edge_erasure_bridge_test` for the findings arms).
 //!
 //! The checker is a pure function over (consumers, roster, vocabulary), so the bite probes run in
 //! memory over the real bodies with one change each, one probe per failure branch.

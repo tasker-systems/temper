@@ -160,7 +160,7 @@ home = { table = "kb_blobs", table_column = "home_table", id_column = "home_id" 
 # TODO(person-act step): when the person act calls edge_erasure_execute for each estate-homed edge
 # no resource erasure reached, the note below says so and drops "does not yet call it".
 [tables.kb_edges]
-note = "homed in the estate: folded at declaration, its label redacted by the unit. The per-edge unit edge_erasure_execute exists (migration 20261201000060), but the person act does not yet call it, so the unit stays a gap. Also reached by each endpoint: resource erasure nulls the label of every edge with the resource at either end and replaces its edge-owned properties. kb_edges_source_table_check and kb_edges_target_table_check also admit kb_blobs and kb_cogmaps, each an also_reached entry below"
+note = "homed in the estate. No act yet erases an edge through its home: the per-edge unit edge_erasure_execute (migration 20261201000060) folds the edge and sentinels its label and edge-owned properties, but the person act does not yet call it, so the unit stays a gap. Also reached by each endpoint: resource erasure nulls the label of every edge with the resource at either end and replaces its edge-owned properties. kb_edges_source_table_check and kb_edges_target_table_check also admit kb_blobs and kb_cogmaps, each an also_reached entry below"
 
 [tables.kb_edges.grain]
 kind = "per-item"
