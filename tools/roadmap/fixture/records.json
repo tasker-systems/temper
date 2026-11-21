@@ -1,0 +1,1056 @@
+{
+  "goals": {
+    "total": 13,
+    "returned": 13,
+    "truncated": false,
+    "limit": null,
+    "offset": 0,
+    "rows": [
+      {
+        "id": "10000000-0000-7000-8000-000000000001",
+        "title": "Sessions expire on a schedule",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-01T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "active"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "identity-and-access",
+          "public_title": "Every session ends on time",
+          "public_outcome": "Sessions end when their window closes."
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000002",
+        "title": "Tool descriptions match the code",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-02T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "active"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "surfaces",
+          "public_title": "Tool descriptions say what the code does",
+          "public_outcome": "The tool descriptions are checked against the source."
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000003",
+        "title": "The [lock] registry | is written",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-03T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "paused"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "reliability",
+          "public_title": "Every lock is [registered] | ranked",
+          "public_outcome": "Every lock is registered\n with its reason."
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000004",
+        "title": "Crates promise what they state",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-04T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "active"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "privacy",
+          "public_title": "Erasure can be proven",
+          "public_outcome": "Erasure completes, and its completion can be proven."
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000005",
+        "title": "A goal whose record title must stay private",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-05T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "active"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "process"
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000006",
+        "title": "Half-public goal",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-06T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "active"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "interop",
+          "public_title": "A title with no outcome"
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000007",
+        "title": "A goal nobody gave an area",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-07T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "active"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "public_title": "An ungrouped goal",
+          "public_outcome": "It has no area."
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000008",
+        "title": "A goal outside the vocabulary",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-08T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "active"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "not-an-area",
+          "public_title": "An outside goal",
+          "public_outcome": "Its area is not in the vocabulary."
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000009",
+        "title": "A completed goal",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-09T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "completed"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "ui",
+          "public_title": "Done",
+          "public_outcome": "Done."
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000010",
+        "title": "A cancelled goal",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-10T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "cancelled"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "ui"
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000011",
+        "title": "The UI acknowledges acts",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-11T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "active"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "ui",
+          "public_title": "  The UI   acknowledges every act  ",
+          "public_outcome": "Content still arriving is never shown as missing."
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000012",
+        "title": "A paused goal with no work",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-12T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "paused"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "surfaces",
+          "public_title": "A paused goal waits",
+          "public_outcome": "Nothing is filed for it."
+        }
+      },
+      {
+        "id": "10000000-0000-7000-8000-000000000013",
+        "title": "An active goal with no work",
+        "doc_type_name": "goal",
+        "context_ref": "+temper-dev/core",
+        "updated": "2026-11-13T09:00:00Z",
+        "managed_meta": {
+          "temper-status": "active"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "area": "surfaces",
+          "public_title": "An active goal waits",
+          "public_outcome": "Nothing is filed for it yet."
+        }
+      }
+    ]
+  },
+  "tasks": {
+    "total": 21,
+    "returned": 21,
+    "truncated": false,
+    "limit": null,
+    "offset": 0,
+    "rows": [
+      {
+        "id": "20000000-0000-7000-8000-000000000001",
+        "title": "task 1: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-01T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "in-progress"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "claim_id": "30000000-0000-7000-8000-000000000001",
+          "claimed_at": "2026-11-15T00:00:00Z"
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000002",
+        "title": "task 2: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-02T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000003",
+        "title": "task 3: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-03T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "done"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000004",
+        "title": "task 4: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-04T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "state": "ready"
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000005",
+        "title": "task 5: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-05T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000006",
+        "title": "task 6: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-06T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000007",
+        "title": "task 7: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-07T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "done"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000008",
+        "title": "task 8: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-08T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "state": "ready"
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000009",
+        "title": "task 9: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-09T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000010",
+        "title": "task 10: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-10T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000011",
+        "title": "task 11: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-11T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000012",
+        "title": "task 12: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-12T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "in-progress"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "claim_id": "30000000-0000-7000-8000-000000000012",
+          "claimed_at": "2026-11-15T00:00:00Z",
+          "state": "ready"
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000013",
+        "title": "task 13: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-13T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000014",
+        "title": "task 14: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-14T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "state": "ready"
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000015",
+        "title": "task 15: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-15T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "cancelled"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000016",
+        "title": "task 16: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-16T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "in-progress"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000017",
+        "title": "task 17: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-17T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "done"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000018",
+        "title": "task 18: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-18T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000019",
+        "title": "task 19: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-19T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000020",
+        "title": "task 20: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-20T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "in-progress"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ]
+        }
+      },
+      {
+        "id": "20000000-0000-7000-8000-000000000021",
+        "title": "task 21: a title that must never be printed",
+        "doc_type_name": "task",
+        "context_ref": "+temper-dev/core-workflows",
+        "updated": "2026-11-20T10:00:00Z",
+        "managed_meta": {
+          "temper-stage": "backlog"
+        },
+        "open_meta": {
+          "tags": [
+            "fixture"
+          ],
+          "claim_id": "30000000-0000-7000-8000-000000000021",
+          "claimed_at": "2026-11-15T00:00:00Z"
+        }
+      }
+    ]
+  },
+  "traverse": [
+    {
+      "seeds": [
+        "20000000-0000-7000-8000-000000000001",
+        "20000000-0000-7000-8000-000000000002",
+        "20000000-0000-7000-8000-000000000003",
+        "20000000-0000-7000-8000-000000000004",
+        "20000000-0000-7000-8000-000000000005",
+        "20000000-0000-7000-8000-000000000006",
+        "20000000-0000-7000-8000-000000000007",
+        "20000000-0000-7000-8000-000000000008",
+        "20000000-0000-7000-8000-000000000009",
+        "20000000-0000-7000-8000-000000000010",
+        "20000000-0000-7000-8000-000000000011",
+        "20000000-0000-7000-8000-000000000012",
+        "20000000-0000-7000-8000-000000000013",
+        "20000000-0000-7000-8000-000000000014",
+        "20000000-0000-7000-8000-000000000015",
+        "20000000-0000-7000-8000-000000000016",
+        "20000000-0000-7000-8000-000000000017",
+        "20000000-0000-7000-8000-000000000018",
+        "20000000-0000-7000-8000-000000000019",
+        "20000000-0000-7000-8000-000000000020",
+        "20000000-0000-7000-8000-000000000021"
+      ],
+      "reply": {
+        "nodes": [
+          {
+            "id": "10000000-0000-7000-8000-000000000001",
+            "title": "Sessions expire on a schedule",
+            "doc_type": "goal",
+            "degree": 5
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000002",
+            "title": "Tool descriptions match the code",
+            "doc_type": "goal",
+            "degree": 5
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000003",
+            "title": "The [lock] registry | is written",
+            "doc_type": "goal",
+            "degree": 1
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000004",
+            "title": "Crates promise what they state",
+            "doc_type": "goal",
+            "degree": 2
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000005",
+            "title": "A goal whose record title must stay private",
+            "doc_type": "goal",
+            "degree": 1
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000006",
+            "title": "Half-public goal",
+            "doc_type": "goal",
+            "degree": 1
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000007",
+            "title": "A goal nobody gave an area",
+            "doc_type": "goal",
+            "degree": 1
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000008",
+            "title": "A goal outside the vocabulary",
+            "doc_type": "goal",
+            "degree": 1
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000009",
+            "title": "A completed goal",
+            "doc_type": "goal",
+            "degree": 1
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000010",
+            "title": "A cancelled goal",
+            "doc_type": "goal",
+            "degree": 2
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000011",
+            "title": "The UI acknowledges acts",
+            "doc_type": "goal",
+            "degree": 1
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000012",
+            "title": "A paused goal with no work",
+            "doc_type": "goal",
+            "degree": 0
+          },
+          {
+            "id": "10000000-0000-7000-8000-000000000013",
+            "title": "An active goal with no work",
+            "doc_type": "goal",
+            "degree": 0
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000001",
+            "title": "task 1: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000002",
+            "title": "task 2: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 2
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000003",
+            "title": "task 3: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000004",
+            "title": "task 4: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000005",
+            "title": "task 5: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 3
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000006",
+            "title": "task 6: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 3
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000007",
+            "title": "task 7: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000008",
+            "title": "task 8: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000009",
+            "title": "task 9: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000010",
+            "title": "task 10: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 0
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000011",
+            "title": "task 11: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 2
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000012",
+            "title": "task 12: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000013",
+            "title": "task 13: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 2
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000014",
+            "title": "task 14: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 2
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000015",
+            "title": "task 15: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000016",
+            "title": "task 16: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 0
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000017",
+            "title": "task 17: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000018",
+            "title": "task 18: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000019",
+            "title": "task 19: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000020",
+            "title": "task 20: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "20000000-0000-7000-8000-000000000021",
+            "title": "task 21: a title that must never be printed",
+            "doc_type": "task",
+            "degree": 1
+          },
+          {
+            "id": "40000000-0000-7000-8000-000000000001",
+            "title": "a research note",
+            "doc_type": "research",
+            "degree": 1
+          },
+          {
+            "id": "60000000-0000-7000-8000-000000000001",
+            "title": "a session",
+            "doc_type": "session",
+            "degree": 2
+          }
+        ],
+        "edges": [
+          {
+            "id": "70000000-0000-7000-8000-000000000001",
+            "source": "20000000-0000-7000-8000-000000000001",
+            "target": "10000000-0000-7000-8000-000000000001",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000002",
+            "source": "20000000-0000-7000-8000-000000000002",
+            "target": "10000000-0000-7000-8000-000000000001",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000003",
+            "source": "20000000-0000-7000-8000-000000000003",
+            "target": "10000000-0000-7000-8000-000000000001",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000004",
+            "source": "20000000-0000-7000-8000-000000000004",
+            "target": "10000000-0000-7000-8000-000000000002",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000005",
+            "source": "20000000-0000-7000-8000-000000000005",
+            "target": "10000000-0000-7000-8000-000000000002",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000006",
+            "source": "20000000-0000-7000-8000-000000000006",
+            "target": "10000000-0000-7000-8000-000000000003",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000007",
+            "source": "20000000-0000-7000-8000-000000000007",
+            "target": "10000000-0000-7000-8000-000000000004",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000008",
+            "source": "20000000-0000-7000-8000-000000000008",
+            "target": "10000000-0000-7000-8000-000000000005",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000009",
+            "source": "20000000-0000-7000-8000-000000000009",
+            "target": "10000000-0000-7000-8000-000000000009",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000010",
+            "source": "20000000-0000-7000-8000-000000000011",
+            "target": "10000000-0000-7000-8000-000000000001",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000011",
+            "source": "20000000-0000-7000-8000-000000000011",
+            "target": "10000000-0000-7000-8000-000000000002",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000012",
+            "source": "20000000-0000-7000-8000-000000000012",
+            "target": "10000000-0000-7000-8000-000000000011",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000013",
+            "source": "20000000-0000-7000-8000-000000000013",
+            "target": "10000000-0000-7000-8000-000000000007",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000014",
+            "source": "20000000-0000-7000-8000-000000000014",
+            "target": "10000000-0000-7000-8000-000000000008",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000015",
+            "source": "20000000-0000-7000-8000-000000000015",
+            "target": "10000000-0000-7000-8000-000000000001",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000016",
+            "source": "20000000-0000-7000-8000-000000000017",
+            "target": "10000000-0000-7000-8000-000000000010",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000017",
+            "source": "20000000-0000-7000-8000-000000000018",
+            "target": "40000000-0000-7000-8000-000000000001",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000018",
+            "source": "20000000-0000-7000-8000-000000000019",
+            "target": "10000000-0000-7000-8000-000000000006",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000019",
+            "source": "20000000-0000-7000-8000-000000000020",
+            "target": "10000000-0000-7000-8000-000000000002",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000020",
+            "source": "20000000-0000-7000-8000-000000000021",
+            "target": "10000000-0000-7000-8000-000000000010",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000021",
+            "source": "60000000-0000-7000-8000-000000000001",
+            "target": "20000000-0000-7000-8000-000000000002",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000022",
+            "source": "60000000-0000-7000-8000-000000000001",
+            "target": "20000000-0000-7000-8000-000000000005",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000023",
+            "source": "10000000-0000-7000-8000-000000000002",
+            "target": "20000000-0000-7000-8000-000000000006",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "advances",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000024",
+            "source": "20000000-0000-7000-8000-000000000006",
+            "target": "20000000-0000-7000-8000-000000000005",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "depends_on",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000025",
+            "source": "20000000-0000-7000-8000-000000000013",
+            "target": "10000000-0000-7000-8000-000000000004",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "relates_to",
+            "weight": 1.0
+          },
+          {
+            "id": "70000000-0000-7000-8000-000000000026",
+            "source": "20000000-0000-7000-8000-000000000014",
+            "target": "20000000-0000-7000-8000-000000000014",
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "relates_to",
+            "weight": 1.0
+          }
+        ]
+      }
+    }
+  ]
+}
