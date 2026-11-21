@@ -15,7 +15,8 @@ looked up, and the attempt adds nothing to the ledger.
 regulator's order), and the organization hosting Temper determines the request must be honored.
 The act breaks the link between the person and their id, erases everything in their own
 contexts, and leaves what they wrote into other teams' contexts in place, attributable only to a
-pseudonym. It is not part of leaving: see [Erasure and the terms of use](./erasure-and-terms-of-use.md).
+pseudonym, except the text of a relationship that points into what it erases. It is not part of
+leaving: see [Erasure and the terms of use](./erasure-and-terms-of-use.md).
 
 **(b) Remediation.** Something that must not exist was written down: a secret, a credential, a
 personal identifier, a confidential document. The person who wrote it, or a security team,
@@ -35,7 +36,8 @@ show, wherever the act's reach includes the ledger.
 | [Field scrub](./field-scrub.md) | `temper admin erasure field` | (b), metadata only | the history of one field | live; today's value kept unless `--clear` |
 
 Person erasure is built on resource erasure: the same act runs over every resource in the
-person's own contexts, and the person act adds the identity steps and the pseudonym break. The
+person's own contexts, and the person act adds the identity steps, the pseudonym break, and the
+erasure of each relationship homed in those contexts that no resource erasure reached. The
 one exception is a cognitive map's charter: its text is emptied, and it is held, not erased, until
 map-grain erasure exists. The record lists it among the charters held.
 
