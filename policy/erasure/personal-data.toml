@@ -205,6 +205,7 @@
 "kb_oauth_refresh_tokens.profile_id"               = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_principal_governance.profile_id"               = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_principal_governance.granted_by"               = { class = "reference", ceiling = "pseudonym", achieved = "-" }
+"kb_principal_rate_counters.profile_id"            = { class = "reference", ceiling = "pseudonym", achieved = "-", note = "a windowed request count per door; after erasure keyed on the pseudonym" }
 "kb_principal_review_requests.profile_id"          = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_principal_review_requests.decided_by"          = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_principal_standing.profile_id"                 = { class = "reference", ceiling = "pseudonym", achieved = "-" }

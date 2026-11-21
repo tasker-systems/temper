@@ -57,18 +57,15 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         // `{artifact_id}`; the static one is matched first, so a GET to it meets this POST-only
         // route rather than the flat read.
         .routes(routes!(handlers::data_artifacts::ask))
-        // `blobs::commit` and `blobs::append_segment` are NOT mounted here: they are the
-        // two doors whose legal body sizes exceed axum's inherited default, so they merge
-        // through `blob_commit_routes` / `blob_segment_routes` with limits sized from
-        // the config and the plan numbers (see those functions, merged in [`create_app`]).
+        // The blob write doors are NOT mounted here: they spend the per-principal blob-write
+        // budget, so they merge through `blob_commit_routes`, `blob_segment_routes` (each
+        // with its own body limit) and `blob_write_routes` (see `routes::blob_doors`). The
+        // blob reads and `relate` stay here, unbudgeted.
         .routes(routes!(handlers::blobs::get))
-        .routes(routes!(handlers::blobs::delete))
         // One `.routes()` per handler: the multi-handler form is for same-path method
         // grouping (the ingest blocks GET+POST shape); distinct paths in one call mangle
         // the mounted patterns into overlaps.
-        .routes(routes!(handlers::blobs::begin_upload))
         .routes(routes!(handlers::blobs::upload_progress))
-        .routes(routes!(handlers::blobs::finalize_upload))
         .routes(routes!(handlers::blobs::list))
         .routes(routes!(handlers::blobs::relate))
         .routes(routes!(handlers::blobs::relations))

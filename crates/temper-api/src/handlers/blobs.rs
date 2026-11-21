@@ -59,6 +59,7 @@ use temper_core::types::query_params::{BlobListQuery, SegmentQuery};
         (status = 200, description = "Committed (or dedup-hit) blob", body = BlobCommitResponse),
         (status = 400, description = "Refused — over threshold, unknown home anchor, or the wrapper's cap/allowlist vocabulary", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 429, description = "Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited)", body = ErrorBody),
     )
 )]
 pub async fn commit(
@@ -280,6 +281,7 @@ fn parse_home_table(table: &str) -> ApiResult<AnchorTable> {
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Home not found or not readable — indistinguishable by design", body = ErrorBody),
         (status = 403, description = "Home readable but not authorable", body = ErrorBody),
+        (status = 429, description = "Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited)", body = ErrorBody),
     )
 )]
 pub async fn begin_upload(
@@ -336,6 +338,7 @@ pub async fn begin_upload(
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Session absent or not the caller's — indistinguishable by design", body = ErrorBody),
         (status = 409, description = "A different segment occupies this seq", body = ErrorBody),
+        (status = 429, description = "Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited)", body = ErrorBody),
     )
 )]
 pub async fn append_segment(
@@ -419,6 +422,7 @@ pub async fn upload_progress(
         (status = 404, description = "Session absent or not the caller's — indistinguishable by design", body = ErrorBody),
         (status = 409, description = "Concurrency tokens stale — segments landed since the caller's last append (staging kept, resumable)", body = ErrorBody),
         (status = 422, description = "Assembled bytes do not hash to the declared expected_content_hash (staging kept)", body = ErrorBody),
+        (status = 429, description = "Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited)", body = ErrorBody),
     )
 )]
 pub async fn finalize_upload(
@@ -615,6 +619,7 @@ pub async fn relations(
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "The blob is readable but the caller holds no delete standing over it (custody refusal, `blob_delete:` vocabulary)", body = ErrorBody),
         (status = 404, description = "Blob absent, not visible, or already struck — each indistinguishable from absent by design; no second event", body = ErrorBody),
+        (status = 429, description = "Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited)", body = ErrorBody),
     )
 )]
 pub async fn delete(

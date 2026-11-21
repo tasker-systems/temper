@@ -216,6 +216,13 @@ fn map_api_error(action: &str, err: ClientError) -> rmcp::ErrorData {
             format!("{action}: {message}"),
             None,
         ),
+        // A rate-limit refusal is the caller's own pressure, never an internal fault. The relayed
+        // commit spends the per-principal blob-write budget of the HTTP door it relays to.
+        ClientError::RateLimited { .. } => rmcp::ErrorData::new(
+            rmcp::model::ErrorCode::INVALID_REQUEST,
+            format!("{action}: too many requests in the current window; try again later"),
+            None,
+        ),
         other => rmcp::ErrorData::internal_error(format!("{action} failed: {other}"), None),
     }
 }
@@ -585,6 +592,26 @@ fn decode_commit_content(content_b64: &str) -> Result<Vec<u8>, base64::DecodeErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // FAILS IF: the relayed blob commit's rate-limit refusal reads as an internal fault.
+    #[test]
+    fn a_rate_limited_relay_is_the_callers_refusal_not_a_fault() {
+        let refused = map_api_error(
+            "blob_commit",
+            ClientError::RateLimited {
+                retry_after: std::time::Duration::from_secs(60),
+            },
+        );
+        assert_eq!(
+            refused.code,
+            rmcp::model::ErrorCode::INVALID_REQUEST,
+            "{refused:?}"
+        );
+        assert_eq!(
+            refused.message,
+            "blob_commit: too many requests in the current window; try again later"
+        );
+    }
 
     /// Generate the tool input schema the same way rmcp does at runtime
     /// (`SchemaSettings::draft2020_12`, ref-based generator) — the

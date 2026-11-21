@@ -35,17 +35,21 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::middleware::{
-    auth, broker_attested, cron_secret, internal_auth, preconditions, relay_trust, system_access,
+    auth, broker_attested, cron_secret, internal_auth, preconditions, principal_rate_limit,
+    relay_trust, system_access,
 };
 use crate::openapi::ApiDoc;
 use admin::admin_routes;
 use auth_only::{auth_only_routes, auth_only_status_routes};
-use blob_doors::{blob_commit_body_limit, blob_commit_routes, blob_segment_routes};
+use blob_doors::{
+    blob_commit_body_limit, blob_commit_routes, blob_segment_routes, blob_write_routes,
+};
 use embed_internal::embed_internal_routes;
 use gated::{gated_routes, shape_declare_routes};
 use internal::{internal_routes, slack_link_internal_routes, slack_mint_internal_routes};
 use public::public_routes;
 use slack_link_public::slack_link_public_routes;
+use temper_services::rate_limit::PrincipalDoor;
 use temper_services::state::AppState;
 use webhook_intake::webhook_intake_routes;
 
@@ -104,8 +108,9 @@ enum SignatureKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Preconditions {
     /// The refusal layer is inside every gate of the group's tier stack, so it runs after all of
-    /// them (only a group's own `DefaultBodyLimit`, which gates nothing, sits inside it). Legal only
-    /// on a tier that has a layer gate: every tier but [`Tier::Public`] and [`Tier::SelfGated`].
+    /// them (only a group's own `DefaultBodyLimit`, which gates nothing, and its per-principal
+    /// budget sit inside it, so a call this layer refuses spends no budget). Legal only on a tier
+    /// that has a layer gate: every tier but [`Tier::Public`] and [`Tier::SelfGated`].
     Refused,
     /// Not policed. The reason is the review record; the audit script asserts it textually.
     Exempt(&'static str),
@@ -194,6 +199,10 @@ struct Group {
     /// the gates enforce it, so nothing at runtime branches on it.
     #[allow(dead_code)]
     anonymous: Anonymous,
+    /// The per-principal budget the group's routes spend, or `None`. A required field of every
+    /// row, so a door joins or leaves a budget only at its row, in review. The layer is inert
+    /// until the operator sets the door's limit (`temper_services::rate_limit`).
+    rate_limit: Option<PrincipalDoor>,
 }
 
 /// The table. One row per group; the ordering below is the merge order in
@@ -209,15 +218,15 @@ fn route_table() -> Vec<Group> {
     use GroupRoutes::*;
     vec![
         // By-design public: a health check discloses nothing and authenticates nobody.
-        Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("by-design public: mounts no write method, so its own 405 is its answer"), anonymous: Anonymous::Public("liveness probe: published, unauthenticated by design") },
+        Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("by-design public: mounts no write method, so its own 405 is its answer"), anonymous: Anonymous::Public("liveness probe: published, unauthenticated by design"), rate_limit: None },
         // Self-service: authenticated, but no system-access gate — a caller managing
         // their own instance is a library caller, not an operator. A person's acts only: the
         // tier refuses a machine before any handler runs.
-        Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
+        Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },
         // The one self-service read a machine keeps: its own profile and entitlements (how an
         // agent learns whether it is approved). Its own group so the machine-admitting AuthOnly
         // tier carries exactly this handler; `/api/profile`'s PATCH sits in `auth_only_routes`.
-        Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
+        Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },
         // Default-deny for all data routes. Addition order (INNER → OUTER, so execution
         // runs outermost-first): require_system_access, require_auth, relay_trust,
         // DefaultBodyLimit. Relay-trust runs BEFORE the auth layers — it rejects nothing
@@ -228,42 +237,47 @@ fn route_table() -> Vec<Group> {
         // The inherited 25 MB ceiling is the OUTER layer so the doors that chose their
         // own limits (the blob rows below, `/api/query` inside the group) stay inner
         // and win on their routes — the network door's ruling 3, design §D4.
-        Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
+        Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },
         // The system-admin surface: the gated stack with the machine refusal, its own row so
         // the operator surface is one auditable set. The tier admits any approved person; the
         // gate that makes these routes admin-only is the `&SystemAdmin` proof each service
         // requires, minted in the handler before dispatch (see `admin.rs` for the membership
         // rule). A machine is refused at the tier, before any lookup.
-        Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
-        // The two blob doors, at the gated tier with their own body limits INNER to the
-        // tier stack so the decisions they chose win on their routes. The commit door's
+        Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },
+        // The two blob doors with large bodies, at the gated tier with their own body limits
+        // INNER to the tier stack so the decisions they chose win on their routes, and the
+        // per-principal blob-write budget shared by every blob write door. The commit door's
         // bound is the config's D7 threshold plus multipart overhead — the transport
         // never fires first over a body the handler would legally accept.
-        Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
+        Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: Some(PrincipalDoor::BlobWrite) },
         // The segment door's bound is the platform ceiling the plan numbers pin
         // (4.5 MB), not the config — the staging ceiling is enforced with its own
         // vocabulary in the service.
-        Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
+        Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: Some(PrincipalDoor::BlobWrite) },
+        // The three blob write doors with trivial bodies (begin, finalize, delete): the gated tier
+        // and its inherited ceiling, and the same blob-write budget as the two rows above. Their
+        // paths are shared with blob reads in `gated_routes`; the routers merge by method.
+        Group { key: "blob_write_routes", tier: Tier::Gated, build: Documented(blob_write_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: Some(PrincipalDoor::BlobWrite) },
         // The shape declare POSTs, at the gated tier with their own body limit INNER to the tier
         // stack, so a schema-sized 512 KiB wins over the inherited 25 MiB on these two routes.
         // They share their paths with the list GETs in `gated_routes`; the routers merge by method.
-        Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
+        Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },
         // The three internal HMAC groups — one scheme, three secrets, three routers.
         // Signature gates mount in BOTH builders; losing one mount is not a downgrade
         // to authenticated-but-broad, it is the group served ungated on that surface.
         // The rate-limit layer rides the RECONCILE pair only (the base wiring applied
         // it there and nowhere else) and sits INNER to the signature so an unsigned
         // caller gets the 401 and never spends the signed caller's budget.
-        Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
-        Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
-        Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
+        Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },
+        Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },
+        Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },
         // The IdP's PKCE redirect target — carries no bearer and no signature by
         // design; its authentication is the code exchange plus the burned state nonce.
-        Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("the IdP PKCE redirect target: GET only, and the IdP sends no precondition"), anonymous: Anonymous::Public("IdP redirect target: a browser arrives unauthenticated; the URL is registered with Slack") },
+        Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("the IdP PKCE redirect target: GET only, and the IdP sends no precondition"), anonymous: Anonymous::Public("IdP redirect target: a browser arrives unauthenticated; the URL is registered with Slack"), rate_limit: None },
         // Vercel crons — the CronSecret tier pins the host and checks EMBED_DISPATCH_SECRET as a
         // layer over the group, fail-closed when unset. Served by both builders so the internal
         // function keeps its longer maxDuration for the same paths.
-        Group { key: "embed_internal_routes", tier: Tier::CronSecret, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition"), anonymous: Anonymous::Refused },
+        Group { key: "embed_internal_routes", tier: Tier::CronSecret, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition"), anonymous: Anonymous::Refused, rate_limit: None },
         // Vercel Connect's webhook intake — the BrokerAttested tier verifies the broker's RS256
         // attestation (a third party's signature against a remote JWKS, not a shared secret)
         // from its headers, as a layer, before the body is read. create_app only: Connect
@@ -271,7 +285,7 @@ fn route_table() -> Vec<Group> {
         // body_limit is None because the door sets its own 25 MiB
         // (GITHUB_MAX_WEBHOOK_BYTES) INSIDE the group fn — the table column is not the
         // whole truth for this one door; the limit is not config-derivable at the table.
-        Group { key: "webhook_intake_routes", tier: Tier::BrokerAttested, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },
+        Group { key: "webhook_intake_routes", tier: Tier::BrokerAttested, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },
     ]
 }
 
@@ -293,12 +307,29 @@ fn mount_group(group: &Group, state: &AppState) -> Router<AppState> {
         }
         None => router,
     };
+    // The per-principal budget next, inner to the precondition refusal and to every gate of the
+    // tier, so only a caller every gate admitted spends it. `route_layer` keeps the router-level
+    // fallback (an unmatched path's 404) out of the budget, but in axum it still wraps each path's
+    // method router whole, its 405 fallback included. Where a budgeted path is shared with a read
+    // group, the merge keeps the later-merged router's fallback, and the blob rows come after
+    // `gated_routes`, so an admitted caller's unmounted method on that path spends one call and
+    // past the budget is answered 429. That costs only the caller's own budget.
+    let router = match group.rate_limit {
+        Some(door) => router.route_layer(from_fn_with_state(
+            principal_rate_limit::PrincipalLimit {
+                state: state.clone(),
+                door,
+            },
+            principal_rate_limit::require_principal_rate_limit,
+        )),
+        None => router,
+    };
     // The precondition refusal next, before the tier, so it is inside every gate of the tier stack: it runs
     // after `require_auth`, `refuse_machine`, `require_system_access` and the HMAC signature, and a
     // caller one of them refuses meets that refusal exactly as it would without the header.
-    // `Router::layer` (not `route_layer`) so it also wraps the method router's fallback: an
-    // admitted caller sending an unmounted write with a policed header keeps the refusal, with
-    // the fallback's `Allow`.
+    // `Router::layer`, so it wraps the method router's fallback (as `route_layer` would too) and
+    // the router-level fallback besides: an admitted caller sending an unmounted write with a
+    // policed header keeps the refusal, with the fallback's `Allow`.
     let router = match group.preconditions {
         Preconditions::Refused => {
             router.layer(from_fn(preconditions::refuse_unhonoured_preconditions))

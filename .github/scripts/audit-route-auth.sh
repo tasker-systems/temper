@@ -17,6 +17,7 @@
 #   public_routes                Public                        Exempt         Public     (none)                                by-design public: /health
 #   blob_commit_routes           Gated (+ inner body limit)    Refused        Refused    same stack as gated_routes
 #   blob_segment_routes          Gated (+ inner body limit)    Refused        Refused    same stack as gated_routes
+#   blob_write_routes            Gated                         Refused        Refused    same stack as gated_routes
 #   shape_declare_routes         Gated (+ inner body limit)    Refused        Refused    same stack as gated_routes
 #   embed_internal_routes        CronSecret                    Exempt         Refused    require_cron_secret                   host pin + EMBED_DISPATCH_SECRET
 #   internal_routes              InternalHmac(Reconcile)       Refused        Refused    require_internal_signature            HMAC (INTERNAL_RECONCILE_SECRET)
@@ -30,6 +31,11 @@
 # reviewed reason on the row, and only the two by-design public groups hold it. The unmatched path's
 # posture is declared beside the table (FALLBACK, INTERNAL_FALLBACK, REFUSED_PREFIXES) and pinned
 # below with the rows.
+#
+# RATE_LIMIT is the row's `rate_limit:` designation (the per-principal budget, a
+# temper_services::rate_limit::PrincipalDoor, or None). The three blob write groups carry
+# Some(PrincipalDoor::BlobWrite); every other row carries None. It is part of each pinned row, and
+# its placement (inside mount_group, before apply_tier, so inner to every gate) is asserted below.
 #
 # PRECONDITIONS is the row's `preconditions:` designation (routes::Preconditions): Refused applies
 # the If-Match / If-None-Match / If-Unmodified-Since refusal INNERMOST in the tier stack, after
@@ -118,7 +124,7 @@ APP_BUILDERS='create_app create_internal_app'
 # and to nothing else. That indirection is exactly what makes a bare AUTH_COVERED entry too weak
 # here: the entry asserts a posture, and the posture is a property of where the merge lands. The
 # merge-landing assertion below is what closes that, and it is why this name may sit here at all.
-AUTH_COVERED='auth_only_routes|auth_only_status_routes|gated_routes|admin_routes|query_routes|blob_segment_routes|blob_commit_routes|shape_declare_routes'
+AUTH_COVERED='auth_only_routes|auth_only_status_routes|gated_routes|admin_routes|query_routes|blob_segment_routes|blob_commit_routes|blob_write_routes|shape_declare_routes'
 # Groups whose routes are NOT behind require_auth — every entry is a reviewed compensating control.
 REVIEW_GROUPS='public_routes|embed_internal_routes|internal_routes|slack_link_internal_routes|slack_mint_internal_routes|slack_link_public_routes|webhook_intake_routes'
 
@@ -239,20 +245,21 @@ require_row() {
   }
 }
 
-require_row 'public_routes'              'Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("by-design public: mounts no write method, so its own 405 is its answer"), anonymous: Anonymous::Public("liveness probe: published, unauthenticated by design") },'
-require_row 'auth_only_routes'           'Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
-require_row 'auth_only_status_routes'    'Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
-require_row 'gated_routes'               'Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
-require_row 'admin_routes'               'Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
-require_row 'blob_commit_routes'         'Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
-require_row 'blob_segment_routes'        'Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
-require_row 'shape_declare_routes'       'Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
-require_row 'internal_routes'            'Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
-require_row 'slack_link_internal_routes' 'Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
-require_row 'slack_mint_internal_routes' 'Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
-require_row 'slack_link_public_routes'   'Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("the IdP PKCE redirect target: GET only, and the IdP sends no precondition"), anonymous: Anonymous::Public("IdP redirect target: a browser arrives unauthenticated; the URL is registered with Slack") },'
-require_row 'embed_internal_routes'      'Group { key: "embed_internal_routes", tier: Tier::CronSecret, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition"), anonymous: Anonymous::Refused },'
-require_row 'webhook_intake_routes'      'Group { key: "webhook_intake_routes", tier: Tier::BrokerAttested, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused },'
+require_row 'public_routes'              'Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("by-design public: mounts no write method, so its own 405 is its answer"), anonymous: Anonymous::Public("liveness probe: published, unauthenticated by design"), rate_limit: None },'
+require_row 'auth_only_routes'           'Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },'
+require_row 'auth_only_status_routes'    'Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },'
+require_row 'gated_routes'               'Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },'
+require_row 'admin_routes'               'Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },'
+require_row 'blob_commit_routes'         'Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: Some(PrincipalDoor::BlobWrite) },'
+require_row 'blob_segment_routes'        'Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: Some(PrincipalDoor::BlobWrite) },'
+require_row 'blob_write_routes'          'Group { key: "blob_write_routes", tier: Tier::Gated, build: Documented(blob_write_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: Some(PrincipalDoor::BlobWrite) },'
+require_row 'shape_declare_routes'       'Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },'
+require_row 'internal_routes'            'Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },'
+require_row 'slack_link_internal_routes' 'Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },'
+require_row 'slack_mint_internal_routes' 'Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },'
+require_row 'slack_link_public_routes'   'Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("the IdP PKCE redirect target: GET only, and the IdP sends no precondition"), anonymous: Anonymous::Public("IdP redirect target: a browser arrives unauthenticated; the URL is registered with Slack"), rate_limit: None },'
+require_row 'embed_internal_routes'      'Group { key: "embed_internal_routes", tier: Tier::CronSecret, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition"), anonymous: Anonymous::Refused, rate_limit: None },'
+require_row 'webhook_intake_routes'      'Group { key: "webhook_intake_routes", tier: Tier::BrokerAttested, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused, anonymous: Anonymous::Refused, rate_limit: None },'
 
 # The unmatched path's posture, declared beside the table. A change to either builder's fallback, or
 # to the refused prefixes, is a change of what an unauthenticated caller learns, so it is pinned
@@ -285,6 +292,22 @@ if [[ "$PRE_MOUNT" != *"Preconditions::Refused =>"* || "$REFUSED_ARM" != *"refus
   echo "audit-route-auth: FAIL — precondition placement: mount_group does not apply refuse_unhonoured_preconditions to Refused groups before apply_tier" >&2
   echo "  Added before the tier it is inside every gate: after require_auth, refuse_machine," >&2
   echo "  require_system_access and the signature gates; anywhere else it answers callers they refuse." >&2
+  fail=1
+fi
+
+# The per-principal budget's placement. Like the precondition refusal it is applied in exactly one
+# place, mount_group, keyed on the row's `rate_limit:` designation and BEFORE apply_tier, so it is
+# inner to every gate: an unauthenticated or unapproved caller is refused by its gate and spends no
+# budget. Applied anywhere else (the transport, a builder, a tier arm, around apply_tier) it would
+# count callers the gates refuse, or bind to groups whose rows never chose it.
+BUDGET_COUNT="$(cat $ROUTES_FILES | grep -v '^[[:space:]]*//' | grep -o 'require_principal_rate_limit' | wc -l | tr -d ' ')"
+if [[ "$BUDGET_COUNT" != "1" ]]; then
+  echo "audit-route-auth: FAIL — budget placement: require_principal_rate_limit is applied $BUDGET_COUNT times in the routes module; exactly one, in mount_group before apply_tier" >&2
+  fail=1
+fi
+if [[ "$PRE_MOUNT" != *"match group.rate_limit"* || "$PRE_MOUNT" != *"require_principal_rate_limit"* ]]; then
+  echo "audit-route-auth: FAIL — budget placement: mount_group does not apply require_principal_rate_limit from the row's rate_limit before apply_tier" >&2
+  echo "  Added before the tier it is inner to every gate; after it, a refused caller spends the budget." >&2
   fail=1
 fi
 
