@@ -23,9 +23,9 @@
 # temper_services::MIGRATOR (so `_sqlx_migrations` is included). The complement is that set minus
 # every `table.column` declared in personal-data.toml.
 #
-# COUNT at `count_at`: 178 text/varchar columns; 18 declared in the sibling; `declared_count` declared here.
-count_at = "20261108000000"
-declared_count = 160
+# COUNT at `count_at`: 179 text/varchar columns; 18 declared in the sibling; `declared_count` declared here.
+count_at = "20261201000010"
+declared_count = 161
 #
 # THERE IS NO `unadjudicated` CLASS. A class that means "we will decide later" is how a manifest
 # starts accumulating lines nobody reads. A new column is declared by the PR that adds it.
@@ -159,6 +159,7 @@ declared_count = 160
 "kb_data_artifact_shapes.artifact_kind"           = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name" }
 "kb_data_artifacts.artifact_kind"                 = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name" }
 "kb_migration_ledger.recorded_by"                 = { disposition = "structural", note = "provenance vocabulary" }
+"kb_principal_rate_counters.door"                 = { disposition = "structural", note = "PrincipalDoor name, the counter key's door half" }
 "kb_rate_counters.route"                          = { disposition = "structural", note = "route name, the counter key" }
 "kb_system_settings.terms_version"                = { disposition = "structural", note = "version string" }
 "kb_system_settings.gating_team_slug"             = { disposition = "structural", note = "names a team slug, which the sibling declares" }

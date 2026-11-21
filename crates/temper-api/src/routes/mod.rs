@@ -308,9 +308,11 @@ fn mount_group(group: &Group, state: &AppState) -> Router<AppState> {
         None => router,
     };
     // The per-principal budget next, inner to the precondition refusal and to every gate of the
-    // tier, so only a caller every gate admitted spends it. `route_layer`, not `layer`: only the
-    // group's own mounted routes count, never the method router's fallback (a 405 costs the pool
-    // nothing and must not spend a budget).
+    // tier, so only a caller every gate admitted spends it. It wraps each of the group's paths
+    // whole, the method router's 405 fallback included: where a budgeted path is shared with a
+    // read group the merge serves the budgeted group's fallback, so an admitted caller's unmounted
+    // method on that path spends one call too, and past the budget is answered 429. That costs
+    // only the caller's own budget.
     let router = match group.rate_limit {
         Some(door) => router.route_layer(from_fn_with_state(
             principal_rate_limit::PrincipalLimit {

@@ -7,7 +7,8 @@
 //! The budget's two clauses: a configured door refuses the call past the window with the seam's
 //! refusal shape, and the same door unconfigured neither refuses nor counts. The keying clauses:
 //! one budget per principal, shared across the five write doors, and never spent by a caller a
-//! gate refused or by a blob read.
+//! gate refused or by a blob read. Counters live in `kb_principal_rate_counters`, which no other
+//! door writes, so a count of its rows is a count of this budget's principals.
 
 mod common;
 
@@ -86,7 +87,7 @@ async fn commit(app: &TestApp, token: &str, ctx: Uuid, bytes: Vec<u8>) -> reqwes
 }
 
 async fn counter_rows(pool: &PgPool) -> i64 {
-    sqlx::query_scalar("SELECT count(*) FROM kb_rate_counters")
+    sqlx::query_scalar("SELECT count(*) FROM kb_principal_rate_counters")
         .fetch_one(pool)
         .await
         .expect("count counter rows")
@@ -339,5 +340,81 @@ async fn an_unauthenticated_caller_spends_no_budget(pool: PgPool) {
         counter_rows(&app.pool).await,
         0,
         "a refused caller spends nothing"
+    );
+}
+
+/// **Declared-behaviour witness: an unmounted method on a budgeted path spends the budget.** The
+/// budget wraps the path whole, the method router's 405 fallback included, so with a budget of
+/// zero an admitted caller's `PUT` on a write door's path is answered 429, not 405. Pins what
+/// `routes::mount_group` states; if the budget ever stops wrapping the fallback, this turns red
+/// and that comment must change with it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_unmounted_method_on_a_budgeted_path_spends_the_budget(pool: PgPool) {
+    let app = app_with_budget(pool, budget(0)).await;
+    let (_ctx, token) = principal(&app.pool).await;
+
+    let id = Uuid::now_v7();
+    let resp = send(
+        &app,
+        reqwest::Method::PUT,
+        &format!("/api/blobs/{id}"),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(
+        resp.status().as_u16(),
+        429,
+        "the 405 fallback is inside the budget"
+    );
+}
+
+/// **Erasure witness: a principal's counters go with its profile.** The counter references the
+/// profile by foreign key with `ON DELETE CASCADE`, so the erasure manifests' fk derivation finds
+/// it and a deleted profile leaves no counter behind.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_profiles_counters_go_with_the_profile(pool: PgPool) {
+    let app = app_with_budget(pool, budget(5)).await;
+    let (ctx, token) = principal(&app.pool).await;
+    assert_eq!(
+        commit(&app, &token, ctx, vec![1]).await.status().as_u16(),
+        200
+    );
+    assert_eq!(counter_rows(&app.pool).await, 1);
+
+    let cascades: bool = sqlx::query_scalar(
+        "SELECT confdeltype = 'c' FROM pg_constraint \
+          WHERE conrelid = 'kb_principal_rate_counters'::regclass AND contype = 'f' \
+            AND confrelid = 'kb_profiles'::regclass",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("the profile foreign key");
+    assert!(
+        cascades,
+        "the counter's profile reference cascades on delete"
+    );
+}
+
+/// **Ordering witness: the budget is inside the system-access gate.** A verified caller with no
+/// approved standing (a JIT-provisioned profile is born denied) is refused 403 by
+/// `require_system_access` on every write door and spends nothing.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_unapproved_caller_spends_no_budget(pool: PgPool) {
+    let app = app_with_budget(pool, budget(0)).await;
+    let email = format!("blob-rl-unapproved-{}@example.com", Uuid::new_v4());
+    let token = generate_test_jwt(&format!("test|{}", Uuid::new_v4()), &email);
+
+    for (method, path) in write_doors() {
+        let resp = send(&app, method.clone(), &path, Some(&token)).await;
+        assert_eq!(
+            resp.status().as_u16(),
+            403,
+            "{method} {path} refuses at system access"
+        );
+    }
+    assert_eq!(
+        counter_rows(&app.pool).await,
+        0,
+        "an unapproved caller spends nothing"
     );
 }

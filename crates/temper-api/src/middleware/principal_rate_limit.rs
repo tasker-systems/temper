@@ -12,6 +12,7 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 
+use temper_core::types::ids::ProfileId;
 use temper_services::error::ApiError;
 use temper_services::rate_limit::{check_principal, PrincipalDoor};
 use temper_services::state::AppState;
@@ -41,7 +42,7 @@ pub async fn require_principal_rate_limit(
     }
 
     let profile_id = super::auth::planted_caller(&request)
-        .map(|caller| caller.profile().id)
+        .map(|caller| ProfileId::from(caller.profile().id))
         .ok_or_else(|| ApiError::Internal("caller not found in request extensions".to_string()))?;
 
     check_principal(&limit.state.pool, config, limit.door, profile_id).await?;

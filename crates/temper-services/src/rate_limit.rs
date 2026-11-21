@@ -31,7 +31,7 @@
 //! |---|---|---|---|---|
 //! | reconcile pair (`internal_routes`) | the route itself | `kb_rate_counters` (no per-call artifact exists — the handlers trace only) | [`require_route_rate_limit`] middleware | one budget per route for the whole deployment: every signed caller shares it, so a flood from the one secret-bearer spends it for all |
 //! | `POST /api/access/requests` | the verified JWT principal | the `kb_join_requests` rows themselves (the audit trail) | the `create_join_request` guard | one budget per principal; other principals are untouched |
-//! | the blob write doors ([`PrincipalDoor::BlobWrite`]): `POST /api/blobs`, `POST /api/blobs/uploads`, `POST /api/blobs/uploads/{id}/segments`, `POST /api/blobs/uploads/{id}/finalize`, `DELETE /api/blobs/{id}` | the verified principal (person or machine), one budget shared across the five doors | `kb_rate_counters`, one row per principal (a refused or failed attempt leaves no artifact, yet it held the pool connection the bound protects) | `require_principal_rate_limit` middleware (temper-api) over [`check_principal`] | one budget per principal across every instance; a principal past it is refused on all five doors, other principals are untouched. Many principals together are not bounded by it |
+//! | the blob write doors ([`PrincipalDoor::BlobWrite`]): `POST /api/blobs`, `POST /api/blobs/uploads`, `POST /api/blobs/uploads/{id}/segments`, `POST /api/blobs/uploads/{id}/finalize`, `DELETE /api/blobs/{id}` | the verified principal (person or machine), one budget shared across the five doors | `kb_principal_rate_counters`, one row per principal and door, deleted with the profile (a refused or failed attempt leaves no artifact to count) | `require_principal_rate_limit` middleware (temper-api) over [`check_principal`] | one budget per principal across every instance; a principal past it is refused on all five doors, other principals are untouched. It bounds a principal's call rate, not how many of its calls run at once, and many principals together are not bounded by it |
 //!
 //! **Why these five, and not the other blob doors.** Each of the five can hold a pool
 //! connection across provider I/O or move request bytes into the database: commit and
@@ -75,6 +75,7 @@ use sqlx::PgPool;
 use crate::auth_config::ConfigError;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use temper_core::types::ids::ProfileId;
 
 /// One door's limit: at most [`Self::max`] events per [`Self::window_secs`], as chosen
 /// by the operator in the environment. No defaults — a `None` on the door means the
@@ -216,8 +217,7 @@ fn parse_window(
     }
 }
 
-/// The `kb_rate_counters` counter: one row per key (a route for the reconcile pair, a
-/// door and principal for [`check_principal`]), bumped by a **single statement**
+/// The reconcile channel's counter: one row per route, bumped by a **single statement**
 /// so the increment-and-rollover is atomic per caller — safe under PgBouncer transaction
 /// mode, where session-level state is not reliable (`api/axum.rs`, the deployment
 /// grounding). The window rollover is decided inside the same statement that counts, so
@@ -235,7 +235,7 @@ fn parse_window(
 /// statement; what stays approximate is the operator's intent — a window boundary can
 /// admit `max` more calls one instant after refusing the `max + 1`-th, which is what a
 /// window is.
-pub async fn bump_route(pool: &PgPool, key: &str, limit: WindowLimit) -> ApiResult<(bool, i64)> {
+pub async fn bump_route(pool: &PgPool, route: &str, limit: WindowLimit) -> ApiResult<(bool, i64)> {
     let row = sqlx::query!(
         r#"
         INSERT INTO kb_rate_counters AS c (route, window_started_at, call_count)
@@ -256,7 +256,7 @@ pub async fn bump_route(pool: &PgPool, key: &str, limit: WindowLimit) -> ApiResu
                       (window_started_at + make_interval(secs => $2)) - now()))::bigint
                       AS "retry_after_secs!"
         "#,
-        key,
+        route,
         // `make_interval`'s `secs` parameter is double precision, so the bind is an f64;
         // whole seconds are exact in it.
         f64::from(limit.window_secs),
@@ -282,7 +282,7 @@ pub enum PrincipalDoor {
 }
 
 impl PrincipalDoor {
-    /// The door's name, as it appears in its counter key and in the refusal's log line.
+    /// The door's name: the `door` column of its counter rows, and the refusal's wording.
     pub fn name(self) -> &'static str {
         match self {
             Self::BlobWrite => "blob_write",
@@ -296,37 +296,72 @@ impl PrincipalDoor {
             Self::BlobWrite => config.blob_write,
         }
     }
+}
 
-    /// The counter's key in `kb_rate_counters`. The `principal:` prefix keeps it apart
-    /// from the reconcile pair's keys, which are request paths and so begin with `/`.
-    fn counter_key(self, profile_id: uuid::Uuid) -> String {
-        format!("principal:{}:{profile_id}", self.name())
-    }
+/// The per-principal counter: one `kb_principal_rate_counters` row per (principal, door),
+/// counted and rolled over by one atomic statement, exactly as [`bump_route`] does for a
+/// route, with the retry value taken from the database's clock in the same statement.
+///
+/// Returns `(allowed, retry_after_secs)`, with `allowed` meaning `call_count <= max`.
+pub async fn bump_principal(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    door: PrincipalDoor,
+    limit: WindowLimit,
+) -> ApiResult<(bool, i64)> {
+    let row = sqlx::query!(
+        r#"
+        INSERT INTO kb_principal_rate_counters AS c
+               (profile_id, door, window_started_at, call_count)
+        VALUES ($1, $2, now(), 1)
+        ON CONFLICT (profile_id, door) DO UPDATE SET
+            call_count = CASE
+                WHEN c.window_started_at < now() - make_interval(secs => $3)
+                    THEN 1
+                    ELSE c.call_count + 1
+            END,
+            window_started_at = CASE
+                WHEN c.window_started_at < now() - make_interval(secs => $3)
+                    THEN now()
+                    ELSE c.window_started_at
+            END
+        RETURNING call_count,
+                  GREATEST(0, extract(epoch FROM
+                      (window_started_at + make_interval(secs => $3)) - now()))::bigint
+                      AS "retry_after_secs!"
+        "#,
+        profile_id.uuid(),
+        door.name(),
+        // Same double-precision `secs` bind as `bump_route`.
+        f64::from(limit.window_secs),
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok((row.call_count <= limit.max, row.retry_after_secs))
 }
 
 /// Count one call by `profile_id` against `door`, and refuse it past the operator's limit.
 ///
 /// No limit set ⇒ `Ok(())` with no database touch: default off means the seam is absent,
-/// not a check that always passes. With a limit, the count is [`bump_route`]'s single
-/// atomic statement on the door's per-principal key, and the refusal is the seam's one
-/// refusal shape: `429 TOO_MANY_REQUESTS` with a `Retry-After` taken from the database's
-/// clock.
+/// not a check that always passes. With a limit, the count is [`bump_principal`], and the
+/// refusal is the seam's one refusal shape: `429 TOO_MANY_REQUESTS` with a `Retry-After`
+/// taken from the database's clock.
 ///
-/// The call is counted before the door does any work, so a refused call is counted too,
-/// and a call the door itself then refuses still spent its budget: the bound is on
-/// attempts, which is what holds the pool.
+/// The call is counted before the door does any work, so a call refused here is counted
+/// too, and so is one the door itself then refuses. The budget bounds how often a principal
+/// calls in a window; it does not bound how many of its calls run at once.
 pub async fn check_principal(
     pool: &PgPool,
     config: Option<&RateLimitConfig>,
     door: PrincipalDoor,
-    profile_id: uuid::Uuid,
+    profile_id: ProfileId,
 ) -> ApiResult<()> {
     let Some(limit) = door.limit(config) else {
         return Ok(());
     };
 
-    let (allowed, retry_after_secs) =
-        bump_route(pool, &door.counter_key(profile_id), limit).await?;
+    let (allowed, retry_after_secs) = bump_principal(pool, profile_id, door, limit).await?;
 
     if !allowed {
         tracing::info!(
@@ -632,15 +667,5 @@ mod tests {
         };
         assert_eq!(PrincipalDoor::BlobWrite.limit(Some(&reconcile_only)), None);
         assert_eq!(PrincipalDoor::BlobWrite.limit(None), None);
-    }
-
-    #[test]
-    fn a_principal_key_never_collides_with_a_route_key() {
-        let key = PrincipalDoor::BlobWrite.counter_key(uuid::Uuid::nil());
-        assert_eq!(
-            key,
-            "principal:blob_write:00000000-0000-0000-0000-000000000000"
-        );
-        assert!(!key.starts_with('/'), "route keys are request paths");
     }
 }

@@ -216,6 +216,15 @@ fn map_api_error(action: &str, err: ClientError) -> rmcp::ErrorData {
             format!("{action}: {message}"),
             None,
         ),
+        // The per-principal blob-write budget's refusal: the caller's own pressure, never an
+        // internal fault. The relayed blob commit spends the same budget as the HTTP door.
+        ClientError::RateLimited { .. } => rmcp::ErrorData::new(
+            rmcp::model::ErrorCode::INVALID_REQUEST,
+            format!(
+                "{action}: too many blob write requests in the current window; try again later"
+            ),
+            None,
+        ),
         other => rmcp::ErrorData::internal_error(format!("{action} failed: {other}"), None),
     }
 }
