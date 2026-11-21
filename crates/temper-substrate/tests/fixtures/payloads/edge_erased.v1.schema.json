@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EdgeErased",
+  "description": "`edge_erased` — one edge of an estate erased: a folded edge homed in a context of the person's\nestate, every prior value of its free text on its own trail redacted to the sentinels. One\nevent per edge, category `admin`, NULL-anchored. It projects `kb_event_field_redactions` rows\nunder the `edge` authority, whose subject check reads the folded edge's home against\n`_erasure_estate_contexts(estate_of)`.\n\nKeyed `subject_table` (`kb_edges`) / `subject_id`, never `edge_id`, and the person by\n`estate_of`, never `owner`: no key is a trail join-key shape (`edge_id`, `resource_id`,\n`owner`, `source`, `target`, `block_id`), and `_edge_erasure_trail_scope` joins on `edge_id`\nand `owner`. Paths only, never values: the record of a redaction must not carry what was\nredacted.",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "description": "The acting system admin. `None` only where no actor exists to name.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "estate_of": {
+      "description": "The person whose estate homes the edge.",
+      "$ref": "#/$defs/ProfileId"
+    },
+    "folded": {
+      "description": "True when the act folded the edge itself, by a `relationship_folded` appended before this\nevent in the act's transaction. Absent means the edge was already folded.",
+      "type": "boolean"
+    },
+    "redacted_fields": {
+      "description": "The ledger paths this act redacted to their sentinels, in the shape `resource_erased` uses.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RedactedEventFields"
+      }
+    },
+    "subject_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "subject_table": {
+      "description": "Always `kb_edges`.",
+      "$ref": "#/$defs/AnchorTable"
+    }
+  },
+  "required": [
+    "subject_table",
+    "subject_id",
+    "estate_of"
+  ],
+  "$defs": {
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles",
+        "kb_connections",
+        "kb_machine_clients",
+        "kb_blobs",
+        "kb_events"
+      ]
+    },
+    "EventId": {
+      "description": "A `kb_events.id` value. Always UUIDv7 (time-sortable).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "RedactedEventFields": {
+      "description": "The ledger paths of one event: redacted (`redacted_fields`) or named-and-unreached\n(`ledger_remainder`). ONE shape for both, so the cut-2 completion pass derives what it redacts\nfrom what cut 1 recorded without translating (resource erasure spec D12). The event is keyed\n`event`, never `event_id` — no trail join-key shape rides an admin payload (D1). Paths only,\nnever values: the record of a redaction must not carry what was redacted.",
+      "type": "object",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/EventId"
+        },
+        "paths": {
+          "description": "JSON paths within that event's `payload` (or `metadata`), e.g. `title`, `origin_uri`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "event",
+        "paths"
+      ]
+    }
+  }
+}
