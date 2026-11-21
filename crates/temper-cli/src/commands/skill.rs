@@ -196,6 +196,17 @@ Check the exit code before reading output. On failure stdout carries
 `message`. A success may
 carry an advisory `diagnostics` array, which is not a failure.
 
+## Retrying a Create
+
+`resource create --idempotency-key <uuid>` makes a retry safe without checking first: re-issued
+with the same key, the create returns the resource the first attempt made, never a second. Mint
+one key per resource you mean to create, before the first attempt (`K=$(uuidgen)`), and send the
+same `K` on every retry. Keys are scoped to you, and a replay returns the first write as it stands
+without comparing bodies, so never reuse a key for a different resource. A create sent without the
+flag still carries a key the CLI minted: on a `network` error the `hint` names it, and re-issuing
+with `--idempotency-key <that key>` is the safe retry. Without the key, check that the create
+landed before retrying it. `resource update` and `data-artifact commit` take no key.
+
 ## Skill-Only Commands
 
 Handled by the skill router, not the CLI: `task start <slug>`, `task resume <slug>`, `task create`,

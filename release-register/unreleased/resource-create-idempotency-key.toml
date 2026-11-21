@@ -15,6 +15,9 @@ the create sent and says to re-issue with `--idempotency-key <key>`, instead of 
 path has no key and that a retried create mints a duplicate. The `update` hint, and the key-less
 case, keep "reconcile first". The payload's shape is unchanged; only the hint's text differs.
 
+The installed skill's reference.md gains "Retrying a Create", and session-lifecycle.md's
+save-a-note example sends `--idempotency-key "$K"`. The MCP projection is unchanged.
+
 Who observes it: CLI users and agents retrying a create after a lost answer. Older servers already
 replay by key, so a new CLI against any deployed server behaves the same. Release relevance:
 signal-only; no server, wire or schema change.
