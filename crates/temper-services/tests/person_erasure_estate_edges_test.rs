@@ -1,5 +1,5 @@
 #![cfg(feature = "test-db")]
-//! Witnesses for the person act's edge step (migration 20261201000060, `principal_erasure_execute`):
+//! Witnesses for the person act's edge step (migration 20261201000070, `principal_erasure_execute`):
 //! after its resource erasures, the act runs `edge_erasure_execute` for every edge homed in an
 //! estate context whose text is not yet erased (`_edge_erasure_complete`), live or folded before
 //! the act, whatever the edge points at.

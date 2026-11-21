@@ -14,7 +14,7 @@
 //! differs only in the condition under test, and is asserted by the trigger's own message, so a
 //! refusal for any other reason fails the pair.
 //!
-//! The owner is checked at commit (`edge_erasure_requires_an_erased_owner`, 20261201000060): a
+//! The owner is checked at commit (`edge_erasure_requires_an_erased_owner`, 20261201000070): a
 //! forge naming a live `estate_of` lands every statement and is refused by COMMIT. The cases that
 //! roll back never reach it.
 
