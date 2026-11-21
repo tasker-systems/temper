@@ -1,7 +1,7 @@
 -- The person act erases every edge homed in its estate.
 --
--- 20261201000060's per-edge unit, edge_erasure_execute, becomes a step of the person act, and the
--- `edge` authority (20261201000050_edge_erasure_authority.sql) holds only for a tombstoned estate
+-- 20261202000030's per-edge unit, edge_erasure_execute, becomes a step of the person act, and the
+-- `edge` authority (20261202000020_edge_erasure_authority.sql) holds only for a tombstoned estate
 -- owner, checked at commit. By section:
 --   1-2. _edge_projection_erased(uuid), the projection half, and _edge_erasure_complete(uuid):
 --      whether an edge's text is already erased. The unit raises `already erased` on the same
@@ -24,7 +24,7 @@
 --     a standalone resource erasure takes its resource's act queue before its home context's row,
 --     and the reverse order deadlocks the two (the act's context lock comment says how);
 --   * an assertion of an edge's identity racing the step mints a new live edge at the same home
---     (20261201000060's header says how): a fresh write, lawful as it stands, which the act that
+--     (20261202000030's header says how): a fresh write, lawful as it stands, which the act that
 --     erased the first edge does not erase (ruling 9 of decision
 --     01a1f6e8-81bd-758c-be87-a6824b66352a: the write doors do not re-check the home).
 --
@@ -80,7 +80,7 @@ agree.$c$;
 -- ---------------------------------------------------------------------------
 -- Section 2. The unit reads that test.
 -- ---------------------------------------------------------------------------
--- 20261201000060's body and attributes; only the `already erased` test changes, to
+-- 20261202000030's body and attributes; only the `already erased` test changes, to
 -- _edge_projection_erased and the unit's own derivation being empty: _edge_erasure_complete's
 -- test, which answers what the inline test answered.
 CREATE OR REPLACE FUNCTION edge_erasure_execute(p_edge uuid, p_estate_of uuid, p_operator uuid,
@@ -1058,7 +1058,7 @@ $function$;
 --
 -- It pins lock_timeout = 0, as resource_erasure_execute and block_history_scrub_execute do
 -- (20261015100000_erasure_acts_pin_lock_timeout.sql) and edge_erasure_execute does
--- (20261201000060_person_erasure_folds_estate_homed_edges.sql): the edge
+-- (20261202000030_person_erasure_folds_estate_homed_edges.sql): the edge
 -- step's FOR UPDATE waits on the edges' writers in this function's own body, and a lock_timeout
 -- set on the session, the pool, the role or the database would otherwise end that wait with
 -- 55P03. The service door also sets lock_timeout = 0 on the act's transaction
@@ -1429,7 +1429,7 @@ $c$At commit, an `edge` row's redacted_by must be an edge_erased record whose es
 tombstoned profile (edge_erasure_requires_an_erased_owner).$c$;
 
 SELECT declare_migration(
-    20261201000070,
+    20261202000040,
     'additive',
     'Adds the functions _edge_projection_erased(uuid), _edge_erasure_complete(uuid) and '
     '_principal_erasure_edges_outcome(integer), each with a COMMENT, and the trigger function '

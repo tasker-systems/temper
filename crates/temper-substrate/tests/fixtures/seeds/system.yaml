@@ -108,7 +108,7 @@ event_types:
   - erasure_batch_applied
   - erasure_completed
   # One estate edge's erasure record (erasure estate-homed edges), added by migration
-  # 20261201000050 — TYPED with a committed payload snapshot, `admin`
+  # 20261202000020 — TYPED with a committed payload snapshot, `admin`
   # (payloads::ADMIN_EVENT_NAMES), NULL-anchored. A reset+seed_system system MUST register it or
   # the replay of any ledger that carries one fails "event_type edge_erased not seeded".
   - edge_erased

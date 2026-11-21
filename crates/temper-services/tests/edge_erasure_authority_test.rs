@@ -1,5 +1,5 @@
 #![cfg(feature = "test-db")]
-//! Witnesses for the `edge` erasure authority (20261201000050): the `edge_erased` record, its
+//! Witnesses for the `edge` erasure authority (20261202000020): the `edge_erased` record, its
 //! redaction projector `_project_edge_erased_redactions`, and the ledger exception's arms for it
 //! (`kb_events_append_only`, `kb_events_redaction_in_trail`, `_erasure_sentinel_admits`) and
 //! `sensitivity.place_closure`'s.
@@ -14,7 +14,7 @@
 //! differs only in the condition under test, and is asserted by the trigger's own message, so a
 //! refusal for any other reason fails the pair.
 //!
-//! The owner is checked at commit (`edge_erasure_requires_an_erased_owner`, 20261201000070): a
+//! The owner is checked at commit (`edge_erasure_requires_an_erased_owner`, 20261202000040): a
 //! forge naming a live `estate_of` lands every statement and is refused by COMMIT. The cases that
 //! roll back never reach it.
 

@@ -1,5 +1,5 @@
 #![cfg(feature = "test-db")]
-//! Witnesses for the per-edge erasure unit `edge_erasure_execute` (20261201000060) and its
+//! Witnesses for the per-edge erasure unit `edge_erasure_execute` (20261202000030) and its
 //! payload-free projection body `_edge_erasure_apply_redaction`.
 //!
 //! The unit erases one edge homed in a context of the named person's estate: it folds the edge
@@ -605,7 +605,7 @@ async fn a_fold_racing_the_unit_waits_and_then_is_refused(pool: PgPool) {
 /// active-edge lookup on the unit's row lock. When the act commits, the lookup's re-check finds
 /// the edge folded with no label and answers none, so the assertion mints a new live edge. That is
 /// a fresh write of the asserter's own text, not the erased edge coming back
-/// (20261201000060's header).
+/// (20261202000030's header).
 ///
 /// FAILS IF the assertion never waits on the unit; if it is refused; if it reweights, unfolds or
 /// relabels the erased edge instead of inserting another; if the new edge is not live at the same

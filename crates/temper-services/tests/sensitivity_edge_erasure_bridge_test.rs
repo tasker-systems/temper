@@ -1,5 +1,5 @@
 #![cfg(feature = "test-db")]
-//! The sweep's digest expiry for an edge erased by `edge_erasure_execute` (20261201000060).
+//! The sweep's digest expiry for an edge erased by `edge_erasure_execute` (20261202000030).
 //!
 //! The edge is stranded: homed in a context of the person's estate, between resources no erasure
 //! reaches. A finding on its label or on a property it owns is therefore never held by

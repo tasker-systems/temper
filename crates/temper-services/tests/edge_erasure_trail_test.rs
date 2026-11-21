@@ -1,6 +1,6 @@
 #![cfg(feature = "test-db")]
 //! Witnesses for an edge's erasure trail and the ledger derivation over it
-//! (20261201000050, `_edge_erasure_trail_scope` and `_edge_erasure_payload_redaction`).
+//! (20261202000020, `_edge_erasure_trail_scope` and `_edge_erasure_payload_redaction`).
 //!
 //! An edge's trail is its own events (`payload->>'edge_id'`), the property events it owns
 //! (`payload->'owner'` naming `kb_edges`), and the re-assertions recorded before 20261117000030

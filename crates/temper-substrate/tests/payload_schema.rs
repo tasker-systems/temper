@@ -241,7 +241,7 @@ fn the_migration_literal_matches_the_committed_fixture() {
             ],
         ),
         (
-            "20261201000050_edge_erasure_authority.sql",
+            "20261202000020_edge_erasure_authority.sql",
             &["edge_erased.v1.schema.json"],
         ),
     ] {

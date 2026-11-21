@@ -1,5 +1,5 @@
 #![cfg(feature = "test-db")]
-//! Replay of the per-edge erasure unit `edge_erasure_execute` (20261201000060) under the per-item
+//! Replay of the per-edge erasure unit `edge_erasure_execute` (20261202000030) under the per-item
 //! erasure deferral of `temper_substrate::replay::replay`.
 //!
 //! One span holds both per-item erasure authorities: a `resource_erased` and two `edge_erased`

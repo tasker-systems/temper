@@ -465,7 +465,7 @@ resource_erasure_service reads as a concurrent completion and retries, colliding
 time.$c$;
 
 -- The two subject predicates of an edge erasure, each spelled once. _edge_is_erased answers for
--- an edge's writers and the sweep (20261201000060): whether an erasure record exists. The
+-- an edge's writers and the sweep (20261202000030): whether an erasure record exists. The
 -- verifier, place_closure and the unit instead check the subject of a record being written or
 -- read, folded and homed in the estate it names, and share _edge_homed_in_estate for the home.
 CREATE FUNCTION _edge_is_erased(p_edge uuid)
@@ -1219,7 +1219,7 @@ COMMENT ON FUNCTION sensitivity.place_closure(text, uuid, text, text) IS
 'How a finding''s place closes, from what it holds now (sweep D2 as amended): row_missing, sentinel, content_empty, or on a mutable surface changed by the sweep''s own later observation; NULL while it is open, and on a surface this function does not know. A ledger place (kb_events.payload, kb_events.metadata) closes as sentinel when a kb_event_field_redactions row on its event covers p_path and the row''s authorising event, of its authority''s type, lists that event and path: a resource_erased for an erased subject; an edge_erased whose subject edge is folded and homed in a context of _erasure_estate_contexts(estate_of); or a resource_scrubbed for a resource, erased since or not, whose rewrite the event still holds (its value at the path is a sentinel the scrub admits; field-grain scrub S9); never otherwise, and never on a principal_erased row. A projection place closes as sentinel on the erasure''s D4 sentinels and on the field scrub''s (S7): scrubbed-<resource id>, scrubbed-key-<uuid>, erased:<the row''s asserting event> and a scrubbed-facet mark. On an erasure or edge row''s `[*]` path the row means some location under it was rewritten, not every one. p_path is read only on the ledger.';
 
 SELECT declare_migration(
-    20261201000050,
+    20261202000020,
     'additive',
     'Adds the functions _erasure_trail_payload_redaction(uuid[], jsonb), '
     '_edge_erasure_trail_scope(uuid), _edge_erasure_payload_redaction(uuid), '

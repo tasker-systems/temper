@@ -1361,7 +1361,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .fetch_one(&mut *tx)
                     .await?;
             }
-            // One estate edge's erasure (migration 20261201000060). The body applies at the END of
+            // One estate edge's erasure (migration 20261202000030). The body applies at the END of
             // the record's correlated span, under the same `apply_after` rule as `ResourceErased`
             // above: the person act runs its resource and edge units in one transaction under one
             // request reference, and each body waits for the last event of that span. A record

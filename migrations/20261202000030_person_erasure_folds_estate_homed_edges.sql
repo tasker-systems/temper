@@ -2,7 +2,7 @@
 --
 -- An edge homed in a context of the estate that no resource erasure reached keeps its label, its
 -- facets and its ledger text after the person act. This migration adds the per-edge unit that
--- erases one such edge under the `edge` authority (20261201000050_edge_erasure_authority.sql).
+-- erases one such edge under the `edge` authority (20261202000020_edge_erasure_authority.sql).
 -- Only tests call it: the person act does not.
 -- TODO(person-act step): the person act calls edge_erasure_execute for each such edge.
 --
@@ -15,7 +15,7 @@
 --      the edge when it is live, appends one edge_erased record, projects its rows, runs the body,
 --      then rewrites the edge's trail in one UPDATE.
 --   3. _resource_write_guard_owner(text, uuid): the kb_edges arm also takes FOR KEY SHARE on the
---      edge row and refuses a write to an erased edge (_edge_is_erased, 20261201000050).
+--      edge row and refuses a write to an erased edge (_edge_is_erased, 20261202000020).
 --   4. sensitivity.erased_place_findings(): admits the label and edge-owned property findings of
 --      an erased edge (_edge_is_erased), so their digests expire.
 --   5. _project_relationship_folded(uuid, jsonb): takes FOR KEY SHARE on the edge row and refuses
@@ -391,7 +391,7 @@ _edge_is_erased answers true for the edge; then folds it through _edge_fold_appl
 
 
 SELECT declare_migration(
-    20261201000060,
+    20261202000030,
     'additive',
     'Adds the functions _edge_erasure_apply_redaction(uuid, uuid) and '
     'edge_erasure_execute(uuid, uuid, uuid, uuid, uuid), each with a COMMENT; nothing existing '

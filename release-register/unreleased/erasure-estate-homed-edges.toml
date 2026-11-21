@@ -4,17 +4,17 @@ classes  = ["additive", "behavioral"]
 surfaces = ["http", "cli-stdout", "schema", "erasure-policy"]
 status   = "signal-only"
 body = '''
-Migration 20261201000050 adds the admin event type edge_erased and the redaction authority `edge`:
+Migration 20261202000020 adds the admin event type edge_erased and the redaction authority `edge`:
 an edge_erased record lets an act rewrite the ledger trail of one edge that is folded and homed in a
 context of the estate the record names, to the sentinels resource erasure writes. The ledger guard,
 the trail trigger and the sweep's place closure each read the new authority. The resource act's
 ledger derivation now runs through one shared loop, _erasure_trail_payload_redaction, whose output for
-a resource is unchanged. Migration 20261201000060 adds edge_erasure_execute, which erases one edge
+a resource is unchanged. Migration 20261202000030 adds edge_erasure_execute, which erases one edge
 homed in the estate: it folds the edge if it is live (relationship_folded, reason estate_erased),
 appends one edge_erased record, nulls the edge's label, sets every property the edge owns to its
 sentinels, and rewrites the edge's labels, properties, earlier fold reasons and corrections, and
 the authorship metadata on its events, to their sentinels on the ledger; the estate_erased reason of
-the fold it appends is kept. Migration 20261201000070 lets an edge_erased record commit only when
+the fold it appends is kept. Migration 20261202000040 lets an edge_erased record commit only when
 the profile it names is tombstoned by the time the transaction commits.
 
 In that migration the person act (principal_erasure_execute) now runs the unit for every edge

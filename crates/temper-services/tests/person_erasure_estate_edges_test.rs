@@ -1,5 +1,5 @@
 #![cfg(feature = "test-db")]
-//! Witnesses for the person act's edge step (migration 20261201000070, `principal_erasure_execute`):
+//! Witnesses for the person act's edge step (migration 20261202000040, `principal_erasure_execute`):
 //! after its resource erasures, the act runs `edge_erasure_execute` for every edge homed in an
 //! estate context whose text is not yet erased (`_edge_erasure_complete`), live or folded before
 //! the act, whatever the edge points at.
@@ -828,7 +828,7 @@ async fn the_survey_predicts_the_edge_step_over_skip_and_complete_husks(pool: Pg
 }
 
 /// W10. A context that leaves the estate between the act's plan and its context lock is decided by
-/// two estates, the residual 20261201000070's `principal_erasure_execute` documents at its context
+/// two estates, the residual 20261202000040's `principal_erasure_execute` documents at its context
 /// lock (ruling 11 of decision 01a1f6e8-81bd-758c-be87-a6824b66352a, (a)). The act plans with the
 /// personal team's context in the estate, then waits on the act queue of a resource homed there;
 /// meanwhile the team stops being personal, so the context leaves the estate. Then:
