@@ -301,7 +301,9 @@ impl PrincipalDoor {
 /// counted and rolled over by one atomic statement, exactly as [`bump_route`] does for a
 /// route, with the retry value taken from the database's clock in the same statement.
 ///
-/// Returns `(allowed, retry_after_secs)`, with `allowed` meaning `call_count <= max`.
+/// Returns `(allowed, retry_after_secs)`, with `allowed` meaning `call_count <= max`. The retry
+/// value is the window's remaining time rounded up, and never below one second: a refusal never
+/// invites an immediate retry into the window that refused it.
 async fn bump_principal(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -325,8 +327,8 @@ async fn bump_principal(
                     ELSE c.window_started_at
             END
         RETURNING call_count,
-                  GREATEST(0, extract(epoch FROM
-                      (window_started_at + make_interval(secs => $3)) - now()))::bigint
+                  GREATEST(1, ceil(extract(epoch FROM
+                      (window_started_at + make_interval(secs => $3)) - now())))::bigint
                       AS "retry_after_secs!"
         "#,
         profile_id.uuid(),

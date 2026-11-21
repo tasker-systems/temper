@@ -14,6 +14,11 @@
 -- a count or resurrecting an expired window.
 --
 -- Default off: unread and unwritten unless the operator sets a door's RATE_LIMIT_* pair.
+--
+-- lock_timeout: the REFERENCES kb_profiles takes SHARE ROW EXCLUSIVE on kb_profiles, which every
+-- authenticated request reads and writes; a bounded wait fails the deploy instead of queueing it.
+
+SET LOCAL lock_timeout = '500ms';
 
 CREATE TABLE kb_principal_rate_counters (
     profile_id        uuid        NOT NULL REFERENCES kb_profiles(id) ON DELETE CASCADE,

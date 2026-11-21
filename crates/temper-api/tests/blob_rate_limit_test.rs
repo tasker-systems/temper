@@ -411,3 +411,33 @@ async fn an_unapproved_caller_spends_no_budget(pool: PgPool) {
         "an unapproved caller spends nothing"
     );
 }
+
+/// **Retry-After witness: a refusal never invites an immediate retry.** A budget already spent in
+/// a window 0.2 s from its end is refused with `Retry-After: 1`, the remaining time rounded up,
+/// never `0`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_refusal_at_the_end_of_the_window_says_retry_after_one(pool: PgPool) {
+    let app = app_with_budget(pool, budget(1)).await;
+    let email = format!("blob-rl-edge-{}@example.com", Uuid::new_v4());
+    let (profile, ctx) = fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let token = generate_test_jwt(&format!("test|{profile}"), &email);
+    sqlx::query(
+        "INSERT INTO kb_principal_rate_counters (profile_id, door, window_started_at, call_count) \
+         VALUES ($1, 'blob_write', now() - interval '3599.8 seconds', 1)",
+    )
+    .bind(profile)
+    .execute(&app.pool)
+    .await
+    .expect("seed a spent window");
+
+    let resp = commit(&app, &token, ctx, vec![1]).await;
+    assert_eq!(resp.status().as_u16(), 429, "the budget is already spent");
+    let retry = resp
+        .headers()
+        .get("retry-after")
+        .expect("a refusal carries Retry-After")
+        .to_str()
+        .expect("ascii")
+        .to_string();
+    assert_eq!(retry, "1", "the remaining 0.2 s rounds up to one second");
+}
