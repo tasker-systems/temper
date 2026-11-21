@@ -10,143 +10,22 @@
 //! `edge_erasure_execute` yet.
 //! TODO(person-act step): once the person act calls the unit, replay a span that act wrote.
 
-use serde_json::{json, Value};
+mod edge_erasure;
+
+use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
-use temper_core::types::property_owner::PropertyOwner;
 use temper_services::test_support;
-use temper_substrate::affinity::EdgeKind;
-use temper_substrate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
-use temper_substrate::ids::{ContextId, EdgeId, EntityId, ResourceId};
-use temper_substrate::payloads::{AgentAuthorship, AnchorRef, ConfidenceBand, EdgePolarity};
+use temper_substrate::ids::ContextId;
 use temper_substrate::replay;
-use temper_substrate::writes::{self, CreateParams};
 
-struct World {
-    profile: Uuid,
-    emitter: Uuid,
-    home: ContextId,
-}
-
-/// A profile, its `@web` emitter and an `@me` context, which `_erasure_estate_contexts(profile)`
-/// returns. The handle is the full id, so same-millisecond UUIDv7 handles cannot collide.
-async fn world(pool: &PgPool) -> World {
-    let profile = Uuid::now_v7();
-    let handle = format!("user-{profile}");
-    test_support::profile::insert_with_id(pool, profile, &handle).await;
-    let emitter = test_support::entity::insert(pool, profile, &format!("{handle}@web")).await;
-    let home = test_support::context::insert_personal(pool, profile, "notes", "notes").await;
-    World {
-        profile,
-        emitter,
-        home: ContextId::from(home),
-    }
-}
+use edge_erasure::{authored, edge, facet, fold, resource_in, world};
 
 /// A context of a team that is not the person's personal team: outside the estate.
 async fn team_context(pool: &PgPool) -> ContextId {
     let team = test_support::team::insert(pool, &format!("team-{}", Uuid::now_v7())).await;
     ContextId::from(test_support::context::insert_team(pool, team, "shared", "shared").await)
-}
-
-async fn resource(pool: &PgPool, w: &World, home: ContextId, title: &str) -> ResourceId {
-    writes::create_resource_with(
-        pool,
-        CreateParams {
-            idempotency_key: None,
-            title,
-            origin_uri: &format!("test://{}", Uuid::now_v7()),
-            body: "a body",
-            doc_type: "research",
-            home: AnchorRef::context(home),
-            owner: ProfileId::from(w.profile),
-            originator: ProfileId::from(w.profile),
-            emitter: EntityId::from(w.emitter),
-            properties: &[],
-            chunks: None,
-            sources: Vec::new(),
-        },
-        EventContext::default(),
-    )
-    .await
-    .expect("create through the real path")
-}
-
-fn authored(reasoning: &str) -> EventContext {
-    EventContext {
-        authorship: Some(AgentAuthorship {
-            reasoning: Some(reasoning.into()),
-            confidence: ConfidenceBand::Probable,
-            rationale: None,
-            persona: None,
-            model: None,
-        }),
-        invocation: None,
-        correlation: None,
-    }
-}
-
-/// An edge homed in the world's `@me` context, asserted with authorship reasoning on its event.
-async fn edge(
-    pool: &PgPool,
-    w: &World,
-    src: ResourceId,
-    tgt: ResourceId,
-    label: &str,
-    reasoning: &str,
-) -> EdgeId {
-    let mut conn = pool.acquire().await.expect("acquire");
-    fire_with(
-        &mut conn,
-        SeedAction::RelationshipAssert {
-            src: AnchorRef::resource(src),
-            tgt: AnchorRef::resource(tgt),
-            kind: EdgeKind::LeadsTo,
-            polarity: EdgePolarity::Forward,
-            label: Some(label),
-            weight: 1.0,
-            home: EdgeHome::Context(w.home),
-            emitter: EntityId::from(w.emitter),
-        },
-        authored(reasoning),
-    )
-    .await
-    .expect("assert the edge")
-    .relationship()
-    .expect("an edge id")
-}
-
-/// A facet on the edge through the real write path.
-async fn facet(pool: &PgPool, w: &World, e: EdgeId, values: Value) {
-    let mut conn = pool.acquire().await.expect("acquire");
-    fire(
-        &mut conn,
-        SeedAction::FacetSet {
-            owner: PropertyOwner::Edge { id: e },
-            values: &values,
-            weight: 1.0,
-            emitter: EntityId::from(w.emitter),
-        },
-    )
-    .await
-    .expect("set a facet on the edge");
-}
-
-/// The edge's ordinary fold, through the real write path.
-async fn fold(pool: &PgPool, w: &World, e: EdgeId) {
-    let mut conn = pool.acquire().await.expect("acquire");
-    fire(
-        &mut conn,
-        SeedAction::RelationshipFold {
-            edge: e,
-            reason: None,
-            emitter: EntityId::from(w.emitter),
-        },
-    )
-    .await
-    .expect("fold the edge");
 }
 
 /// The events of one kind carrying the request reference: (id, occurred_at).
@@ -203,28 +82,28 @@ async fn replay_of_an_estate_edge_erasure_is_byte_identical(pool: PgPool) {
     let team = team_context(&pool).await;
 
     // An estate resource with its own labelled edge, erased by the resource unit.
-    let erased = resource(&pool, &w, w.home, "estate page").await;
-    let neighbour = resource(&pool, &w, team, "team neighbour").await;
+    let erased = resource_in(&pool, &w, w.home, "estate page").await;
+    let neighbour = resource_in(&pool, &w, team, "team neighbour").await;
     edge(
         &pool,
         &w,
         erased,
         neighbour,
         "the estate page's own label",
-        "the estate page's edge reasoning",
+        authored("the estate page's edge reasoning"),
     )
     .await;
 
     // An estate-homed edge between two team resources: labelled, faceted, with reasoning.
-    let a = resource(&pool, &w, team, "alpha").await;
-    let b = resource(&pool, &w, team, "beta").await;
+    let a = resource_in(&pool, &w, team, "alpha").await;
+    let b = resource_in(&pool, &w, team, "beta").await;
     let live = edge(
         &pool,
         &w,
         a,
         b,
         "jane roe told us",
-        "jane roe said so on the call",
+        authored("jane roe said so on the call"),
     )
     .await;
     facet(
@@ -236,15 +115,15 @@ async fn replay_of_an_estate_edge_erasure_is_byte_identical(pool: PgPool) {
     .await;
 
     // An estate-homed edge between two team resources, folded by the ordinary path first.
-    let c = resource(&pool, &w, team, "gamma").await;
-    let d = resource(&pool, &w, team, "delta").await;
+    let c = resource_in(&pool, &w, team, "gamma").await;
+    let d = resource_in(&pool, &w, team, "delta").await;
     let folded = edge(
         &pool,
         &w,
         c,
         d,
         "another free label",
-        "the folded edge's own reasoning",
+        authored("the folded edge's own reasoning"),
     )
     .await;
     facet(&pool, &w, folded, json!({ "status": "folded first" })).await;

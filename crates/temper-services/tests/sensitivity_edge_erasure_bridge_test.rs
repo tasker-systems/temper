@@ -7,98 +7,31 @@
 //! `edge_erased` record names are what start its window. Findings are inserted directly, as the
 //! sweep would store them, so the witness does not depend on a detector matching the fixture text.
 
+mod edge_erasure;
+
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
-use temper_core::types::property_owner::PropertyOwner;
-use temper_services::test_support;
-use temper_substrate::affinity::EdgeKind;
-use temper_substrate::events::{fire, EdgeHome, EventContext, SeedAction};
-use temper_substrate::ids::{ContextId, EdgeId, EntityId, ResourceId};
-use temper_substrate::payloads::{AnchorRef, EdgePolarity};
-use temper_substrate::writes::{self, CreateParams};
+use temper_substrate::events::EventContext;
+use temper_substrate::ids::{EdgeId, ResourceId};
+
+use edge_erasure::{edge, facet, resource, world, World};
 
 const A_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-// ── fixture helpers (duplicated per file, per this suite's convention) ──
-
-struct World {
-    profile: Uuid,
-    emitter: Uuid,
-    home: ContextId,
-}
-
-/// A profile, its `@web` emitter and an `@me` context, which `_erasure_estate_contexts(profile)`
-/// returns.
-async fn world(pool: &PgPool) -> World {
-    let profile = Uuid::now_v7();
-    let handle = format!("user-{profile}");
-    test_support::profile::insert_with_id(pool, profile, &handle).await;
-    let emitter = test_support::entity::insert(pool, profile, &format!("{handle}@web")).await;
-    let home = test_support::context::insert_personal(pool, profile, "notes", "notes").await;
-    World {
-        profile,
-        emitter,
-        home: ContextId::from(home),
-    }
-}
-
-async fn resource(pool: &PgPool, w: &World, title: &str) -> ResourceId {
-    writes::create_resource_with(
-        pool,
-        CreateParams {
-            idempotency_key: None,
-            title,
-            origin_uri: &format!("test://{}", Uuid::now_v7()),
-            body: "a body",
-            doc_type: "research",
-            home: AnchorRef::context(w.home),
-            owner: ProfileId::from(w.profile),
-            originator: ProfileId::from(w.profile),
-            emitter: EntityId::from(w.emitter),
-            properties: &[],
-            chunks: None,
-            sources: Vec::new(),
-        },
-        EventContext::default(),
-    )
-    .await
-    .expect("create through the real path")
-}
-
 /// A labelled edge homed in the world's context, with one facet, through the real write paths.
 async fn faceted_edge(pool: &PgPool, w: &World, src: ResourceId, tgt: ResourceId) -> EdgeId {
-    let mut conn = pool.acquire().await.expect("acquire");
-    let e = fire(
-        &mut conn,
-        SeedAction::RelationshipAssert {
-            src: AnchorRef::resource(src),
-            tgt: AnchorRef::resource(tgt),
-            kind: EdgeKind::LeadsTo,
-            polarity: EdgePolarity::Forward,
-            label: Some("jane roe told us"),
-            weight: 1.0,
-            home: EdgeHome::Context(w.home),
-            emitter: EntityId::from(w.emitter),
-        },
+    let e = edge(
+        pool,
+        w,
+        src,
+        tgt,
+        "jane roe told us",
+        EventContext::default(),
     )
-    .await
-    .expect("assert the edge")
-    .relationship()
-    .expect("an edge id");
-    fire(
-        &mut conn,
-        SeedAction::FacetSet {
-            owner: PropertyOwner::Edge { id: e },
-            values: &json!({ "node_label": "jane roe" }),
-            weight: 1.0,
-            emitter: EntityId::from(w.emitter),
-        },
-    )
-    .await
-    .expect("set a facet on the edge");
+    .await;
+    facet(pool, w, e, json!({ "node_label": "jane roe" })).await;
     e
 }
 
