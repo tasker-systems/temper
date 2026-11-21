@@ -74,7 +74,11 @@
 //!     `AUTHORITY_BY_ROLE`. A kind named `*_purged`, `*_redacted`, `*_struck` or `*_tombstoned`
 //!     would be in no class and fail nothing. The registry carries no flag that marks a kind as an
 //!     erasure's, so the closure matches names; whoever registers such a kind must add it to a
-//!     class or to `AUTHORITY_BY_ROLE`, in review.
+//!     class or to `AUTHORITY_BY_ROLE`, in review;
+//!   * a consumer that recognises an erasure by its record's subject or by table, without naming a
+//!     kind. `sensitivity.erased_place_findings` is rostered for the `edge_erased` it names, but its
+//!     arms for an erased resource and an edge's erased endpoint read `kb_resources.erased_at`, so a
+//!     resource erasure kind missing there fails nothing.
 //!
 //! The checker is a pure function over (consumers, roster, vocabulary), so the bite probes run in
 //! memory over the real bodies with one change each, one probe per failure branch.
@@ -357,6 +361,16 @@ const ROSTER: &[Entry] = &[
         "edge_erasure_execute(uuid,uuid,uuid,uuid,uuid)",
         &["edge_erased"],
         "the edge erasure act, appending its own kind",
+    ),
+    own(
+        "_resource_write_guard_owner(text,uuid)",
+        &["edge_erased"],
+        "the write guard refuses a write to a folded edge its own edge_erased record names",
+    ),
+    own(
+        "sensitivity.erased_place_findings()",
+        &["edge_erased"],
+        "holds the label and property findings of an edge its own edge_erased record names",
     ),
     own(
         "resource_field_scrub_execute(uuid,text,uuid,boolean,uuid,uuid,uuid)",
