@@ -524,24 +524,50 @@ async fn an_already_folded_edge_is_erased_without_a_new_fold(pool: PgPool) {
     assert_ledger_clean(&pool).await;
 }
 
-/// A facet on the edge, written on a connection the caller holds, returning the write's error.
-async fn facet_on(
-    conn: &mut sqlx::PgConnection,
-    w: &World,
-    e: EdgeId,
-    values: &Value,
-) -> anyhow::Result<()> {
-    fire(
-        conn,
-        SeedAction::FacetSet {
-            owner: PropertyOwner::Edge { id: e },
-            values,
-            weight: 1.0,
-            emitter: EntityId::from(w.emitter),
-        },
-    )
-    .await
-    .map(|_| ())
+/// A write of the edge the race witnesses make, on a connection the caller holds.
+#[derive(Debug, Clone, Copy)]
+enum Write {
+    /// A facet with an inner key no row of the edge holds, so the write touches no
+    /// `kb_properties` row the unit rewrote and can wait only on the edge row.
+    Facet,
+    /// The ordinary fold, with a free-text reason.
+    Fold,
+}
+
+/// The text each write carries, which must reach neither the projection nor the ledger.
+const LATE: &str = "a later mark";
+
+impl Write {
+    /// The statement text the write's blocked backend runs, for [`await_blocked`].
+    fn statement(self) -> &'static str {
+        match self {
+            Write::Facet => "%facet_set%",
+            Write::Fold => "%relationship_fold%",
+        }
+    }
+
+    async fn run(
+        self,
+        conn: &mut sqlx::PgConnection,
+        emitter: Uuid,
+        e: EdgeId,
+    ) -> anyhow::Result<()> {
+        let values = json!({ "witness": LATE });
+        let action = match self {
+            Write::Facet => SeedAction::FacetSet {
+                owner: PropertyOwner::Edge { id: e },
+                values: &values,
+                weight: 1.0,
+                emitter: EntityId::from(emitter),
+            },
+            Write::Fold => SeedAction::RelationshipFold {
+                edge: e,
+                reason: Some(LATE),
+                emitter: EntityId::from(emitter),
+            },
+        };
+        fire(conn, action).await.map(|_| ())
+    }
 }
 
 /// The SQLSTATE of the first database error in an error's chain.
@@ -553,21 +579,53 @@ fn sqlstate(err: &anyhow::Error) -> Option<String> {
         .map(|c| c.into_owned())
 }
 
-/// A facet writer of the edge while the unit's transaction is open waits on the unit's lock of the
-/// edge row; once the act commits, the same write is refused, and nothing it carried reaches the
-/// projection or the ledger.
-///
-/// FAILS IF the write guard takes no lock on the `kb_edges` row (the first write lands under the
-/// open unit instead of timing out with `55P03`, as it does when only the edge's live resource
-/// endpoints are locked), or if a write to the folded, recorded edge is admitted after the act.
-#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn a_property_write_racing_the_unit_waits_and_then_is_refused(pool: PgPool) {
-    let x = estate(&pool).await;
-    // A fresh inner key: no row of the edge holds it, so the write touches no kb_properties row the
-    // unit rewrote and can wait only on the edge row.
-    let late = json!({ "witness": "a later mark" });
+/// Wait until a backend running `statement` is blocked on a lock `holder` holds. Panics if none is
+/// within ten seconds, or if `writer` finished first, which means it never waited.
+async fn await_blocked(
+    pool: &PgPool,
+    holder: i32,
+    statement: &str,
+    writer: &tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                             WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                               AND $1 = ANY (pg_blocking_pids(pid)) AND query ILIKE $2)",
+        )
+        .bind(holder)
+        .bind(statement)
+        .fetch_one(pool)
+        .await
+        .expect("lock waiters");
+        if waiting {
+            return;
+        }
+        assert!(
+            !writer.is_finished(),
+            "the write finished while the unit held the edge: it did not wait on the unit"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the write never blocked on the unit"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// The unit runs in a transaction left open; `write` starts on its own connection, is seen blocked
+/// on the unit's lock, and resumes when the act commits. The resumed write must be refused, and
+/// nothing it carried may reach the projection or the ledger. A second write after the commit is
+/// refused the same way.
+async fn race(pool: &PgPool, write: Write) {
+    let x = estate(pool).await;
 
     let mut act = pool.begin().await.expect("begin the unit's transaction");
+    let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *act)
+        .await
+        .unwrap();
     sqlx::query("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
         .bind(x.e.uuid())
         .bind(x.w.profile)
@@ -578,47 +636,93 @@ async fn a_property_write_racing_the_unit_waits_and_then_is_refused(pool: PgPool
         .await
         .expect("the unit runs, its transaction held open");
 
-    let mut writer = pool.begin().await.expect("begin the writer's transaction");
+    let mut conn = pool.acquire().await.expect("the writer's connection");
+    let (emitter, e) = (x.w.emitter, x.e);
+    let writer = tokio::spawn(async move { write.run(&mut conn, emitter, e).await });
+    await_blocked(pool, holder, write.statement(), &writer).await;
+
+    act.commit().await.expect("the act commits");
+    let before = event_count(pool).await;
+    let refused = format!("edge {} is erased; writes are refused", x.e.uuid());
+    let err = writer
+        .await
+        .expect("the writer's task")
+        .expect_err("the write that waited is refused when it resumes");
+    assert!(
+        format!("{err:#}").contains(&refused),
+        "{write:?} that waited: refused as erased; got {err:#}"
+    );
+
+    let mut conn = pool.acquire().await.expect("acquire");
+    let err = write
+        .run(&mut conn, x.w.emitter, x.e)
+        .await
+        .expect_err("a write after the act is refused");
+    assert!(
+        format!("{err:#}").contains(&refused),
+        "{write:?} after the act: refused as erased; got {err:#}"
+    );
+    assert_eq!(event_count(pool).await, before, "nothing appended");
+
+    assert_sentinelled(pool, x.e).await;
+    assert_ledger_clean(pool).await;
+    let hits: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM kb_events \
+                  WHERE strpos(payload::text, $1) > 0) \
+              + (SELECT count(*) FROM kb_properties \
+                  WHERE strpos(property_value::text, $1) > 0)",
+    )
+    .bind(LATE)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(hits, 0, "the refused writes left nothing");
+    let folds = folds_of(pool, x.e).await;
+    assert_eq!(folds.len(), 1, "the unit's fold alone");
+}
+
+/// FAILS IF the write guard takes no lock on the `kb_edges` row (the facet write lands while the
+/// unit is open: as when only the edge's live resource endpoints are locked, it never blocks); if
+/// the lock and the check are one statement (the resumed write reads the record in its pre-wait
+/// snapshot, misses it, and is admitted); or if a facet write to the erased edge is admitted.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_property_write_racing_the_unit_waits_and_then_is_refused(pool: PgPool) {
+    race(&pool, Write::Facet).await;
+
+    // Bounded, the same wait surfaces as a lock timeout while the unit is open.
+    let x = estate(&pool).await;
+    let mut act = pool.begin().await.unwrap();
+    sqlx::query("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
+        .bind(x.e.uuid())
+        .bind(x.w.profile)
+        .bind(x.op.profile)
+        .bind(x.op.emitter)
+        .bind(Uuid::now_v7())
+        .execute(&mut *act)
+        .await
+        .unwrap();
+    let mut writer = pool.begin().await.unwrap();
     sqlx::query("SET LOCAL lock_timeout = '500ms'")
         .execute(&mut *writer)
         .await
         .unwrap();
-    let err = facet_on(&mut writer, &x.w, x.e, &late)
+    let err = Write::Facet
+        .run(&mut writer, x.w.emitter, x.e)
         .await
-        .expect_err("the writer waits on the open unit");
+        .expect_err("the bounded writer times out on the open unit");
     assert_eq!(
         sqlstate(&err).as_deref(),
         Some("55P03"),
         "the writer timed out waiting for a lock; got {err:#}"
     );
     writer.rollback().await.unwrap();
+    act.rollback().await.unwrap();
+}
 
-    act.commit().await.expect("the act commits");
-
-    let before = event_count(&pool).await;
-    let mut conn = pool.acquire().await.expect("acquire");
-    let err = facet_on(&mut conn, &x.w, x.e, &late)
-        .await
-        .expect_err("a write to the erased edge is refused");
-    assert!(
-        format!("{err:#}").contains(&format!(
-            "edge {} is erased; writes are refused",
-            x.e.uuid()
-        )),
-        "refused as erased; got {err:#}"
-    );
-    assert_eq!(event_count(&pool).await, before, "nothing appended");
-
-    assert_sentinelled(&pool, x.e).await;
-    assert_ledger_clean(&pool).await;
-    let hits: i64 = sqlx::query_scalar(
-        "SELECT (SELECT count(*) FROM kb_events \
-                  WHERE strpos(payload::text, 'a later mark') > 0) \
-              + (SELECT count(*) FROM kb_properties \
-                  WHERE strpos(property_value::text, 'a later mark') > 0)",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(hits, 0, "the refused write left nothing");
+/// FAILS IF `_project_relationship_folded` admits a fold of an edge an `edge_erased` record names:
+/// the fold blocks on the unit's row lock either way, and without the check it resumes after the
+/// act, commits, and leaves its free-text reason on the erased edge's ledger trail.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_fold_racing_the_unit_waits_and_then_is_refused(pool: PgPool) {
+    race(&pool, Write::Fold).await;
 }

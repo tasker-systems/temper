@@ -16,6 +16,8 @@
 --      edge row and refuses a write to an edge that is folded and named by an edge_erased record.
 --   4. sensitivity.erased_place_findings(): admits the label and edge-owned property findings of
 --      an edge an edge_erased record names, so their digests expire.
+--   5. _project_relationship_folded(uuid, jsonb): takes FOR KEY SHARE on the edge row and refuses
+--      a fold of an edge an edge_erased record names.
 --
 -- A later edit must not break:
 --   * derive before fold: _edge_erasure_payload_redaction runs before the fold event exists and
@@ -24,8 +26,14 @@
 --     `edge` rewrite only of a folded edge, homed in the estate the record names;
 --   * the body reads no payload, so replay can call it at the record's position;
 --   * a refusal raises before anything is appended;
---   * every writer of an edge takes FOR KEY SHARE on the edge row after its resource endpoints,
---     so it commits before the unit's derivation or waits for the act and is then refused.
+--   * each write verb of an edge takes FOR KEY SHARE on the edge row before it writes, so it
+--     commits before the unit's derivation or waits for the act and is then refused: the property
+--     writers (property_set, facet_set, the keyed assert, property_retracted), relationship_retype
+--     and relationship_reweight through _resource_write_guard_owner, after the edge's resource
+--     endpoints (Section 3); relationship_fold in _project_relationship_folded (Section 5).
+--     relationship_corrected and relationship_decayed have no write path. A reassertion of the
+--     edge's identity waits on the unit's row lock and then inserts a new edge row; it writes
+--     nothing of the erased one.
 
 -- ---------------------------------------------------------------------------
 -- Section 1. The projection body for one edge.
@@ -65,11 +73,13 @@ run the same body at the edge_erased record's position.$c$;
 -- ---------------------------------------------------------------------------
 -- Section 2. The unit.
 -- ---------------------------------------------------------------------------
--- The edge row lock serializes the unit against every writer of the edge. A second unit reads the
--- first's committed state and raises `already erased`. A property, facet or relationship writer
--- takes FOR KEY SHARE on the row in _resource_write_guard_owner (Section 3): it either committed
--- before this lock, so the derivation below sees its event, or it waits for the act to commit and
--- is then refused, the edge being folded and named by this unit's edge_erased record. An edge
+-- The edge row lock serializes the unit against a second unit and against each write verb of the
+-- edge. A second unit reads the first's committed state and raises `already erased`. The property
+-- writers, relationship_retype and relationship_reweight take FOR KEY SHARE on the row in
+-- _resource_write_guard_owner (Section 3), and relationship_fold in _project_relationship_folded
+-- (Section 5): each either committed before this lock, so the derivation below sees its event, or
+-- waits for the act to commit and is then refused, the edge being named by this unit's edge_erased
+-- record. An edge
 -- already folded is erased without a new fold, and its record says so (folded false). The record
 -- carries `folded` in both cases.
 CREATE FUNCTION edge_erasure_execute(p_edge uuid, p_estate_of uuid, p_operator uuid,
@@ -335,6 +345,46 @@ source row that no longer exists; and a ledger path place_closure answers sentin
 sensitivity.expire_erased_fingerprints reads it to start each finding''s window.';
 
 
+-- ---------------------------------------------------------------------------
+-- Section 5. A fold of an erased edge waits on the unit, then is refused.
+-- ---------------------------------------------------------------------------
+-- 20261201000030's body, plus the lock and the refusal after the existence check. The fold does not
+-- go through _resource_write_guard_owner: the resource act folds the edges of a resource it has
+-- already erased, and the guard's endpoint arm would refuse those folds. Its callers and why none is
+-- refused wrongly: the unit's own fold runs before its record exists; the resource act and the
+-- block history scrub fold only live edges, which no record names; _erasure_member_flag calls
+-- _edge_fold_apply directly; replay runs with temper.replaying on, which skips both. The lock and
+-- the check are two statements, so a fold that waited reads the record in a later snapshot.
+CREATE OR REPLACE FUNCTION _project_relationship_folded(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_edge uuid := (p_payload->>'edge_id')::uuid;
+BEGIN
+    PERFORM 1 FROM kb_edges WHERE id = v_edge;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'relationship_fold: edge % not found', v_edge;
+    END IF;
+    IF current_setting('temper.replaying', true) IS DISTINCT FROM 'on' THEN
+        PERFORM 1 FROM kb_edges WHERE id = v_edge FOR KEY SHARE;
+        IF EXISTS (SELECT 1 FROM kb_events ev
+                     JOIN kb_event_types et ON et.id = ev.event_type_id
+                    WHERE et.name = 'edge_erased'
+                      AND ev.payload ->> 'subject_table' = 'kb_edges'
+                      AND ev.payload ->> 'subject_id' = v_edge::text) THEN
+            RAISE EXCEPTION 'edge % is erased; writes are refused', v_edge;
+        END IF;
+    END IF;
+    PERFORM _edge_fold_apply(p_event, v_edge);
+    RETURN v_edge;
+END;
+$$;
+
+COMMENT ON FUNCTION _project_relationship_folded(uuid, jsonb) IS
+$c$The relationship_folded projection: raises when the edge is missing; outside replay
+(temper.replaying not 'on') takes FOR KEY SHARE on the edge row, which waits out
+edge_erasure_execute's FOR UPDATE, and raises 'edge % is erased; writes are refused' when an
+edge_erased record names the edge as its subject; then folds it through _edge_fold_apply.$c$;
+
+
 SELECT declare_migration(
     20261201000060,
     'additive',
@@ -343,7 +393,10 @@ SELECT declare_migration(
     'calls them. CREATE OR REPLACEs, at unchanged signatures, _resource_write_guard_owner(text, '
     'uuid), whose kb_edges arm also takes FOR KEY SHARE on the edge row and refuses a write to a '
     'folded edge an edge_erased record names, and sensitivity.erased_place_findings(), which gains '
-    'an arm for findings on such an edge; it also gains a COMMENT. No edge_erased record exists '
+    'an arm for findings on such an edge; it also gains a COMMENT. CREATE OR REPLACEs '
+    '_project_relationship_folded(uuid, jsonb) at its signature, which takes the same lock and '
+    'refuses a fold of an edge an edge_erased record names, and gives it a COMMENT. No edge_erased '
+    'record exists '
     'before edge_erasure_execute runs, so every existing answer is unchanged, and the added '
     'KEY SHARE conflicts only with a FOR UPDATE, a DELETE or an id change of the edge row (its one '
     'non-partial unique key is the primary key). No table, column, '
