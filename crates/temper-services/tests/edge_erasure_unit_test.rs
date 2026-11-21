@@ -6,8 +6,9 @@
 //! when it is live (one `relationship_folded`, reason `estate_erased`), appends one `edge_erased`
 //! record, projects its `edge`-authority redaction rows, sets the edge's label to NULL and its
 //! owned properties to the sentinels, and rewrites every event of the edge's trail to the
-//! sentinels. Each world is built through the real write paths; the unit is called by SQL, as the
-//! person act calls it. The operator and its emitter are a second profile's.
+//! sentinels. Each world is built through the real write paths; the unit is called by SQL
+//! directly, since no act calls it yet. The operator and its emitter are a second profile's.
+//! TODO(person-act step): once the person act calls the unit, witness it through that act too.
 
 use serde_json::{json, Value};
 use sqlx::PgPool;

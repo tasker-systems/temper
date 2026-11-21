@@ -157,14 +157,17 @@ home = { table = "kb_blobs", table_column = "home_table", id_column = "home_id" 
 # The entry below is the B answer: its note and unit say nothing of edges folded before the act.
 # The B gap is NOT an also_reached entry, since a gap needs a path that differs from the grain's.
 # if B: a gap naming "edges homed in the estate folded before the act" on task 01a12dcf-2ef5-729d-b6ef-051fdee3ef8c
+# TODO(person-act step): when the person act calls edge_erasure_execute for each estate-homed edge
+# no resource erasure reached, the note below says so and drops "does not yet call it".
 [tables.kb_edges]
-note = "homed in the estate: folded, its label nulled and its edge-owned properties set to their sentinels in the projection, and its labels and properties rewritten to their sentinels on its own ledger trail, by edge_erasure_execute, which the person act runs for each edge homed in the estate that no resource erasure reached. Also reached by each endpoint: resource erasure nulls the label of every edge with the resource at either end and replaces its edge-owned properties. kb_edges_source_table_check and kb_edges_target_table_check also admit kb_blobs and kb_cogmaps, each an also_reached entry below"
+note = "homed in the estate: folded at declaration, its label redacted by the unit. The per-edge unit edge_erasure_execute exists (migration 20261201000060), but the person act does not yet call it, so the unit stays a gap. Also reached by each endpoint: resource erasure nulls the label of every edge with the resource at either end and replaces its edge-owned properties. kb_edges_source_table_check and kb_edges_target_table_check also admit kb_blobs and kb_cogmaps, each an also_reached entry below"
 
 [tables.kb_edges.grain]
 kind = "per-item"
 container = false
 fence = { bound = "is_folded" }
-unit = { bound = "edge_erasure_execute" }
+# TODO(person-act step): unit = { bound = "edge_erasure_execute" }
+unit = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "redaction of the label of an edge homed in the estate" } }
 home = { table = "kb_edges", table_column = "home_anchor_table", id_column = "home_anchor_id" }
 
 [[tables.kb_edges.also_reached]]
@@ -244,7 +247,8 @@ parent = { table = "kb_resources", link = { pair = { table_column = "owner_table
 
 [[tables.kb_properties.also_reached]]
 path = { table = "kb_edges", link = { pair = { table_column = "owner_table", id_column = "owner_id" } } }
-mechanism = { bound = "edge_erasure_execute" }
+# TODO(person-act step): mechanism = { bound = "edge_erasure_execute" }
+mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "properties owned by an edge homed in the estate" } }
 
 [[tables.kb_properties.also_reached]]
 path = { table = "kb_content_blocks", link = { pair = { table_column = "owner_table", id_column = "owner_id" } } }

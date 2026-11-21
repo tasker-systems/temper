@@ -1,8 +1,10 @@
--- Person erasure folds and erases the edges homed in the erased person's estate.
+-- The per-edge unit that folds and erases one edge homed in an estate.
 --
 -- An edge homed in a context of the estate that no resource erasure reached keeps its label, its
 -- facets and its ledger text after the person act. This migration adds the per-edge unit that
 -- erases one such edge under the `edge` authority (20261201000050_edge_erasure_authority.sql).
+-- Only tests call it: the person act does not.
+-- TODO(person-act step): the person act calls edge_erasure_execute for each such edge.
 --
 --   1. _edge_erasure_apply_redaction(uuid, uuid): the projection body for one edge. Its label is
 --      set to NULL and every property row it owns, live and folded, to erased-key-<n> / "erased"
