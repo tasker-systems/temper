@@ -1,4 +1,4 @@
-//! The rate-limit seam: per-route windowed limits, Postgres-backed, **default off**.
+//! The rate-limit seam: windowed limits per door, Postgres-backed, **default off**.
 //!
 //! Design authority: `temper-artifacts/specs/2026-08-31-tmpr22-rate-limit-seam-design.md`
 //! (decided; every axis answered or declared there). This module implements its chosen
@@ -24,13 +24,30 @@
 //! # Where the counters live (spec A2)
 //!
 //! *Count the canonical artifact where one exists; mint counter state only where no
-//! artifact exists.* The two opt-in doors therefore do not share a mechanism — their
-//! keys differ by spec A1:
+//! artifact exists.* The opt-in doors therefore do not share one mechanism — their keys
+//! differ by spec A1, and their counters by whether an artifact exists:
 //!
-//! | Door | Keyed on | Counted from | Mechanism |
-//! |---|---|---|---|
-//! | reconcile pair (`internal_routes`) | the route itself | `kb_rate_counters` (no per-call artifact exists — the handlers trace only) | [`require_route_rate_limit`] middleware |
-//! | `POST /api/access/requests` | the verified JWT principal | the `kb_join_requests` rows themselves (the audit trail) | the `create_join_request` guard |
+//! | Door | Keyed on | Counted from | Mechanism | Per-instance consequence of the keying |
+//! |---|---|---|---|---|
+//! | reconcile pair (`internal_routes`) | the route itself | `kb_rate_counters` (no per-call artifact exists — the handlers trace only) | [`require_route_rate_limit`] middleware | one budget per route for the whole deployment: every signed caller shares it, so a flood from the one secret-bearer spends it for all |
+//! | `POST /api/access/requests` | the verified JWT principal | the `kb_join_requests` rows themselves (the audit trail) | the `create_join_request` guard | one budget per principal; other principals are untouched |
+//! | the blob write doors ([`PrincipalDoor::BlobWrite`]): `POST /api/blobs`, `POST /api/blobs/uploads`, `POST /api/blobs/uploads/{id}/segments`, `POST /api/blobs/uploads/{id}/finalize`, `DELETE /api/blobs/{id}` | the verified principal (person or machine), one budget shared across the five doors | `kb_rate_counters`, one row per principal (a refused or failed attempt leaves no artifact, yet it held the pool connection the bound protects) | `require_principal_rate_limit` middleware (temper-api) over [`check_principal`] | one budget per principal across every instance; a principal past it is refused on all five doors, other principals are untouched. Many principals together are not bounded by it |
+//!
+//! **Why these five, and not the other blob doors.** Each of the five can hold a pool
+//! connection across provider I/O or move request bytes into the database: commit and
+//! finalize hold the content-hash lock across the provider existence check and a possible
+//! restore-put, delete holds it across the byte release, append writes staged bytes, and
+//! begin opens the staging that the other two fill. The blob read doors (`GET /api/blobs`,
+//! `GET /api/blobs/{id}`, `GET /api/blobs/uploads/{id}`, `GET /api/blobs/{id}/relations`)
+//! and `POST /api/blobs/{id}/relations` (one edge write, no provider I/O, no hash lock)
+//! are not bounded by this door.
+//!
+//! **Not yet bounded: `/mcp` itself.** The MCP `blob_manage` tool relays its commit to
+//! `POST /api/blobs` with the caller's own bearer, so that call spends the caller's
+//! blob-write budget at the API. That is not parity: the `/mcp` door's own work (the
+//! JSON-RPC parse, the base64 decode, the relay) happens before the API counts anything,
+//! and nothing bounds it. Ruling R4 of the codebase recon rulings (2026-11-08) puts `/mcp`
+//! in scope and revisits spec A8; that bound is later work.
 //!
 //! One note on placement: the spec's chosen approach sketched the layer "in
 //! `temper-services::transport`"; it lives in this module instead (its own home,
@@ -42,12 +59,12 @@
 //! serverless deployment it bounds one instance and reads as coverage it cannot have —
 //! the `acquire_timeout` mis-framing (`api/axum.rs`, the deployment-grounding comment).
 //!
-//! # The MCP door is excluded, deliberately
+//! # The MCP door is not bounded here
 //!
 //! `/mcp` is `nest_service` over a raw tower service, so no axum per-route layer reaches
-//! it, and its AS entry points are public-by-protocol where keying is hardest. Declared
-//! open in spec A8 — a decision recorded, not an omission; revisit after the two opt-ins
-//! have exercised.
+//! it, and its AS entry points are public-by-protocol where keying is hardest. Spec A8
+//! declared it open; ruling R4 (codebase recon rulings, 2026-11-08) brings it into scope
+//! for a later build. Until that lands, no limit here covers the `/mcp` door's own work.
 
 use axum::extract::Request;
 use axum::extract::State;
@@ -98,6 +115,13 @@ pub struct WindowLimit {
 /// |---|---|
 /// | `RATE_LIMIT_RECONCILE_MAX` / `RATE_LIMIT_RECONCILE_WINDOW_SECS` | the reconcile pair (`/internal/saml/reconcile`, `/internal/principal/resolve`) |
 /// | `RATE_LIMIT_CREATE_REQUEST_MAX` / `RATE_LIMIT_CREATE_REQUEST_WINDOW_SECS` | `POST /api/access/requests` |
+/// | `RATE_LIMIT_BLOB_WRITE_MAX` / `RATE_LIMIT_BLOB_WRITE_WINDOW_SECS` | the five blob write doors ([`PrincipalDoor::BlobWrite`]), one budget per principal across them |
+///
+/// The blob-write budget has no chosen value yet: it ships unset, so those doors stay
+/// unlimited until an operator sets the pair. A segmented upload spends one call on begin,
+/// one per segment and one on finalize, so a budget must cover the largest legal upload
+/// (`BLOB_MAX_BYTES` over the segment size, plus two) for every upload a principal may
+/// start in one window.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RateLimitConfig {
     /// The reconcile channel's limit, applied per route (each route counts separately —
@@ -106,6 +130,9 @@ pub struct RateLimitConfig {
     pub reconcile: Option<WindowLimit>,
     /// The self-service join-request door's limit, keyed on the verified principal.
     pub create_request: Option<WindowLimit>,
+    /// The blob write doors' limit, keyed on the verified principal, one budget across
+    /// the five doors of [`PrincipalDoor::BlobWrite`].
+    pub blob_write: Option<WindowLimit>,
 }
 
 /// How a door parses out of the environment: all-or-nothing per door, values validated.
@@ -133,13 +160,19 @@ pub fn parse_rate_limit(
         "RATE_LIMIT_CREATE_REQUEST_MAX",
         "RATE_LIMIT_CREATE_REQUEST_WINDOW_SECS",
     )?;
+    let blob_write = parse_window(
+        &lookup,
+        "RATE_LIMIT_BLOB_WRITE_MAX",
+        "RATE_LIMIT_BLOB_WRITE_WINDOW_SECS",
+    )?;
 
-    if reconcile.is_none() && create_request.is_none() {
+    if reconcile.is_none() && create_request.is_none() && blob_write.is_none() {
         return Ok(None);
     }
     Ok(Some(RateLimitConfig {
         reconcile,
         create_request,
+        blob_write,
     }))
 }
 
@@ -183,7 +216,8 @@ fn parse_window(
     }
 }
 
-/// The reconcile channel's counter: one row per route, bumped by a **single statement**
+/// The `kb_rate_counters` counter: one row per key (a route for the reconcile pair, a
+/// door and principal for [`check_principal`]), bumped by a **single statement**
 /// so the increment-and-rollover is atomic per caller — safe under PgBouncer transaction
 /// mode, where session-level state is not reliable (`api/axum.rs`, the deployment
 /// grounding). The window rollover is decided inside the same statement that counts, so
@@ -201,7 +235,7 @@ fn parse_window(
 /// statement; what stays approximate is the operator's intent — a window boundary can
 /// admit `max` more calls one instant after refusing the `max + 1`-th, which is what a
 /// window is.
-pub async fn bump_route(pool: &PgPool, route: &str, limit: WindowLimit) -> ApiResult<(bool, i64)> {
+pub async fn bump_route(pool: &PgPool, key: &str, limit: WindowLimit) -> ApiResult<(bool, i64)> {
     let row = sqlx::query!(
         r#"
         INSERT INTO kb_rate_counters AS c (route, window_started_at, call_count)
@@ -222,7 +256,7 @@ pub async fn bump_route(pool: &PgPool, route: &str, limit: WindowLimit) -> ApiRe
                       (window_started_at + make_interval(secs => $2)) - now()))::bigint
                       AS "retry_after_secs!"
         "#,
-        route,
+        key,
         // `make_interval`'s `secs` parameter is double precision, so the bind is an f64;
         // whole seconds are exact in it.
         f64::from(limit.window_secs),
@@ -232,6 +266,80 @@ pub async fn bump_route(pool: &PgPool, route: &str, limit: WindowLimit) -> ApiRe
 
     let allowed = row.call_count <= limit.max;
     Ok((allowed, row.retry_after_secs))
+}
+
+/// A door budgeted per principal: the caller's verified identity is the key, so one
+/// principal's pressure never spends another's budget.
+///
+/// One variant per budget, not per route: a variant names the routes that share it (the
+/// door table in the module docs lists them) and the config field that sets it. A new
+/// budgeted door adds a variant, a config pair and a row in the door table, and mounts
+/// the same middleware.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrincipalDoor {
+    /// The five blob write doors: commit, begin, append, finalize and delete.
+    BlobWrite,
+}
+
+impl PrincipalDoor {
+    /// The door's name, as it appears in its counter key and in the refusal's log line.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::BlobWrite => "blob_write",
+        }
+    }
+
+    /// The operator's limit for this door, if one is set. `None` is the shipped default.
+    pub fn limit(self, config: Option<&RateLimitConfig>) -> Option<WindowLimit> {
+        let config = config?;
+        match self {
+            Self::BlobWrite => config.blob_write,
+        }
+    }
+
+    /// The counter's key in `kb_rate_counters`. The `principal:` prefix keeps it apart
+    /// from the reconcile pair's keys, which are request paths and so begin with `/`.
+    fn counter_key(self, profile_id: uuid::Uuid) -> String {
+        format!("principal:{}:{profile_id}", self.name())
+    }
+}
+
+/// Count one call by `profile_id` against `door`, and refuse it past the operator's limit.
+///
+/// No limit set ⇒ `Ok(())` with no database touch: default off means the seam is absent,
+/// not a check that always passes. With a limit, the count is [`bump_route`]'s single
+/// atomic statement on the door's per-principal key, and the refusal is the seam's one
+/// refusal shape: `429 TOO_MANY_REQUESTS` with a `Retry-After` taken from the database's
+/// clock.
+///
+/// The call is counted before the door does any work, so a refused call is counted too,
+/// and a call the door itself then refuses still spent its budget: the bound is on
+/// attempts, which is what holds the pool.
+pub async fn check_principal(
+    pool: &PgPool,
+    config: Option<&RateLimitConfig>,
+    door: PrincipalDoor,
+    profile_id: uuid::Uuid,
+) -> ApiResult<()> {
+    let Some(limit) = door.limit(config) else {
+        return Ok(());
+    };
+
+    let (allowed, retry_after_secs) =
+        bump_route(pool, &door.counter_key(profile_id), limit).await?;
+
+    if !allowed {
+        tracing::info!(
+            door = door.name(),
+            max = limit.max,
+            "principal rate limit reached"
+        );
+        return Err(ApiError::TooManyRequests {
+            message: format!("too many {} requests in the current window", door.name()),
+            retry_after_secs,
+        });
+    }
+    Ok(())
 }
 
 /// The self-service guard: **count the canonical artifact** (spec A2). "This principal
@@ -374,6 +482,7 @@ mod tests {
                     window_secs: 3600
                 }),
                 create_request: None,
+                blob_write: None,
             }))
         );
     }
@@ -458,6 +567,7 @@ mod tests {
                     window_secs: 60
                 }),
                 create_request: None,
+                blob_write: None,
             }))
         );
     }
@@ -477,5 +587,60 @@ mod tests {
             "the doors must be all-or-nothing independently — a partial pair on EITHER door boots \
              no instance"
         );
+    }
+
+    // --- the blob write budget parses like every other door, and only when chosen ---
+
+    #[test]
+    fn the_blob_write_pair_parses_alone() {
+        assert_eq!(
+            parse_rate_limit(env(&[
+                ("RATE_LIMIT_BLOB_WRITE_MAX", "100"),
+                ("RATE_LIMIT_BLOB_WRITE_WINDOW_SECS", "60"),
+            ])),
+            Ok(Some(RateLimitConfig {
+                reconcile: None,
+                create_request: None,
+                blob_write: Some(WindowLimit {
+                    max: 100,
+                    window_secs: 60
+                }),
+            }))
+        );
+    }
+
+    // FAILS IF: a half-set blob budget boots as an unlimited door that looks configured.
+    #[test]
+    fn a_blob_write_max_without_a_window_refuses_to_boot() {
+        assert_eq!(
+            parse_rate_limit(env(&[("RATE_LIMIT_BLOB_WRITE_MAX", "100")])),
+            Err(ConfigError::Missing("RATE_LIMIT_BLOB_WRITE_WINDOW_SECS"))
+        );
+    }
+
+    // FAILS IF: another door's limit leaks into the blob budget, or the blob budget gains
+    // a fallback when only another door is set.
+    #[test]
+    fn the_blob_write_door_reads_only_its_own_limit() {
+        let reconcile_only = RateLimitConfig {
+            reconcile: Some(WindowLimit {
+                max: 30,
+                window_secs: 3600,
+            }),
+            create_request: None,
+            blob_write: None,
+        };
+        assert_eq!(PrincipalDoor::BlobWrite.limit(Some(&reconcile_only)), None);
+        assert_eq!(PrincipalDoor::BlobWrite.limit(None), None);
+    }
+
+    #[test]
+    fn a_principal_key_never_collides_with_a_route_key() {
+        let key = PrincipalDoor::BlobWrite.counter_key(uuid::Uuid::nil());
+        assert_eq!(
+            key,
+            "principal:blob_write:00000000-0000-0000-0000-000000000000"
+        );
+        assert!(!key.starts_with('/'), "route keys are request paths");
     }
 }

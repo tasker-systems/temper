@@ -229,6 +229,7 @@ fn limited_reconcile_app(pool: sqlx::PgPool) -> axum::Router {
         rate_limit: Some(RateLimitConfig {
             reconcile: Some(BITES),
             create_request: None,
+            blob_write: None,
         }),
         blob: None,
         blob_disabled_by_policy: false,
@@ -462,6 +463,7 @@ async fn an_unsigned_caller_spends_no_budget(pool: sqlx::PgPool) {
         rate_limit: Some(RateLimitConfig {
             reconcile: Some(BITES),
             create_request: None,
+            blob_write: None,
         }),
         blob: None,
         blob_disabled_by_policy: false,

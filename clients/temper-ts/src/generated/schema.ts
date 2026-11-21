@@ -15320,6 +15320,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     begin_blob_upload: {
@@ -15376,6 +15385,15 @@ export interface operations {
             };
             /** @description Home not found or not readable — indistinguishable by design */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited) */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15502,6 +15520,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     append_blob_segment: {
@@ -15565,6 +15592,15 @@ export interface operations {
             };
             /** @description A different segment occupies this seq */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited) */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15689,6 +15725,15 @@ export interface operations {
             };
             /** @description Blob absent, not visible, or already struck — each indistinguishable from absent by design; no second event */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Too many blob write requests in the current window (per-principal budget configured by the operator; default unlimited) */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
