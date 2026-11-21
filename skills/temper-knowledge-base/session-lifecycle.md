@@ -43,8 +43,12 @@ A findings document, not a diary. Its parts, in order:
 
 ```
 Tool: create_resource
-Input: { "context_ref": "@me/<ctx>", "doc_type_name": "session", "title": "<title>", "content": "<the note>" }
+Input: { "context_ref": "@me/<ctx>", "doc_type_name": "session", "title": "<title>", "content": "<the note>", "idempotency_key": "<UUIDv7>" }
 ```
+Send an `idempotency_key` (a fresh UUIDv7) with the create, and reuse the same key if you retry:
+a retry with the same key returns the note already saved instead of saving a second one. If you
+sent no key and the answer was lost, the note may still have been saved. Before you create it
+again, `list_resources` sessions in that context and look for a row with your title.
 
 ## The handoff preamble
 
