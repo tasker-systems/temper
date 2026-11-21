@@ -85,7 +85,7 @@ Options:
           Link this resource to a goal by ref (UUID or decorated `slug-<uuid>`). Projects a live `advances`→goal edge from the new resource on create
 
       --task <TASK>
-          Link this session to a task by slug (session only). Asserts a session→task `advances` relationship after creation
+          Link this session to a task (session only): its ref, bare UUID, title slug, unambiguous slug suffix or seq number. Asserts a session→task `advances` relationship after creation; the JSON's `task_link.status` says whether it landed
 
       --show-template
           Print the raw template and exit

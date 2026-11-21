@@ -24,8 +24,7 @@ const TASK_LIST_LIMIT: i64 = 1000;
 /// come from the resource row's top-level columns; the `slug` is title-derived
 /// (`sluggify`) for suffix matching in `find_task`. `context` is stamped from the
 /// query scope. (Post-Phase-2 the managed_meta tier is Property-only and no longer
-/// carries identity; the full field projection + ref-based `find_task` is task
-/// 019f3d55.)
+/// carries identity; the full field projection is task 019f3d55.)
 ///
 /// The function is synchronous: `runtime::with_client` builds its own tokio
 /// runtime, and all callers (`warmup::collect_in_progress_tasks`, `find_task`)
@@ -126,12 +125,18 @@ pub(crate) fn task_info_from_row(
     }
 }
 
-/// Find a task by exact slug or unambiguous suffix match.
-pub fn find_task(
-    config: &Config,
-    slug_or_suffix: &str,
-    context: Option<&str>,
-) -> Result<Option<TaskInfo>> {
+/// Find a task by ref, UUID, exact slug, unambiguous slug suffix, or seq number.
+///
+/// A value that parses as a ref (a bare UUID or `<slug>-<uuid>`) names the task by id: it is
+/// fetched directly, from any context the caller can read, and never falls back to slug matching
+/// — a ref that names nothing is `Ok(None)`, and one that names a non-task is an error. Anything
+/// else is matched against `sluggify(title)` of the tasks in `context`: exact, then unambiguous
+/// suffix, then seq number.
+pub fn find_task(config: &Config, needle: &str, context: Option<&str>) -> Result<Option<TaskInfo>> {
+    if let Ok(id) = temper_workflow::operations::parse_ref(needle) {
+        return find_task_by_id(id.0, needle, context);
+    }
+    let slug_or_suffix = needle;
     let all = load_tasks(config, context)?;
     // Exact match first
     if let Some(t) = all.iter().find(|t| t.slug == slug_or_suffix) {
@@ -175,4 +180,41 @@ pub fn find_task(
         }
     }
     Ok(None)
+}
+
+/// Fetch the resource `id` names and accept it only if it is a task.
+///
+/// A 404 is `Ok(None)`: the ref names nothing this caller can read. A resource of another doctype
+/// is an error naming what it is, so `--task <a session's ref>` never links a session to a
+/// session. The [`TaskInfo`]'s `context` is the row's own context ref (`@owner/slug`), and the
+/// caller's `context` only when the row carries none (a cogmap-homed task) — so, unlike the
+/// slug path, which stamps the caller's string as given, it is not comparable across paths.
+fn find_task_by_id(
+    id: uuid::Uuid,
+    needle: &str,
+    context: Option<&str>,
+) -> Result<Option<TaskInfo>> {
+    let fetched = runtime::with_client(move |client| {
+        Box::pin(async move {
+            match client.resources().get(id, None).await {
+                Ok(row) => Ok(Some(row)),
+                Err(temper_client::error::ClientError::NotFound { .. }) => Ok(None),
+                Err(e) => Err(runtime::client_err_to_temper(e)),
+            }
+        })
+    })?;
+    let Some(row) = fetched else {
+        return Ok(None);
+    };
+    if row.doc_type_name != "task" {
+        return Err(TemperError::BadRequest(format!(
+            "'{needle}' names a {}, not a task",
+            row.doc_type_name
+        )));
+    }
+    let ctx = row
+        .context_ref
+        .clone()
+        .unwrap_or_else(|| context.unwrap_or_default().to_string());
+    Ok(Some(task_info_from_row(row, &ctx)))
 }

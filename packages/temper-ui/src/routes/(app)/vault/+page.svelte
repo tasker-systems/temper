@@ -9,7 +9,7 @@
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
 	import { omissionSentence } from '@tasker-systems/temper-design/omission';
-	import { WAY_IN_BOUND, WAY_IN_ORDER } from '@tasker-systems/temper-design/ways-in';
+	import { WAY_IN_BOUND, WAY_IN_MAX, WAY_IN_ORDER } from '@tasker-systems/temper-design/ways-in';
 	import RegionState from '$lib/components/RegionState.svelte';
 	import MarkdownRenderer from '$lib/components/MarkdownRenderer.svelte';
 	import ResourceLink from '$lib/components/ResourceLink.svelte';
@@ -25,7 +25,6 @@
 		RECENT_SCOPE,
 		RESUME_LABEL,
 		WAY_IN_EMPTY_DETAIL,
-		WAY_IN_MAX,
 		wayInMoreHref,
 	} from '$lib/first-view';
 	import { relativeTime } from '$lib/graph/relativeTime';
