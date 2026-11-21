@@ -3,10 +3,12 @@
 //! erasure deferral of `temper_substrate::replay::replay`.
 //!
 //! One span holds both per-item erasure authorities: a `resource_erased` and two `edge_erased`
-//! records appended in one transaction under one request reference, as the person act appends
-//! them. Replay projects each record at its position and runs each body at the span's end; the
-//! projections it rebuilds must equal the live ones byte for byte. The world is built through the
-//! real write paths and the units are called by SQL, as the person act calls them.
+//! records appended in one transaction under one request reference, the span a person act that
+//! runs both units would leave. Replay projects each record at its position and runs each body at
+//! the span's end; the projections it rebuilds must equal the live ones byte for byte. The world is
+//! built through the real write paths and the units are called by SQL directly, since no act calls
+//! `edge_erasure_execute` yet.
+//! TODO(person-act step): once the person act calls the unit, replay a span that act wrote.
 
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -248,7 +250,7 @@ async fn replay_of_an_estate_edge_erasure_is_byte_identical(pool: PgPool) {
     facet(&pool, &w, folded, json!({ "status": "folded first" })).await;
     fold(&pool, &w, folded).await;
 
-    // One span: one transaction, one request reference, as the person act appends it.
+    // One span: one transaction, one request reference, as one act running both units leaves it.
     let request_ref = Uuid::now_v7();
     let mut act = pool.begin().await.expect("begin the span");
     sqlx::query("SELECT resource_erasure_execute($1, $2, $3, $4, '{}')")

@@ -1,8 +1,8 @@
 -- Edge erasure: one ledger-derivation loop for resource and edge trails, an edge's trail, and the
 -- `edge` authority that lets an act rewrite that trail.
 --
--- Person erasure erases the edges homed in the erased person's estate that no resource erasure
--- reached. Rewriting such an edge's ledger needs what resource erasure already has: the events
+-- An edge homed in the erased person's estate that no resource erasure reached is erased one edge
+-- at a time. Rewriting such an edge's ledger needs what resource erasure already has: the events
 -- that are the edge's own, each one's payload at the class sentinels, and an authority the ledger
 -- guard admits the rewrite under.
 --

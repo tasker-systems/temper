@@ -23,12 +23,8 @@ and it is never self-serve; the door belongs to the organization, not the subjec
 **1. Writing into a team's context gives up any sole claim on deletion.** Content homed in
 a team-owned context other than someone's personal team (line 2) — resources, edges,
 properties, uploaded files, data artifacts, schemas — stays when you leave the team, and
-stays when an erasure acts on your profile, whoever authored it. The one exception is a
-relationship homed in a team's context that points at a resource in an erased estate: its label, its
-properties, its fold reasons and corrections, and the authorship metadata (reasoning, rationale,
-persona, model) on its events are erased with the estate, whoever wrote them. You crossed this
-line the moment you wrote there; deleting the content afterwards is the team's act, not yours,
-and your erasure never performs it for you.
+stays when an erasure acts on your profile, whoever authored it. You crossed this line the moment you wrote there; deleting the content
+afterwards is the team's act, not yours, and your erasure never performs it for you.
 
 **2. Writing into someone else's personal context declares the content's lifetime.** A
 person's personal contexts are their own (`@me`) contexts and the contexts of their personal
@@ -60,10 +56,7 @@ determination. In one server-side transaction it:
   emptied or replaced by placeholders, in the projections **and in the event ledger**, and
   it remains only as a **husk**, an empty record marked erased. Every relationship touching
   it is ended and its label cleared, including relationships from a team's content into the
-  estate (line 1). Every relationship homed in the estate is ended too, and its label and
-  properties cleared, in the projections and in the event ledger, whatever it points at. What an
-  estate context homes that the act does not yet erase: its data-artifact schemas, its
-  cognitive-map regions and lenses, and jobs scoped to the context alone.
+  estate.
   Content a guest wrote there under line 2 dies with it, files included; the bytes are
   released only when no live record carries the same content hash. A charter's text is
   emptied, and the charter is held, not erased, until map-grain erasure exists; the record
@@ -72,8 +65,7 @@ determination. In one server-side transaction it:
   identifiers. The profile is then **tombstoned**: its id stays, as a pseudonym.
   Attribution to them anywhere else breaks because their profile stops resolving to a
   person (the pseudonym break) — their past contributions to team contexts are never
-  edited to hide them, except a relationship that points at a resource in an erased estate, whose text is
-  erased as line 1 says.
+  edited to hide them.
 - **Erases the estate's contexts themselves** in the same transaction: each is retired, and its
   name and address are replaced by placeholders, in the projections and in every earlier event
   that recorded them (a rename, a retirement, a restoration). Retirement is what makes line 2
@@ -84,8 +76,7 @@ determination. In one server-side transaction it:
   retired home mints live, lawful content, and any later erasure of the same estate strikes it
   again.
 - Leaves other teams' contexts untouched: the content stays, whoever authored it. The one
-  change it makes there is to end a relationship that points at a resource in the estate and erase its
-  text (line 1).
+  change it makes there is to end a relationship that points into the estate.
 
 One pre-existing door the retirement deliberately leaves open, stated because erasure
 inherits it: whoever **owns a resource** homed in the wiped estate keeps owner standing
