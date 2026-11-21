@@ -31,6 +31,11 @@ export type WayIn = {
 };
 /** How many rows a way in shows before the reader asks for more. */
 export declare const WAY_IN_BOUND = 8;
+/**
+ * The cap "Show more" grows a way in to, by `WAY_IN_BOUND` a step. Past it the reader is in the
+ * grid's territory: a surface stops offering more and says the list shows at most this many.
+ */
+export declare const WAY_IN_MAX = 200;
 /** The order every way in is read in, in the words both surfaces state it. */
 export declare const WAY_IN_ORDER = "most recently updated first";
 export declare const WAYS_IN: readonly WayIn[];
