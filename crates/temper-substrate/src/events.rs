@@ -168,6 +168,10 @@ pub enum EventKind {
     /// title, origin URI or property family redacted, and today's value too when cleared. Same
     /// `admin` / NULL-anchored posture.
     ResourceScrubbed,
+    /// One edge of an estate erased (erasure estate-homed edges): a folded edge homed in a
+    /// context of the person's estate, its trail redacted to sentinels. Same `admin` /
+    /// NULL-anchored posture, one event per edge.
+    EdgeErased,
     /// One recorded write to `kb_team_members` — an add, a role change or a removal (team-role
     /// rank spec C8). Category `admin`, NULL-anchored, written only by
     /// `_admin_team_membership_write` in the same statement as the row.
@@ -303,6 +307,7 @@ impl EventKind {
             EventKind::ResourceErasureRefused => "resource_erasure_refused",
             EventKind::BlockHistoryScrubbed => "block_history_scrubbed",
             EventKind::ResourceScrubbed => "resource_scrubbed",
+            EventKind::EdgeErased => "edge_erased",
             EventKind::TeamMembershipChanged => "team_membership_changed",
             EventKind::TeamParentLinkChanged => "team_parent_link_changed",
             EventKind::TeamLifecycleChanged => "team_lifecycle_changed",
@@ -378,6 +383,7 @@ impl EventKind {
             "resource_erasure_refused" => EventKind::ResourceErasureRefused,
             "block_history_scrubbed" => EventKind::BlockHistoryScrubbed,
             "resource_scrubbed" => EventKind::ResourceScrubbed,
+            "edge_erased" => EventKind::EdgeErased,
             "team_membership_changed" => EventKind::TeamMembershipChanged,
             "team_parent_link_changed" => EventKind::TeamParentLinkChanged,
             "team_lifecycle_changed" => EventKind::TeamLifecycleChanged,

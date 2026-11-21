@@ -397,6 +397,8 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::BlockHistoryScrubbed
             // The field scrub's record carries paths and a family handle, never content.
             | EventKind::ResourceScrubbed
+            // One estate edge's erasure record carries ids and paths, never content.
+            | EventKind::EdgeErased
             // A delivery disposition (S2 chunk C) carries reasoning and confidence, not content:
             // no blocks, no chunks, no sidecar. A received webhook (S2 chunk B) carries the
             // remote's verbatim body — foreign content temper did not author and does not chunk.
@@ -1347,6 +1349,11 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 sqlx::query!("SELECT _rebuild_resource_search_vector($1)", subject)
                     .fetch_one(&mut *tx)
                     .await?;
+            }
+            // One estate edge's erasure (erasure estate-homed edges). The walk refuses it until its
+            // arm lands: a walk that skipped it would replay the edge's trail unredacted.
+            EventKind::EdgeErased => {
+                anyhow::bail!("edge_erased replay arm lands in Task 6 (event {id})");
             }
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this
