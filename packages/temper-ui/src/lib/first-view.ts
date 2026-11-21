@@ -26,7 +26,7 @@
  * exactly what each list asks the door for.
  */
 
-import { WAY_IN_BOUND, type WayIn } from '@tasker-systems/temper-design/ways-in';
+import { WAY_IN_BOUND, WAY_IN_MAX, type WayIn } from '@tasker-systems/temper-design/ways-in';
 import type { ContextActivity, ContextRowWithCounts, ResourceView } from '$lib/types';
 
 /** One bounded list as the first view shows it: its rows, and how many there are in all. */
@@ -42,9 +42,6 @@ export const RECENT_SCOPE = 'resources you can read';
 export const ARRIVAL = '/vault';
 
 const NEWEST_FIRST = { sort: 'updated', order: 'desc' } as const;
-
-/** The most a way in grows to on this page; past it, the reader is in the grid's territory. */
-export const WAY_IN_MAX = 200;
 
 /**
  * How many rows a way in shows, from its own URL parameter (`?goals=16`). Each list grows in place

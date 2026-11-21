@@ -649,8 +649,9 @@ pub enum ResourceAction {
         /// Projects a live `advances`→goal edge from the new resource on create.
         #[arg(long)]
         goal: Option<String>,
-        /// Link this session to a task by slug (session only). Asserts a
-        /// session→task `advances` relationship after creation.
+        /// Link this session to a task (session only): its ref, bare UUID, title slug,
+        /// unambiguous slug suffix or seq number. Asserts a session→task `advances`
+        /// relationship after creation; the JSON's `task_link.status` says whether it landed.
         #[arg(long)]
         task: Option<String>,
         /// Print the raw template and exit

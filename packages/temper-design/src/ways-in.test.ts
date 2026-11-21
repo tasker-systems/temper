@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WAYS_IN } from './ways-in.js';
+import { WAY_IN_BOUND, WAY_IN_MAX, WAYS_IN } from './ways-in.js';
 
 describe('the standing ways in', () => {
 	// The set was ruled for both surfaces; a way in added, dropped or renamed here changes what
@@ -25,5 +25,12 @@ describe('the standing ways in', () => {
 		const scopes = WAYS_IN.map((w) => w.scope);
 		expect(scopes.every((s) => s.trim().length > 0)).toBe(true);
 		expect(new Set(scopes).size).toBe(scopes.length);
+	});
+
+	// Both surfaces grow a list by the bound up to the cap; a cap at or under the bound would leave
+	// "Show more" nothing to offer, and either number moving changes what both surfaces show.
+	it('grow by the bound, up to a cap above it', () => {
+		expect([WAY_IN_BOUND, WAY_IN_MAX]).toEqual([8, 200]);
+		expect(WAY_IN_MAX).toBeGreaterThan(WAY_IN_BOUND);
 	});
 });

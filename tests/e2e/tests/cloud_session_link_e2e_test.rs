@@ -1,7 +1,8 @@
 #![cfg(feature = "test-db")]
 
 //! End-to-end coverage for session→task linking on the live `resource create`
-//! path (`temper resource create --type session --task <task-slug>`).
+//! path (`temper resource create --type session --task <task>`), where `<task>` is the task's
+//! ref, bare UUID or title slug, and the create's JSON reports the outcome as `task_link`.
 //!
 //! The link is asserted by `commands::resource::create` after the session is
 //! created: a session→task relationship with `edge_kind = LeadsTo`,
@@ -104,7 +105,6 @@ async fn resolve_by_title(
 /// one session→task edge with `label == "advances"`, `edge_kind == LeadsTo`,
 /// `polarity == Forward`, correct source (session) / target (task).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: the CLI `--task` link path calls find_task, which requires temper-title in managed_meta; temper-title is a §7-Die key dropped by readback (F1, same gap as cloud_task_lookup). Un-ignore when receive-side identity-key injection lands."]
 async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
@@ -466,7 +466,6 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
 /// lookup error is warned + skipped: the session is still created, no edge is
 /// asserted, and `create` returns `Ok(())`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: the CLI `--task` link path calls find_task, which requires temper-title in managed_meta; temper-title is a §7-Die key dropped by readback (F1, same gap as cloud_task_lookup). Un-ignore when receive-side identity-key injection lands."]
 async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
@@ -541,4 +540,204 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
         edges.is_empty(),
         "no edge must be asserted for an ambiguous task suffix; got {edges:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Tests 6–9: the real binary — `--task` takes a ref, a UUID or a title slug,
+// and the create's JSON says whether the link landed (`task_link`).
+// ---------------------------------------------------------------------------
+
+/// Run `temper resource create --type session … --task <needle>` through the real binary and
+/// parse its stdout as exactly one JSON document. Stdout only: the tracing warn rides stderr.
+async fn create_session_via_cli(
+    app: &common::E2eTestApp,
+    title: &str,
+    task_needle: &str,
+) -> serde_json::Value {
+    let args = [
+        "resource",
+        "create",
+        "--type",
+        "session",
+        "--title",
+        title,
+        "--context",
+        "@me/myapp",
+        "--task",
+        task_needle,
+        "--format",
+        "json",
+    ];
+    let output = common::run_temper_cli_with_stdin(app, "Session body.\n", &args)
+        .await
+        .expect("cli run");
+    assert!(
+        output.status.success(),
+        "cli {args:?} failed: stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "cli {args:?} did not emit exactly one JSON document ({e}): {}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    })
+}
+
+/// Seed a context and one task; return the app and the task's id.
+async fn app_with_one_task(pool: sqlx::PgPool) -> (common::E2eTestApp, uuid::Uuid) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp", None)
+        .await
+        .expect("create myapp context");
+    seed_task(&app.client, "myapp", "implement-widget", "Implement Widget").await;
+    let task_id = *resolve_by_title(&app.client, "myapp", "task", "Implement Widget")
+        .await
+        .id
+        .as_uuid();
+    (app, task_id)
+}
+
+/// The session's outgoing `advances` edge targets exactly `task_id`.
+async fn assert_one_advances_edge_to(
+    app: &common::E2eTestApp,
+    created: &serde_json::Value,
+    task_id: uuid::Uuid,
+) {
+    let session_id: uuid::Uuid = created["id"]
+        .as_str()
+        .expect("created id")
+        .parse()
+        .expect("created id is a uuid");
+    let edges = app
+        .client
+        .resources()
+        .edges(session_id)
+        .await
+        .expect("fetch session edges");
+    let outgoing: Vec<_> = edges
+        .iter()
+        .filter(|e| e.direction == temper_core::types::blob::BlobRelationEdgeDirection::Outgoing)
+        .collect();
+    assert_eq!(outgoing.len(), 1, "one outgoing edge; got {edges:?}");
+    assert_eq!(outgoing[0].label, "advances");
+    assert_eq!(outgoing[0].peer_id, task_id);
+}
+
+/// The JSON reports a landed link: status, the task's id and ref, and the edge handle.
+fn assert_linked(created: &serde_json::Value, needle: &str, task_id: uuid::Uuid) {
+    let link = &created["task_link"];
+    assert_eq!(link["status"], "linked", "task_link: {created}");
+    assert_eq!(link["requested"], needle);
+    assert_eq!(link["task_id"], task_id.to_string());
+    assert_eq!(
+        link["task_ref"],
+        format!("implement-widget-{task_id}"),
+        "task_ref is the decorated ref"
+    );
+    assert!(
+        link["edge_handle"]
+            .as_str()
+            .is_some_and(|h| h.parse::<uuid::Uuid>().is_ok()),
+        "edge_handle is a uuid: {link}"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cli_task_flag_accepts_a_decorated_ref(pool: sqlx::PgPool) {
+    let (app, task_id) = app_with_one_task(pool).await;
+    let needle = format!("implement-widget-{task_id}");
+    let created = create_session_via_cli(&app, "Ref Linked Session", &needle).await;
+    assert_linked(&created, &needle, task_id);
+    assert_one_advances_edge_to(&app, &created, task_id).await;
+}
+
+/// A ref resolves on its trailing UUID: a stale slug half still links the task it names.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cli_task_flag_accepts_a_bare_uuid_and_a_stale_slug_ref(pool: sqlx::PgPool) {
+    let (app, task_id) = app_with_one_task(pool).await;
+
+    let bare = task_id.to_string();
+    let created = create_session_via_cli(&app, "Uuid Linked Session", &bare).await;
+    assert_linked(&created, &bare, task_id);
+    assert_one_advances_edge_to(&app, &created, task_id).await;
+
+    let stale = format!("a-renamed-title-{task_id}");
+    let created = create_session_via_cli(&app, "Stale Ref Linked Session", &stale).await;
+    assert_linked(&created, &stale, task_id);
+    assert_one_advances_edge_to(&app, &created, task_id).await;
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cli_task_flag_accepts_a_title_slug(pool: sqlx::PgPool) {
+    let (app, task_id) = app_with_one_task(pool).await;
+    let created = create_session_via_cli(&app, "Slug Linked Session", "implement-widget").await;
+    assert_linked(&created, "implement-widget", task_id);
+    assert_one_advances_edge_to(&app, &created, task_id).await;
+}
+
+/// An unmatched `--task` still creates the session, exits 0, and says so on stdout: the JSON's
+/// `task_link.status` is `not_found` for an unknown slug and for a ref that names nothing, and
+/// `lookup_failed` for an ambiguous slug suffix and for a ref that names a resource that is not a
+/// task. No edge in any case.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cli_task_flag_unmatched_is_visible_in_the_json(pool: sqlx::PgPool) {
+    let (app, _task_id) = app_with_one_task(pool).await;
+    // A second `-widget` task makes the `widget` suffix ambiguous.
+    seed_task(&app.client, "myapp", "other-widget", "Other Widget").await;
+
+    let cases = [
+        ("does-not-exist-anywhere", "not_found"),
+        (
+            "implement-widget-01a1f8f5-4b02-72e2-9ae8-000000000000",
+            "not_found",
+        ),
+        ("widget", "lookup_failed"),
+    ];
+    for (i, (needle, status)) in cases.iter().enumerate() {
+        let created = create_session_via_cli(&app, &format!("Unlinked Session {i}"), needle).await;
+        let link = &created["task_link"];
+        assert_eq!(link["status"], *status, "needle {needle}: {created}");
+        assert_eq!(link["requested"], *needle);
+        assert!(
+            link["detail"].as_str().is_some_and(|d| d.contains(needle)),
+            "detail names the needle: {link}"
+        );
+        assert!(
+            link.get("task_id").is_none(),
+            "no task_id on a miss: {link}"
+        );
+        let session_id: uuid::Uuid = created["id"].as_str().unwrap().parse().unwrap();
+        let edges = app.client.resources().edges(session_id).await.unwrap();
+        assert!(edges.is_empty(), "no edge on a miss; got {edges:?}");
+    }
+
+    // A ref to a session — not a task — is refused by the lookup, never linked.
+    let first = create_session_via_cli(&app, "Session As Target", "does-not-exist-anywhere").await;
+    let session_ref = first["ref"].as_str().expect("ref").to_string();
+    let created = create_session_via_cli(&app, "Session To Session", &session_ref).await;
+    let link = &created["task_link"];
+    assert_eq!(link["status"], "lookup_failed", "{created}");
+    assert!(
+        link["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("not a task")),
+        "detail says it is not a task: {link}"
+    );
+    let session_id: uuid::Uuid = created["id"].as_str().unwrap().parse().unwrap();
+    assert!(app
+        .client
+        .resources()
+        .edges(session_id)
+        .await
+        .unwrap()
+        .is_empty());
 }
