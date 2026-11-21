@@ -1056,8 +1056,9 @@ $function$;
 -- It pins lock_timeout = 0, as resource_erasure_execute, edge_erasure_execute and
 -- block_history_scrub_execute do (20261015100000_erasure_acts_pin_lock_timeout.sql): the edge
 -- step's FOR UPDATE waits on the edges' writers in this function's own body, and a lock_timeout
--- set on the pool, the role or the database would otherwise end that wait with 55P03, which the
--- service does not retry.
+-- set on the session, the pool, the role or the database would otherwise end that wait with
+-- 55P03. The service door also sets lock_timeout = 0 on the act's transaction
+-- (operator_still_holds), so the pin is what holds for any other caller of the function.
 CREATE OR REPLACE FUNCTION principal_erasure_execute(p_subject uuid, p_operator uuid, p_emitter uuid, p_request_ref uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
