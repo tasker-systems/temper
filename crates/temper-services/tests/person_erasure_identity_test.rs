@@ -1093,22 +1093,17 @@ async fn a_queued_token_never_outlives_its_window(pool: PgPool) {
 /// Reset the schema to a clean, un-seeded baseline (the person-erasure suites' helper).
 async fn reset_namespace(pool: &PgPool) {
     use sqlx::Executor;
-    pool.execute("DROP SCHEMA IF EXISTS sensitivity CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    // In batches, never one `DROP SCHEMA public CASCADE`: see `temper_substrate::test_schema`.
+    temper_substrate::test_schema::drop_test_schemas(pool).await;
+    pool.execute("CREATE SCHEMA public;")
         .await
-        .expect("drop sensitivity, recreate public schema");
+        .expect("recreate the public schema");
     temper_substrate::MIGRATOR
         .run(pool)
         .await
         .expect("re-apply the migration chain");
-    pool.execute(
-        "DO $$ DECLARE r record; BEGIN \
-           FOR r IN SELECT tablename FROM pg_tables \
-                     WHERE schemaname = 'public' AND tablename LIKE 'kb\\_%' \
-           LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE'; \
-           END LOOP; END $$;",
-    )
-    .await
-    .expect("truncate kb_ data tables to a seed-free baseline");
+    // One table per transaction: see `temper_substrate::test_schema::truncate_kb_tables`.
+    temper_substrate::test_schema::truncate_kb_tables(pool).await;
 }
 
 /// FAILS IF replay diverges from the live act over the subject's admin events: the standing and

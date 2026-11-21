@@ -706,6 +706,7 @@ impl From<temper_core::error::TemperError> for ApiError {
             TemperError::ResourceBusy => ApiError::ResourceBusy,
             TemperError::PreconditionFailed(f) => ApiError::PreconditionFailed(f),
             TemperError::Api(s) => ApiError::Internal(s),
+            e @ TemperError::ServerError { .. } => ApiError::Internal(e.to_string()),
             TemperError::SystemAccessRequired(details) => {
                 ApiError::SystemAccessRequired {
                     details: Box::new(SystemAccessDetails {

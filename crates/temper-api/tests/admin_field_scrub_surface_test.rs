@@ -298,8 +298,8 @@ async fn handle_of(app: &common::TestApp, op_token: &str, resource: Uuid, key: &
 }
 
 /// Forge the title guard's inversion (spec witness 7's shape, committed): a `resource_updated`
-/// whose id sorts just before the last one, projected, so the walk's last title is not the
-/// projection's.
+/// whose `seq` (and id) sort just before the last one's, projected after it, so the walk's last
+/// title is not the projection's.
 async fn invert_the_title_order(pool: &PgPool, resource: Uuid) {
     let last: Uuid = sqlx::query_scalar(
         "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
@@ -316,8 +316,9 @@ async fn invert_the_title_order(pool: &PgPool, resource: Uuid) {
     let mut tx = pool.begin().await.expect("begin");
     sqlx::query(
         "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, producing_anchor_table, \
-                                producing_anchor_id, payload, category) \
-         SELECT $1, et.id, $2, h.anchor_table, h.anchor_id, $3, 'domain' \
+                                producing_anchor_id, payload, category, seq) \
+         SELECT $1, et.id, $2, h.anchor_table, h.anchor_id, $3, 'domain', \
+                (SELECT l.seq - 1 FROM kb_events l WHERE l.id = $5) \
            FROM kb_event_types et, kb_resource_homes h \
           WHERE et.name = 'resource_updated' AND h.resource_id = $4",
     )
@@ -325,6 +326,7 @@ async fn invert_the_title_order(pool: &PgPool, resource: Uuid) {
     .bind(emitter)
     .bind(&payload)
     .bind(resource)
+    .bind(last)
     .execute(&mut *tx)
     .await
     .expect("fixture: the inverted event");

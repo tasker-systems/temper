@@ -4646,11 +4646,10 @@ async fn the_record_attests_every_target_and_repeats_nothing(pool: sqlx::PgPool)
 /// built directly: R with two LIVE edges to one target, one kind, one home, different labels (the
 /// body's label NULL collides on `uq_kb_edges_assertion` while both are live). The act's events
 /// are appended with the erasure FIRST — `resource_erased`, then one `relationship_folded` per
-/// edge, all under one correlation id, in one transaction — so on local PG18 (native `uuidv7()`,
-/// monotonic per backend) the erasure's id sorts below its folds: exactly the inversion
-/// PG17/Neon's unordered-within-a-millisecond ids produce. Each fold projects the way
-/// `resource_erasure_execute` projects it, then the body runs with the erasure's id. Replay walks
-/// `ORDER BY e.id`, meets the erasure before either fold, and must still complete byte-identical.
+/// edge, all under one correlation id, in one transaction. Replay walks one transaction's events
+/// in append order (`seq`; see `replay::replay`), so it meets the erasure before either fold
+/// however their ids sort. Each fold projects the way `resource_erasure_execute` projects it, then
+/// the body runs with the erasure's id. Replay must still complete byte-identical.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
@@ -4709,13 +4708,7 @@ async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::Pg
 
     // The act's events, erasure first, one transaction (one backend), one correlation id.
     let correlation = Uuid::now_v7();
-    let mut tx = pool.begin().await.unwrap();
-    let erasure: Uuid = sqlx::query_scalar(
-        "SELECT _event_append('resource_erased', $1, NULL, NULL, $2, \
-                              p_references => $3, p_correlation => $4)",
-    )
-    .bind(emitter)
-    .bind(serde_json::json!({
+    let erasure_payload = serde_json::json!({
         "subject_table": "kb_resources",
         "subject_id": r.uuid(),
         "actor": emitter,
@@ -4724,7 +4717,14 @@ async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::Pg
         "targets": [],
         "remainder": [],
         "ledger_remainder": [],
-    }))
+    });
+    let mut tx = pool.begin().await.unwrap();
+    let erasure: Uuid = sqlx::query_scalar(
+        "SELECT _event_append('resource_erased', $1, NULL, NULL, $2, \
+                              p_references => $3, p_correlation => $4)",
+    )
+    .bind(emitter)
+    .bind(&erasure_payload)
     .bind(serde_json::json!([
         {"rel": "subject", "target": {"kind": "kb_resources", "id": r.uuid()}},
         {"rel": "request", "target": {"kind": "kb_events", "id": correlation}},
@@ -4733,6 +4733,14 @@ async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::Pg
     .fetch_one(&mut *tx)
     .await
     .expect("append the erasure first");
+    // Projected as the act projects it: replay calls the same wrapper at this event, so the
+    // live ledger must carry the legacy erasure that wrapper records.
+    sqlx::query("SELECT _project_resource_erased_redactions($1, $2)")
+        .bind(erasure)
+        .bind(&erasure_payload)
+        .execute(&mut *tx)
+        .await
+        .expect("project the erasure as the act does");
     for edge in &edges {
         let payload = serde_json::json!({"edge_id": edge, "reason": "resource_erased"});
         let fold: Uuid = sqlx::query_scalar(
@@ -4761,11 +4769,13 @@ async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::Pg
         .expect("the body runs with both edges folded");
     tx.commit().await.unwrap();
 
-    // The precondition that makes this witness bite: the erasure sorts BELOW both of its folds,
-    // so the walk meets it first.
+    // The precondition that makes this witness bite: the erasure walks BEFORE both of its folds,
+    // in its own transaction, so the walk meets it first.
     let folds_after: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-          WHERE t.name = 'relationship_folded' AND e.correlation_id = $1 AND e.id > $2",
+           JOIN kb_events er ON er.id = $2 \
+          WHERE t.name = 'relationship_folded' AND e.correlation_id = $1 \
+            AND e.xact_id = er.xact_id AND e.seq > er.seq",
     )
     .bind(correlation)
     .bind(erasure)
@@ -4774,7 +4784,7 @@ async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::Pg
     .unwrap();
     assert_eq!(
         folds_after, 2,
-        "both folds must sort after the erasure, or this ledger is not the inverted one"
+        "both folds must walk after the erasure, or this ledger is not the inverted one"
     );
     let ended: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_edges WHERE id = ANY($1) AND is_folded AND label IS NULL",
@@ -4815,8 +4825,6 @@ async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) 
 
     let request_ref = Uuid::now_v7();
     let erasure = execute_act_with_ref(&pool, leak.resource.uuid(), request_ref).await;
-    // Separate milliseconds, so each later transaction's event ids sort after the one before.
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
     // A lawful write after the act that the body would undo if it ran again: the soft delete of
     // the husk stamps `updated`.
@@ -4839,7 +4847,6 @@ async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) 
     .fetch_one(&pool)
     .await
     .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
     // A retried request under the same reference, refused as already erased.
     let refused: Uuid =
@@ -4852,20 +4859,22 @@ async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) 
             .await
             .expect("the refusal records");
 
-    // Preconditions that make this witness bite: the refusal carries X and sorts after the
-    // delete, which sorts after every event of the act's own transaction; the live husk's
+    // Preconditions that make this witness bite: the refusal carries X and walks after the
+    // delete, which walks after every event of the act's own transaction; the live husk's
     // `updated` is the delete's, not the act's.
-    let (span_max, refused_corr, act_at, refused_at): (
+    let (span_last, refused_corr, act_at, refused_at): (
         Uuid,
         Uuid,
         chrono::DateTime<chrono::Utc>,
         chrono::DateTime<chrono::Utc>,
-    ) = sqlx::query_as(
-        "SELECT (SELECT max(s.id::text)::uuid FROM kb_events s \
-                  WHERE s.correlation_id = $1 AND s.occurred_at = er.occurred_at), \
+    ) = sqlx::query_as(&format!(
+        "SELECT (SELECT e.id FROM kb_events e \
+                  WHERE e.correlation_id = $1 AND e.occurred_at = er.occurred_at \
+                  ORDER BY row_number() OVER (ORDER BY {}) DESC LIMIT 1), \
                 rf.correlation_id, er.occurred_at, rf.occurred_at \
            FROM kb_events er, kb_events rf WHERE er.id = $2 AND rf.id = $3",
-    )
+        replay::WALK_ORDER
+    ))
     .bind(request_ref)
     .bind(erasure)
     .bind(refused)
@@ -4880,8 +4889,17 @@ async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) 
         act_at, refused_at,
         "the refusal is not in the act's transaction"
     );
-    assert!(
-        span_max < deleted && deleted < refused,
+    let walked: Vec<Uuid> = sqlx::query_scalar(&format!(
+        "SELECT e.id FROM kb_events e WHERE e.id = ANY($1) ORDER BY {}",
+        replay::WALK_ORDER
+    ))
+    .bind(vec![span_last, deleted, refused])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        walked,
+        vec![span_last, deleted, refused],
         "walk order is: the act's span, the delete, the refusal"
     );
     let husk_updated_sql = "SELECT r.updated = d.occurred_at FROM kb_resources r, kb_events d \
@@ -4911,14 +4929,16 @@ async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) 
     );
 }
 
-/// (21, the replay bypass) A lawful write can sort after the act in walk order: its transaction
-/// committed before the act's, but event ids are uuidv7, unordered across transactions within a
-/// millisecond on PG17. The ledger's walk-order shape is built here by appending a `property_set`
-/// on R through the real write path AFTER the act commits, inside a transaction that sets
-/// `temper.replaying` — the setting the replay walk sets around each event — so the live write
-/// guard lets it through as the walk's would. The witness is that replay projects that event
-/// where it sorts instead of aborting on the write guard, and comes back byte-identical. The
-/// setting is transaction-local: the same connection no longer carries it after the commit.
+/// (21, the replay bypass) A ledger can hold a write to R that sorts after the act in walk order.
+/// No live writer produces one: a writer that locks R before it appends waits on the act's
+/// `FOR UPDATE` and is then refused by the write guard, and so is a writer whose first lock is
+/// the guard in its projector. The shape is forged here, to witness what replay does with it:
+/// a `property_set` on R through the real write path AFTER the act commits, inside a
+/// transaction that sets `temper.replaying` — the setting the replay walk sets around each
+/// event — so the live write guard lets it through as the walk's would. The witness is that
+/// replay projects that event where it sorts instead of aborting on the write guard, and comes
+/// back byte-identical. The setting is transaction-local: the same connection no longer carries
+/// it after the commit.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
@@ -4948,7 +4968,6 @@ async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgP
     .await
     .unwrap();
     let erasure = execute_act(&pool, resource.uuid()).await;
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
     let mut conn = pool.acquire().await.unwrap();
     let mut tx = sqlx::Connection::begin(&mut *conn).await.unwrap();
@@ -4986,8 +5005,17 @@ async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgP
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(
-        late_event > erasure,
+    let walked: Vec<Uuid> = sqlx::query_scalar(&format!(
+        "SELECT e.id FROM kb_events e WHERE e.id = ANY($1) ORDER BY {}",
+        replay::WALK_ORDER
+    ))
+    .bind(vec![erasure, late_event])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        walked,
+        vec![erasure, late_event],
         "precondition: the write sorts after the act in walk order"
     );
 
@@ -5012,6 +5040,11 @@ async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgP
 /// names no `redacted_fields` and records every ledger path it left in `ledger_remainder`, then the
 /// projection-side body. The ledger's text is untouched. Cut 2's act no longer makes one, but every
 /// resource erased before it shipped is one until the completion pass reaches it.
+///
+/// After the act commits, `_erasure_legacy_backfill()` runs, as `20261201000030` runs it over a
+/// ledger erased before the erasure record existed: the first record's `erased` legacy erasure,
+/// and a second, `pending`, legacy erasure declared because the husk still owes its completion
+/// pass.
 async fn simulate_cut1_husk(pool: &PgPool, resource: Uuid) -> Uuid {
     let (operator, emitter) = system_actor(pool).await;
     let request_ref = Uuid::now_v7();
@@ -5060,6 +5093,13 @@ async fn simulate_cut1_husk(pool: &PgPool, resource: Uuid) -> Uuid {
         .await
         .unwrap();
     tx.commit().await.unwrap();
+    // Its own transaction, after the act's: replay walks events in append order, so the
+    // backfill's erasure_declared walks after the first record and before whatever the test
+    // appends next.
+    sqlx::query("SELECT _erasure_legacy_backfill()")
+        .execute(pool)
+        .await
+        .unwrap();
     erased
 }
 
@@ -6825,7 +6865,9 @@ async fn a_cut1_husk_completes_once_and_replays_byte_identical(pool: sqlx::PgPoo
     // The body changed nothing but its two stamps: only the redaction rows (and the ledger,
     // which is not a projection) moved, plus the two columns the body stamps from the erasing
     // event, as replay's arm does at the record's position: `kb_resources.updated` (its
-    // occurred_at, asserted below) and `kb_properties.last_event_id` (its id).
+    // occurred_at, asserted below) and `kb_properties.last_event_id` (its id). The record also
+    // closes the husk's `pending` legacy member, which `_erasure_legacy_backfill` declared:
+    // `status` becomes `erased` and `erased_by_event_id` the completion record.
     let projection_after = replay::dump_projections(&pool).await.unwrap();
     for ((table, a), (_, b)) in projection_before.iter().zip(projection_after.iter()) {
         if table != "kb_event_field_redactions" && a != b {
@@ -6846,6 +6888,11 @@ async fn a_cut1_husk_completes_once_and_replays_byte_identical(pool: sqlx::PgPoo
                                     && k.as_str() == "last_event_id"
                                     && y[k.as_str()] == serde_json::json!(completion)
                                     && **v != y[k.as_str()])
+                                && !(table == "kb_erasure_members"
+                                    && y["member_id"] == serde_json::json!(r)
+                                    && y["erased_by_event_id"] == serde_json::json!(completion)
+                                    && x["status"] == "pending"
+                                    && matches!(k.as_str(), "status" | "erased_by_event_id"))
                         })
                         .map(|(k, v)| format!("{k}: {v} -> {}", y[k.as_str()]))
                         .collect::<Vec<_>>()
@@ -6872,6 +6919,25 @@ async fn a_cut1_husk_completes_once_and_replays_byte_identical(pool: sqlx::PgPoo
     assert!(
         stamped,
         "the husk's updated is the completion record's occurred_at"
+    );
+    let legacy: Vec<(String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT m.status, m.erased_by_event_id FROM kb_erasure_members m \
+           JOIN kb_erasures e ON e.id = m.erasure_id \
+          WHERE e.legacy AND m.member_table = 'kb_resources' AND m.member_id = $1 \
+          ORDER BY e.declared_event_id <> $2",
+    )
+    .bind(r)
+    .bind(first)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        legacy,
+        vec![
+            ("erased".to_owned(), Some(first)),
+            ("erased".to_owned(), Some(completion)),
+        ],
+        "the first record's legacy member, and the backfill's, closed by the completion record"
     );
 
     // A third run has nothing left: refused, nothing changes.

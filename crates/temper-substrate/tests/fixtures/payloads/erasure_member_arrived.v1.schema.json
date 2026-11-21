@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErasureMemberArrived",
+  "description": "`erasure_member_arrived` — an item mapped into an erasure after its declaration, by the arrival\ntrigger, the closing survey or the straggler detector. Projected as a `late` member row.",
+  "type": "object",
+  "properties": {
+    "erasure_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "member": {
+      "$ref": "#/$defs/ErasureMemberRef"
+    },
+    "parent": {
+      "description": "The container member of the same erasure that holds the item.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErasureMemberRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source": {
+      "$ref": "#/$defs/ErasureArrivalSource"
+    }
+  },
+  "required": [
+    "erasure_id",
+    "member",
+    "source"
+  ],
+  "$defs": {
+    "ErasureArrivalSource": {
+      "description": "What found the item an [`ErasureMemberArrived`] record maps.",
+      "oneOf": [
+        {
+          "description": "The arrival trigger, as the item was written into the erasure's scope.",
+          "type": "string",
+          "const": "trigger"
+        },
+        {
+          "description": "The closing survey, which seals the erasure's scope.",
+          "type": "string",
+          "const": "closing_survey"
+        },
+        {
+          "description": "The straggler detector, after the scope was sealed.",
+          "type": "string",
+          "const": "straggler"
+        }
+      ]
+    },
+    "ErasureMemberRef": {
+      "description": "An item an erasure member names: its table, as the DDL spells it, and its id.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "table": {
+          "$ref": "#/$defs/ErasureMemberTable"
+        }
+      },
+      "required": [
+        "table",
+        "id"
+      ]
+    },
+    "ErasureMemberTable": {
+      "description": "A table whose rows an erasure member can name. Serializes as the DDL spells the table.\nOrdered by declaration, so it can key a map that serializes with stable bytes.",
+      "type": "string",
+      "enum": [
+        "kb_resources",
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_blobs",
+        "kb_edges"
+      ]
+    }
+  }
+}

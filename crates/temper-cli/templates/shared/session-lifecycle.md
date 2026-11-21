@@ -53,14 +53,17 @@ A findings document, not a diary. Its parts, in order:
 
 {% if surface == "cli" -%}
 ```bash
-cat note.md | temper resource create --type session --title "<title>" --context @me/<ctx> --task <task-ref>
+K=$(uuidgen)
+cat note.md | temper resource create --type session --title "<title>" --context @me/<ctx> --task <task-ref> --idempotency-key "$K"
 ```
 Always pipe the body: without stdin, `create` writes only a title heading. `--task` takes the task's ref
 or UUID (or its title slug) and links the note to it, which is how a resume finds the task's latest
 note. An unmatched `--task` still saves the note, unlinked: read `task_link.status` in the JSON, and
 anything but `linked` means no link. `create` prints the new resource as JSON; its `ref` is what `--from-session` takes.
-If you cannot read that JSON, the note may still have been saved. Before you save it again, list
-by `--title-contains` and look for it (`reference.md`, *A Failed Pipe Is Not a Failed Write*).
+Keep `$K` until you have read that JSON: re-running the same command with the same key returns the
+note already saved instead of saving a second (`reference.md`, *Retrying a Create*). If you cannot
+read that JSON and no longer have the key, the note may still have been saved. Before you save it
+again, list by `--title-contains` and look for it (`reference.md`, *A Failed Pipe Is Not a Failed Write*).
 {%- else -%}
 ```
 Tool: create_resource

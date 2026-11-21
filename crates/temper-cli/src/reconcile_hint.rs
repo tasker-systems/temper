@@ -1,4 +1,4 @@
-//! Reconcile-don't-retry guidance for the authenticated write path.
+//! Reconcile-or-replay guidance for the authenticated write path.
 //!
 //! A resource-mutating call (`resource create`, `resource update`) can fail with
 //! a transport-level network error **after the server has already committed the
@@ -9,17 +9,20 @@
 //! the row already durable). See [issue #581].
 //!
 //! The client cannot tell "never committed" from "committed but un-acked" — it
-//! only sees the dropped connection. The danger is the *reaction*: because
-//! `create` mints a fresh identifier per invocation and the write path carries
-//! no idempotency key, a naive retry **creates a duplicate** rather than
-//! converging on the already-committed resource. The correct recovery is
-//! **reconcile, not retry**: confirm server state before re-issuing.
+//! only sees the dropped connection. What makes a retry safe differs by act:
 //!
-//! Until a server-side idempotency key or an off-request post-write tail lands,
-//! this hint makes the hazard visible at the exact moment a write errors, so the
-//! manual mitigation is not tribal knowledge. It fires only for the two commands
-//! the issue names (`create`/`update`) and only on a genuine transport error —
-//! not on a 4xx/5xx the server actually returned, where the failure is
+//! - **A create carries an idempotency key.** The server claims the `(owner, key)`
+//!   slot atomically with the create, so a create re-sent with the same key returns
+//!   the first write's resource instead of minting a second. A retry is a new CLI
+//!   invocation, so the key must outlive the process: the caller supplies it with
+//!   `--idempotency-key`, or [`pin_create_idempotency_key`] mints it before dispatch
+//!   and the hint printed on a network error names it, so the retry can send it back.
+//! - **An update has no key**, and a create re-sent without its first key mints a
+//!   duplicate. For those the recovery is **reconcile first**: confirm server state
+//!   before re-issuing.
+//!
+//! The hint fires only for those two commands and only on a genuine transport
+//! error — not on a 4xx/5xx the server actually returned, where the failure is
 //! unambiguous and no reconcile is needed.
 //!
 //! [issue #581]: https://github.com/tasker-systems/temper/issues/581
@@ -38,18 +41,29 @@
 //! clears that new value, and a retried keep-mode scrub redacts what became prior. So the field
 //! scrub has its own hint, which names the two answers that mean the act landed.
 
+use std::borrow::Cow;
+use std::sync::Mutex;
+
 use temper_core::error::TemperError;
+use uuid::Uuid;
 
 use crate::cli::{AdminAction, AdminErasureAction, Commands, ResourceAction};
 
-/// The multi-line guidance printed after a lost-ack write failure. Written to
-/// **stderr** by the caller (via [`crate::output::hint`]) so it never corrupts
-/// the JSON-by-default stdout payload.
+/// The opening of a keyed create's hint, which also fires on a server 5xx.
+const KEYED_PREAMBLE: &str = "\
+note: a create can fail with a network error or a server 5xx *after* the server has already committed it.
+This is a lost acknowledgment, not a lost write — it clusters during deploy / cold-start windows.";
+
+/// The multi-line guidance printed after a lost-ack write failure that has no idempotency key to
+/// replay: an update, or a create whose key is not known. Written to **stderr** by the caller (via
+/// [`crate::output::hint`]) so it never corrupts the JSON-by-default stdout payload; in JSON mode
+/// it rides the error payload's `hint`.
 pub const RECONCILE_HINT: &str = "\
 note: a write can fail with a network error *after* the server has already committed it.
 This is a lost acknowledgment, not a lost write — it clusters during deploy / cold-start windows.
-Do NOT blindly retry: a retried `create` mints a duplicate, since the write path has no idempotency key.
-First reconcile, then re-issue only if the write genuinely did not land:
+A `create` is safe to re-issue with the idempotency key it was first sent with (`--idempotency-key <uuid>`):
+the server returns the first write if it landed. Without that key a retried `create` mints a duplicate,
+and an `update` has no key, so reconcile first and re-issue only if the write genuinely did not land:
   • create — `temper resource list --title-contains <title>` to see whether the resource is present
   • update — `temper resource show <ref>` (add `--edges` for a `--goal`/link change) to see whether the mutation applied";
 
@@ -68,11 +82,71 @@ prior (keep mode: a plan with no redacted_fields) or that the field is already c
 Re-issue with --execute only if the survey shows the act did not land: a write to the field since
 then would make a retry act on the new value.";
 
+/// The guidance printed after a create sent with `key` fails with a network error or a server
+/// 5xx: re-issuing it with the same key is the safe retry, so the hint names the key and needs no
+/// reconcile step.
+pub fn keyed_create_hint(key: Uuid) -> String {
+    format!(
+        "{KEYED_PREAMBLE}\n\
+This create was sent with idempotency key {key}. Re-issue the same command with `--idempotency-key {key}`:
+if the first attempt landed, the server returns that resource instead of creating a second; if it did not,
+the create runs once."
+    )
+}
+
+/// Give a `resource create` the idempotency key it will send and return it: the caller's
+/// `--idempotency-key`, else a key minted into the command's `minted_idempotency_key`; `None` for
+/// any other command. Run **before** dispatch, so the key exists in `main` beside the error the
+/// create may return, and [`reconcile_hint`] can name it.
+///
+/// The create sends this key, with one exception: a segmented create that resumes an interrupted
+/// attempt from its local manifest continues under, and the hint names, the key that attempt
+/// saved ([`record_resumed_create_key`]). Every in-process retry of a request re-sends the same body
+/// and `Idempotency-Key` header, so one invocation is one key.
+pub fn pin_create_idempotency_key(command: &mut Commands) -> Option<Uuid> {
+    match command {
+        Commands::Resource {
+            action:
+                ResourceAction::Create {
+                    idempotency_key,
+                    minted_idempotency_key,
+                    ..
+                },
+        } => Some(
+            idempotency_key
+                .unwrap_or_else(|| *minted_idempotency_key.get_or_insert_with(Uuid::now_v7)),
+        ),
+        _ => None,
+    }
+}
+
+/// The key a segmented create resumed under, when it resumed: `Some(None)` for a legacy manifest
+/// that saved no key. Read only by `main`, through [`LostAckProne::as_dispatched`], and only for
+/// a top-level `resource create`, which runs one create per process; an in-process caller that
+/// creates many (`memory migrate`) may write it, and nothing reads it there.
+static RESUMED_CREATE_KEY: Mutex<Option<Option<Uuid>>> = Mutex::new(None);
+
+/// Record that this process's create resumed an interrupted attempt under `key`, the key that
+/// attempt saved (`None`: it saved none), so the network-error hint names the key the server saw
+/// rather than the one pinned before dispatch.
+pub fn record_resumed_create_key(key: Option<Uuid>) {
+    if let Ok(mut slot) = RESUMED_CREATE_KEY.lock() {
+        *slot = Some(key);
+    }
+}
+
+fn resumed_create_key() -> Option<Option<Uuid>> {
+    RESUMED_CREATE_KEY.lock().ok().and_then(|slot| *slot)
+}
+
 /// A write whose outcome a lost acknowledgment can hide, and so which errors call for reconciling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LostAckProne {
-    /// `resource create` / `update`: only a transport error is ambiguous.
-    ResourceWrite,
+    /// `resource create`: only a transport error is ambiguous. With its key known, the safe retry
+    /// is a replay of that key; without it, a reconcile.
+    ResourceCreate { idempotency_key: Option<Uuid> },
+    /// `resource update`: only a transport error is ambiguous, and there is no key to replay.
+    ResourceUpdate,
     /// A resource, principal or block-history erasure act run with `--execute`: any error but a
     /// refusal or a local parse failure is.
     ErasureAct,
@@ -80,7 +154,23 @@ pub enum LostAckProne {
     FieldScrubAct,
 }
 
-/// Which kind of lost-ack-prone write `command` is, else `None`: `resource create` (a retry mints a duplicate), `resource update`
+impl LostAckProne {
+    /// This classification as dispatch left it: a create that resumed an interrupted attempt names
+    /// the key it resumed under ([`record_resumed_create_key`]) instead of the one pinned before
+    /// dispatch. Every other classification is returned unchanged.
+    pub fn as_dispatched(self) -> Self {
+        match (self, resumed_create_key()) {
+            (LostAckProne::ResourceCreate { .. }, Some(idempotency_key)) => {
+                LostAckProne::ResourceCreate { idempotency_key }
+            }
+            (other, _) => other,
+        }
+    }
+}
+
+/// Which kind of lost-ack-prone write `command` is, else `None`: `resource create` (a retry without
+/// its key mints a duplicate; the key is read from the command, so pin it first with
+/// [`pin_create_idempotency_key`]), `resource update`
 /// (re-applies, and a `--goal`/link change re-asserts an edge), and an erasure act run with
 /// `--execute`. Computed from `&cli.command` **before** dispatch consumes it, then paired with
 /// the resulting error by [`reconcile_hint`].
@@ -91,8 +181,18 @@ pub enum LostAckProne {
 pub fn lost_ack_prone(command: &Commands) -> Option<LostAckProne> {
     match command {
         Commands::Resource {
-            action: ResourceAction::Create { .. } | ResourceAction::Update { .. },
-        } => Some(LostAckProne::ResourceWrite),
+            action:
+                ResourceAction::Create {
+                    idempotency_key,
+                    minted_idempotency_key,
+                    ..
+                },
+        } => Some(LostAckProne::ResourceCreate {
+            idempotency_key: idempotency_key.or(*minted_idempotency_key),
+        }),
+        Commands::Resource {
+            action: ResourceAction::Update { .. },
+        } => Some(LostAckProne::ResourceUpdate),
         Commands::Admin {
             action: AdminAction::Erasure { action },
         } => match action {
@@ -119,19 +219,26 @@ pub fn lost_ack_prone(command: &Commands) -> Option<LostAckProne> {
 /// answer already printed, or the server's `409`) and a request refused before it
 /// ran (`BadRequest`: a ref the CLI refused locally), since a gateway's `5xx` can
 /// front an act that completed. A server `400` arrives untyped, as `Api`, so it
-/// gets the hint too.
-pub fn reconcile_hint(prone: Option<LostAckProne>, err: &TemperError) -> Option<&'static str> {
+/// gets the hint too. A create whose key is known is told to replay it ([`keyed_create_hint`]), on
+/// a network error or a server 5xx: both can hide a create that landed, and the replay is safe.
+pub fn reconcile_hint(prone: Option<LostAckProne>, err: &TemperError) -> Option<Cow<'static, str>> {
+    let network = matches!(err, TemperError::Network(_));
+    // A gateway can answer 5xx after the server committed, so a keyed create's outcome is as
+    // unknown there as after a dropped connection. Replaying its key is safe either way.
+    let unknown_outcome =
+        network || matches!(err, TemperError::ServerError { status, .. } if *status >= 500);
+    let unrefused = !matches!(err, TemperError::Conflict(_) | TemperError::BadRequest(_));
     match prone? {
-        LostAckProne::ResourceWrite => {
-            matches!(err, TemperError::Network(_)).then_some(RECONCILE_HINT)
+        LostAckProne::ResourceCreate {
+            idempotency_key: Some(key),
+        } => unknown_outcome.then(|| Cow::Owned(keyed_create_hint(key))),
+        LostAckProne::ResourceCreate {
+            idempotency_key: None,
         }
-        LostAckProne::ErasureAct => {
-            (!matches!(err, TemperError::Conflict(_) | TemperError::BadRequest(_)))
-                .then_some(ERASURE_RECONCILE_HINT)
-        }
+        | LostAckProne::ResourceUpdate => network.then_some(Cow::Borrowed(RECONCILE_HINT)),
+        LostAckProne::ErasureAct => unrefused.then_some(Cow::Borrowed(ERASURE_RECONCILE_HINT)),
         LostAckProne::FieldScrubAct => {
-            (!matches!(err, TemperError::Conflict(_) | TemperError::BadRequest(_)))
-                .then_some(FIELD_SCRUB_RECONCILE_HINT)
+            unrefused.then_some(Cow::Borrowed(FIELD_SCRUB_RECONCILE_HINT))
         }
     }
 }
@@ -159,6 +266,8 @@ mod tests {
             sources_as_edges: false,
             no_source: false,
             preserve_source: false,
+            idempotency_key: None,
+            minted_idempotency_key: None,
             act: crate::cli::ActArgs::default(),
         }
     }
@@ -169,8 +278,126 @@ mod tests {
             lost_ack_prone(&Commands::Resource {
                 action: create_action()
             }),
-            Some(LostAckProne::ResourceWrite)
+            Some(LostAckProne::ResourceCreate {
+                idempotency_key: None
+            })
         );
+    }
+
+    /// FAILS IF pinning overwrites a key the caller gave, mints none for a create, or touches any
+    /// other command; or if the classification does not carry the pinned key to the hint.
+    #[test]
+    fn pinning_keeps_a_given_key_mints_a_missing_one_and_feeds_the_hint() {
+        let given = Uuid::now_v7();
+        let mut keyed = Commands::Resource {
+            action: create_action(),
+        };
+        if let Commands::Resource {
+            action: ResourceAction::Create {
+                idempotency_key, ..
+            },
+        } = &mut keyed
+        {
+            *idempotency_key = Some(given);
+        }
+        assert_eq!(pin_create_idempotency_key(&mut keyed), Some(given));
+        assert_eq!(
+            lost_ack_prone(&keyed),
+            Some(LostAckProne::ResourceCreate {
+                idempotency_key: Some(given)
+            })
+        );
+
+        let mut unkeyed = Commands::Resource {
+            action: create_action(),
+        };
+        let minted = pin_create_idempotency_key(&mut unkeyed).expect("a create gets a key");
+        let Commands::Resource {
+            action:
+                ResourceAction::Create {
+                    idempotency_key,
+                    minted_idempotency_key,
+                    ..
+                },
+        } = &unkeyed
+        else {
+            unreachable!("built as a create")
+        };
+        assert_eq!(
+            *idempotency_key, None,
+            "a minted key never poses as the caller's, which `main` reads as given"
+        );
+        assert_eq!(*minted_idempotency_key, Some(minted));
+        assert_eq!(
+            pin_create_idempotency_key(&mut unkeyed),
+            Some(minted),
+            "a second pin keeps the first key"
+        );
+        assert_eq!(
+            lost_ack_prone(&unkeyed),
+            Some(LostAckProne::ResourceCreate {
+                idempotency_key: Some(minted)
+            })
+        );
+
+        assert_eq!(pin_create_idempotency_key(&mut Commands::Invitations), None);
+    }
+
+    /// FAILS IF a keyed create's network error does not name its key in the flag the retry takes,
+    /// or tells the caller to reconcile instead of replaying.
+    #[test]
+    fn a_keyed_create_network_error_names_the_key_to_replay() {
+        let key = Uuid::now_v7();
+        let hint = reconcile_hint(
+            Some(LostAckProne::ResourceCreate {
+                idempotency_key: Some(key),
+            }),
+            &TemperError::Network("connection reset".into()),
+        )
+        .expect("a network error on a create is hinted");
+        assert!(hint.starts_with(KEYED_PREAMBLE), "{hint}");
+        assert!(hint.contains(&format!("--idempotency-key {key}")), "{hint}");
+        assert!(!hint.contains("--title-contains"), "{hint}");
+    }
+
+    /// FAILS IF a keyed create's server 5xx goes unhinted (a gateway can answer 5xx after the
+    /// create committed), or a 4xx-shaped error, a key-less create or an update is hinted on one.
+    #[test]
+    fn a_keyed_create_server_5xx_names_the_key_and_nothing_else_does() {
+        let key = Uuid::now_v7();
+        let keyed = Some(LostAckProne::ResourceCreate {
+            idempotency_key: Some(key),
+        });
+        let gateway = TemperError::ServerError {
+            status: 504,
+            message: "gateway timeout".into(),
+        };
+        let hint = reconcile_hint(keyed, &gateway).expect("a keyed create's 5xx is hinted");
+        assert!(hint.contains(&format!("--idempotency-key {key}")), "{hint}");
+
+        assert_eq!(
+            reconcile_hint(keyed, &TemperError::Api("unclassified".into())),
+            None
+        );
+        for prone in [
+            LostAckProne::ResourceUpdate,
+            LostAckProne::ResourceCreate {
+                idempotency_key: None,
+            },
+        ] {
+            assert_eq!(reconcile_hint(Some(prone), &gateway), None, "{prone:?}");
+        }
+    }
+
+    /// FAILS IF the key-less hint stops stating present truth: the write path has a key, a create
+    /// replays safely with it, and only a caller without it must reconcile first.
+    #[test]
+    fn the_keyless_hint_names_the_flag_and_keeps_reconcile_first() {
+        assert!(RECONCILE_HINT.starts_with("note: a write can fail with a network error"));
+        assert!(RECONCILE_HINT.contains("--idempotency-key"));
+        assert!(!RECONCILE_HINT.contains("has no idempotency key"));
+        assert!(RECONCILE_HINT.contains("--title-contains"));
+        assert!(RECONCILE_HINT.contains("temper resource show"));
     }
 
     fn erasure(execute: bool) -> Commands {
@@ -200,7 +427,7 @@ mod tests {
             TemperError::Api("504 Gateway Timeout".into()),
         ] {
             assert_eq!(
-                reconcile_hint(prone, &err),
+                reconcile_hint(prone, &err).as_deref(),
                 Some(ERASURE_RECONCILE_HINT),
                 "{err}"
             );
@@ -252,7 +479,7 @@ mod tests {
             TemperError::Api("504 Gateway Timeout".into()),
         ] {
             let hint = reconcile_hint(prone, &err);
-            assert_eq!(hint, Some(FIELD_SCRUB_RECONCILE_HINT), "{err}");
+            assert_eq!(hint.as_deref(), Some(FIELD_SCRUB_RECONCILE_HINT), "{err}");
             let hint = hint.unwrap_or_default();
             assert!(hint.contains("without --execute"), "{hint}");
             assert!(hint.contains("nothing is\nprior"), "{hint}");
@@ -297,20 +524,32 @@ mod tests {
     #[test]
     fn fires_on_write_network_error() {
         let err = TemperError::Network("error sending request".into());
-        assert_eq!(
-            reconcile_hint(Some(LostAckProne::ResourceWrite), &err),
-            Some(RECONCILE_HINT)
-        );
+        for prone in [
+            LostAckProne::ResourceUpdate,
+            LostAckProne::ResourceCreate {
+                idempotency_key: None,
+            },
+        ] {
+            assert_eq!(
+                reconcile_hint(Some(prone), &err).as_deref(),
+                Some(RECONCILE_HINT),
+                "{prone:?}"
+            );
+        }
     }
 
     #[test]
     fn silent_on_write_non_network_error() {
         // A server-returned 409/422/5xx is unambiguous — nothing to reconcile.
         let err = TemperError::Conflict("already exists".into());
-        assert_eq!(
-            reconcile_hint(Some(LostAckProne::ResourceWrite), &err),
-            None
-        );
+        for prone in [
+            LostAckProne::ResourceUpdate,
+            LostAckProne::ResourceCreate {
+                idempotency_key: Some(Uuid::now_v7()),
+            },
+        ] {
+            assert_eq!(reconcile_hint(Some(prone), &err), None, "{prone:?}");
+        }
     }
 
     #[test]

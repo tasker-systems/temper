@@ -224,8 +224,22 @@ not:
   back refused, and its `current` shows the value you meant to write to the guarded key (see
   `coordinating-through-records.md`, *Read the refusal*).
 
-Neither `resource create` nor `data-artifact commit` takes an idempotency key on the CLI, so a
-blind retry of a write that landed leaves a duplicate.
+A `resource create` sent with `--idempotency-key` can be retried as it is, with the same key
+(*Retrying a Create*, below). A `data-artifact commit` takes no idempotency key, so a blind retry
+of one that landed leaves a duplicate, as does a create retried without its first key.
+
+## Retrying a Create
+
+`resource create --idempotency-key <uuid>` makes a retry safe without checking first: re-issued
+with the same key, the create returns the resource the first attempt made, never a second. Mint
+one key per resource you mean to create, before the first attempt (`K=$(uuidgen)`), and send the
+same `K` on every retry. Keys are scoped to you, and a replay returns the first write as it stands
+without comparing bodies, so never reuse a key for a different resource. A create sent without the
+flag still carries a key the CLI minted: on a `network` error or a server 5xx (`api`) the `hint`
+names it, and re-issuing with `--idempotency-key <that key>` is the safe retry. Without the key,
+check that the create landed before retrying it (*A Failed Pipe Is Not a Failed Write*, above). A
+large body resumes an interrupted attempt saved in the vault under that attempt's key; given a
+different key, the create is refused and names the saved one to re-run with. `resource update` and `data-artifact commit` take no key.
 
 ## Skill-Only Commands
 

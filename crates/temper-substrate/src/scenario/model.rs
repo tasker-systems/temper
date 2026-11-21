@@ -78,7 +78,17 @@ impl Scenario {
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct BootSeed {
     pub event_types: Vec<String>,
+    /// The drain's closed refusal vocabulary (`kb_erasure_refusal_reasons`).
+    pub erasure_refusal_reasons: Vec<ErasureRefusalReasonDef>,
     pub lenses: Vec<LensDef>,
+}
+
+/// One seeded refusal code and its meaning.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ErasureRefusalReasonDef {
+    pub code: String,
+    pub meaning: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -462,11 +472,12 @@ steps:
         assert_eq!(s.resources[0].facets.as_ref().unwrap().weight(), 1.0);
 
         let boot: BootSeed = serde_yaml::from_str(
-            "event_types: [resource_created, lens_created]\nlenses:\n  - { name: L, w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.4, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }\n",
+            "event_types: [resource_created, lens_created]\nerasure_refusal_reasons:\n  - { code: defect, meaning: \"m\" }\nlenses:\n  - { name: L, w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.4, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }\n",
         )
         .unwrap();
         assert_eq!(boot.lenses.len(), 1);
         assert_eq!(boot.event_types.len(), 2);
+        assert_eq!(boot.erasure_refusal_reasons[0].code, "defect");
     }
 
     #[test]

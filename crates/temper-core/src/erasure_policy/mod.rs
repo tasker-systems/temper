@@ -50,7 +50,7 @@ pub use resource_erasure::{
 
 /// The manifest format this parser reads. `manifest.toml`'s `format` must equal it: a file written
 /// for another format is refused rather than read under this one's meaning.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
 /// The five manifest files' text, as one unit.
 #[derive(Debug, Clone, Copy)]
@@ -195,7 +195,7 @@ mod tests {
 
     use super::*;
 
-    const ROOT: &str = "format = 1\n";
+    const ROOT: &str = "format = 2\n";
 
     /// The task the fixture's gaps name.
     const TASK: &str = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c";
@@ -205,6 +205,10 @@ scope = [
   { rule = "the subject's @me contexts", mechanism = { bound = "_erasure_estate_contexts" } },
   { rule = "cogmaps whose only team join is the personal team", mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "cogmaps whose only kb_team_cogmaps row is the personal team" } } },
 ]
+
+[refusal_reasons]
+charter_resource = { meaning = "The item is a charter resource." }
+defect = { meaning = "A verifier raised on the item." }
 
 [tables.kb_resources]
 grain = { kind = "per-item", container = false, fence = { bound = "is_active" }, unit = { bound = "resource_erasure_execute" }, home = { table = "kb_resource_homes", table_column = "anchor_table", id_column = "anchor_id" } }
@@ -328,7 +332,14 @@ refine = [
     #[test]
     fn a_well_formed_manifest_parses_into_its_values() {
         let policy = parse(&files()).expect("the fixture parses");
-        assert_eq!(policy.format, 1);
+        assert_eq!(policy.format, 2);
+
+        let reasons: Vec<_> = policy.estate.refusal_reasons.keys().cloned().collect();
+        assert_eq!(reasons, ["charter_resource", "defect"]);
+        assert_eq!(
+            policy.estate.refusal_reasons["defect"].meaning,
+            "A verifier raised on the item."
+        );
 
         let email = &policy.personal_data[&key("kb_profiles.email")];
         assert_eq!(email.class, Class::Identifier);
@@ -571,7 +582,7 @@ refine = [
 
     #[test]
     fn an_unknown_field_fails_in_every_file() {
-        let root = "format = 1\nversion = 2\n";
+        let root = "format = 2\nversion = 2\n";
         fails_in(ManifestFiles { root, ..files() }, ManifestFile::Root);
         let estate = estate_with(
             r#"reason = "the ledger is append-only""#,
@@ -955,10 +966,40 @@ refine = [
     }
 
     #[test]
+    fn a_blank_refusal_meaning_fails_naming_estate_toml() {
+        let estate = estate_with(
+            r#"defect = { meaning = "A verifier raised on the item." }"#,
+            r#"defect = { meaning = "  " }"#,
+        );
+        fails_in(
+            ManifestFiles {
+                estate: &estate,
+                ..files()
+            },
+            ManifestFile::Estate,
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_in_a_refusal_entry_fails_naming_estate_toml() {
+        let estate = estate_with(
+            r#"defect = { meaning = "A verifier raised on the item." }"#,
+            r#"defect = { meaning = "A verifier raised on the item.", retired = true }"#,
+        );
+        fails_in(
+            ManifestFiles {
+                estate: &estate,
+                ..files()
+            },
+            ManifestFile::Estate,
+        );
+    }
+
+    #[test]
     fn an_unknown_format_fails() {
         fails_in(
             ManifestFiles {
-                root: "format = 2\n",
+                root: "format = 3\n",
                 ..files()
             },
             ManifestFile::Root,

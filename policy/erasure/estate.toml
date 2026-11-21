@@ -1,11 +1,15 @@
 # The erasure estate: what an erasure holds, and how it reaches each table's rows.
 #
 # An estate is the set of containers an erasure takes in, and everything homed in them. This file
-# says two things about it:
+# says three things about it:
 #
 #   * scope   the rules that put containers in an estate, each with the mechanism that selects
 #             its set.
 #   * tables  one grain per table: how an erasure reaches the table's rows.
+#   * refusal_reasons  the closed vocabulary of why an erasure member is set aside rather than
+#             erased: one code per entry, each with its meaning. The same set, codes and meanings,
+#             as the kb_erasure_refusal_reasons table, the `erasure_refusal_reasons` seeds in
+#             system.yaml and temper-core's ErasureMemberRefusalReason; a test holds the four equal.
 #
 # THE GRAINS.
 #
@@ -58,6 +62,9 @@
 # FORMAT (TOML; `#` comments and blank lines ignored)
 #   scope = [ { rule = "<the set, in words>", mechanism = <mechanism> }, … ]
 #
+#   [refusal_reasons]
+#   <code> = { meaning = "<what the code says about the item>" }                (one per code)
+#
 #   [tables.<table>]
 #   note = "<note>"                                                             (optional)
 #   [tables.<table>.grain]
@@ -95,6 +102,12 @@ scope = [
   { rule = "the subject's personal team's contexts (kb_teams.personal_of)", mechanism = { bound = "_erasure_estate_contexts" } },
   { rule = "cogmaps whose only kb_team_cogmaps row is the personal team", mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "cogmaps whose only kb_team_cogmaps row is the personal team" } } },
 ]
+
+[refusal_reasons]
+charter_resource = { meaning = "The item is a cogmap's telos or charter resource, which only map-grain erasure erases." }
+defect = { meaning = "A verifier raised on the item, so only a code or data fix lets it finish." }
+batch_fatal = { meaning = "The item failed its batch alone until the reaper set it aside." }
+unclassified = { meaning = "The item's unit raised an error that no other code names." }
 
 [tables]
 
@@ -469,10 +482,58 @@ reason = "the erasure apparatus itself: the deployment's retention policy, which
 kind = "declared-out"
 reason = "the erasure apparatus itself: the revocation queue, whose sealed token its own drain (erasure_slack_revocation_service) nulls at revocation or at the retry cap"
 
-[tables.kb_principal_rate_counters.grain]
-kind = "declared-out"
-reason = "the rate-limit seam's windowed request count per (profile, door): no content and no identifier, only a count and a window start; profile_id is a reference the profile's pseudonym covers, and a deleted profile row cascades its counters"
-
 [tables.kb_team_public_within.grain]
 kind = "declared-out"
 reason = "no estate holds a row: a personal team is never a row's team or anchor (kb_team_public_within_shape_guard), and opened_by is a reference the profile's pseudonym covers. A hard-deleted team's rows are recorded as cascade_deleted (kb_teams_public_within_cascade) before the foreign-key cascade removes them"
+
+# ── declared-out: pseudonym references ───────────────────────────────────────────────────────────
+
+[tables.kb_team_members.grain]
+kind = "declared-out"
+reason = "current membership, one row per team and profile, deleted when the membership ends: a row holds a profile id, a team id and a role, the ids pseudonymous references. Authorization needs it while the membership stands, and an erasure keeps it; the profile it points at is tombstoned. The membership's history is the team_membership_changed events"
+
+[tables.kb_principal_standing.grain]
+kind = "declared-out"
+reason = "a row is keyed by profile id and holds the principal's standing state, an enum. The profile is tombstoned, so the key is a pseudonym, and an erasure keeps the row. The free-text reasons live in kb_principal_standing_events, which is an identity grain"
+
+[tables.kb_principal_governance.grain]
+kind = "declared-out"
+reason = "a row is keyed by profile id and names the granting profile by id, with a timestamp: references the profile's tombstone makes pseudonymous. It holds no reason text, so no retention category applies, and an erasure keeps it"
+
+[tables.kb_idempotency_keys.grain]
+kind = "declared-out"
+reason = "apparatus: a row holds the owning profile's id, a client-minted opaque key and the id of the resource the key made, never the request's content. The ids are pseudonymous references, and an erasure keeps the row"
+
+[tables.kb_saml_principal_reconcile.grain]
+kind = "declared-out"
+reason = "apparatus: a row is keyed by profile id and the identity provider's key, and records when the principal was last reconciled. It holds references and timestamps, not the identifiers the profile's tombstone removes. An erasure keeps it"
+
+[tables.kb_principal_rate_counters.grain]
+kind = "declared-out"
+reason = "apparatus: a row is keyed by profile id and the rate-limit door's name, and holds a request count and the start of its window. It holds a reference, a count and a timestamp, not the identifiers the profile's tombstone removes. An erasure keeps it; a deleted profile row cascades its counters"
+
+[tables.kb_resource_homes.grain]
+kind = "declared-out"
+reason = "a pointer from a resource to the container that homes it, with the owning profile's id: references only. Resource erasure reads it to find the resource's home and an erasure keeps it, since the husk stays homed"
+
+# ── declared-out: the erasure record ─────────────────────────────────────────────────────────────
+
+[tables.kb_erasures.grain]
+kind = "declared-out"
+reason = "the erasure record is the proof itself, and it holds ids, kinds, statuses and digests only: pseudonymous, not anonymous. An erasure never erases its own record"
+
+[tables.kb_erasure_members.grain]
+kind = "declared-out"
+reason = "the erasure record's per-item rows: a member table and id, its status, and a refusal reason code with the SQLSTATE and routine that raised, never the message. Ids and codes only, and the record is the proof"
+
+[tables.kb_erasure_estate_snapshots.grain]
+kind = "declared-out"
+reason = "the erasure record's snapshot of the estate's member map and its checksum, taken at declaration: ids and a digest only. The record is the proof, so an erasure keeps it"
+
+[tables.kb_erasure_former_holders.grain]
+kind = "declared-out"
+reason = "the erasure record's snapshot of the profile ids that held an erasure's items at declaration, so each is answered as a former holder. Pseudonymous references, operator-only, and the record is the proof"
+
+[tables.kb_erasure_refusal_reasons.grain]
+kind = "declared-out"
+reason = "the closed vocabulary of refusal codes and their fixed meanings, seeded by migration: apparatus that holds no subject's data"

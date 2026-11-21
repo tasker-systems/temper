@@ -1,0 +1,31 @@
+title    = "`temper resource create` takes a reusable `--idempotency-key`, and a network error names the key it sent"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+`temper resource create` gains `--idempotency-key <UUID>`. Re-issuing a create with the same key
+returns the resource the first one created instead of a second (the server's existing
+`(owner, idempotency_key)` replay, issue #581; its semantics are unchanged). Without the flag the
+CLI mints the key before dispatch, as it always minted one per invocation, so every in-process
+retry of one invocation still sends one key.
+
+A large (segmented) create keeps the same promise. Resuming an interrupted attempt from its local
+manifest, it continues under the key that attempt saved: a different `--idempotency-key` is refused
+(`bad-request`, naming the saved key) rather than silently replaced, and a minted key gives way to
+the saved one, which the network-error hint then names. A keyed replay of a large create that
+already finished returns that resource instead of appending into it.
+
+Behavioral: on a network error, or a server 5xx (code `api`, which a gateway can answer after the
+create committed), the error payload's `hint` (stderr in TOON mode) now names the key the create
+sent and says to re-issue with `--idempotency-key <key>`, instead of saying the write
+path has no key and that a retried create mints a duplicate. The `update` hint, and the key-less
+case, keep "reconcile first". The payload's shape is unchanged; only the hint's text differs.
+
+The installed skill's reference.md gains "Retrying a Create", and session-lifecycle.md's
+save-a-note example sends `--idempotency-key "$K"`. The MCP projection is unchanged.
+
+Who observes it: CLI users and agents retrying a create after a lost answer. Older servers already
+replay by key, so a new CLI against any deployed server behaves the same. Release relevance:
+signal-only; no server, wire or schema change.
+'''

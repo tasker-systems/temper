@@ -69,6 +69,8 @@ async fn cli_create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
                     preserve_source: false,
+                    idempotency_key: None,
+                    idempotency_key_given: false,
                     open_meta: None,
                     goal: None,
                     doc_type: "research",
