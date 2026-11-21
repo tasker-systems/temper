@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErasureCompleted",
+  "description": "`erasure_completed` — the completion step ran for an erasure: every member was closed and the\nby-hash half applied. It may repeat, after an `erasure_reopened`; `kb_erasures` keeps the\nlatest. Carries the hashes the by-hash half redacted and the late-member digest.",
+  "type": "object",
+  "properties": {
+    "erasure_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "late_digest": {
+      "description": "The digest of the late members, as `erasure_scope_sealed` takes it. Absent for an erasure\nthat was never sealed.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "redacted_hashes": {
+      "description": "The hashes the completion step redacted.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "erasure_id"
+  ]
+}

@@ -110,6 +110,21 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     "team_public_within_changed",
     "public_within_effect_changed",
     "public_within_policy_changed",
+    // The erasure record (erasure estate-membership spec D6): the declaration, its late arrivals,
+    // the sealed scope, a reopening, the drain's batch summaries and each completion. Each IS the
+    // operator's audit of an erasure, in the posture of the resource and principal records above:
+    // admin-only by the fail-closed default, no subject-axis arm.
+    "erasure_declared",
+    // An item mapped after the declaration: names an erasure and an item, never a person to notify.
+    "erasure_member_arrived",
+    // The closing survey's seal: a count and a digest, read by the operator who proves completion.
+    "erasure_scope_sealed",
+    // A completion undone by a later arrival: the operator's signal that completion runs again.
+    "erasure_reopened",
+    // The drain's batch summary, refusals included: the operator's health record, admin-only.
+    "erasure_batch_applied",
+    // A completion and its redacted hashes: the operator's proof, admin-only.
+    "erasure_completed",
 ];
 
 /// The §5 table, evaluated for one subject. Returns the event types `caller` may read about

@@ -193,6 +193,23 @@ pub enum EventKind {
     /// A team's `public_within` forbid changed (on the root, the instance-wide off). Category
     /// `admin`, NULL-anchored.
     PublicWithinPolicyChanged,
+    /// An erasure declared, with its map and holder snapshot (erasure estate-membership spec D6).
+    /// Category `admin`, NULL-anchored. Registered before its writer; its projector writes the
+    /// erasure record tables.
+    ErasureDeclared,
+    /// An item mapped into an erasure after its declaration (D4.1). Category `admin`,
+    /// NULL-anchored.
+    ErasureMemberArrived,
+    /// The closing survey sealed an erasure's scope (D4.1). Category `admin`, NULL-anchored.
+    ErasureScopeSealed,
+    /// An arrival after an erasure completed reopened it (D1). Category `admin`, NULL-anchored.
+    ErasureReopened,
+    /// The drain's summary of one batch: a non-authority record of each item's outcome (D5).
+    /// Category `admin`, NULL-anchored.
+    ErasureBatchApplied,
+    /// The completion step ran for an erasure; it may repeat (D6). Category `admin`,
+    /// NULL-anchored.
+    ErasureCompleted,
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into
     /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
@@ -293,6 +310,12 @@ impl EventKind {
             EventKind::TeamPublicWithinChanged => "team_public_within_changed",
             EventKind::PublicWithinEffectChanged => "public_within_effect_changed",
             EventKind::PublicWithinPolicyChanged => "public_within_policy_changed",
+            EventKind::ErasureDeclared => "erasure_declared",
+            EventKind::ErasureMemberArrived => "erasure_member_arrived",
+            EventKind::ErasureScopeSealed => "erasure_scope_sealed",
+            EventKind::ErasureReopened => "erasure_reopened",
+            EventKind::ErasureBatchApplied => "erasure_batch_applied",
+            EventKind::ErasureCompleted => "erasure_completed",
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
             EventKind::ResourceReblocked => "resource_reblocked",
@@ -362,6 +385,12 @@ impl EventKind {
             "team_public_within_changed" => EventKind::TeamPublicWithinChanged,
             "public_within_effect_changed" => EventKind::PublicWithinEffectChanged,
             "public_within_policy_changed" => EventKind::PublicWithinPolicyChanged,
+            "erasure_declared" => EventKind::ErasureDeclared,
+            "erasure_member_arrived" => EventKind::ErasureMemberArrived,
+            "erasure_scope_sealed" => EventKind::ErasureScopeSealed,
+            "erasure_reopened" => EventKind::ErasureReopened,
+            "erasure_batch_applied" => EventKind::ErasureBatchApplied,
+            "erasure_completed" => EventKind::ErasureCompleted,
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
             "resource_reblocked" => EventKind::ResourceReblocked,

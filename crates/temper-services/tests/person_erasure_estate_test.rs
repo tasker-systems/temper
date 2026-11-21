@@ -409,7 +409,8 @@ async fn two_estate_resources_sharing_an_edge_are_erased_in_one_act(pool: PgPool
 
 /// A husk as cut 1 left it (the substrate witness `simulate_cut1_husk`'s shape): a
 /// `resource_erased` naming no `redacted_fields`, and the projection-side body, with the ledger's
-/// text untouched.
+/// text untouched. After it commits, `_erasure_legacy_backfill()` runs, as `20261201000030` runs it
+/// over a ledger erased before the erasure record existed.
 async fn simulate_cut1_husk(pool: &PgPool, p: &Person, resource: Uuid) {
     let request_ref = Uuid::now_v7();
     let mut tx = pool.begin().await.unwrap();
@@ -444,6 +445,13 @@ async fn simulate_cut1_husk(pool: &PgPool, p: &Person, resource: Uuid) {
         .await
         .unwrap();
     tx.commit().await.unwrap();
+    // Its own transaction, after the act's: replay walks events in append order, so the
+    // backfill's erasure_declared walks after the first record and before whatever the test
+    // appends next.
+    sqlx::query("SELECT _erasure_legacy_backfill()")
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 /// W6. FAILS IF an already-erased resource raises or is erased twice: a husk the resource act left
@@ -805,22 +813,17 @@ async fn a_subject_with_no_personal_team_and_an_empty_estate_erases_and_replays(
 /// suite's helper; the substrate's own lives in its test tree, which this crate cannot import).
 async fn reset_namespace(pool: &PgPool) {
     use sqlx::Executor;
-    pool.execute("DROP SCHEMA IF EXISTS sensitivity CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    // In batches, never one `DROP SCHEMA public CASCADE`: see `temper_substrate::test_schema`.
+    temper_substrate::test_schema::drop_test_schemas(pool).await;
+    pool.execute("CREATE SCHEMA public;")
         .await
-        .expect("drop sensitivity, recreate public schema");
+        .expect("recreate the public schema");
     temper_substrate::MIGRATOR
         .run(pool)
         .await
         .expect("re-apply the migration chain");
-    pool.execute(
-        "DO $$ DECLARE r record; BEGIN \
-           FOR r IN SELECT tablename FROM pg_tables \
-                     WHERE schemaname = 'public' AND tablename LIKE 'kb\\_%' \
-           LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE'; \
-           END LOOP; END $$;",
-    )
-    .await
-    .expect("truncate kb_ data tables to a seed-free baseline");
+    // One table per transaction: see `temper_substrate::test_schema::truncate_kb_tables`.
+    temper_substrate::test_schema::truncate_kb_tables(pool).await;
 }
 
 /// W4. FAILS IF replay of the combined act diverges from live. The world holds what W1, W2, W5 and

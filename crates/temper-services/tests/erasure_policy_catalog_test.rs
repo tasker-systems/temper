@@ -523,6 +523,29 @@ async fn a_bound_function_that_does_not_exist_is_reported(pool: PgPool) {
     );
 }
 
+/// The liveness check's bite at a declared-out grain: kb_team_members renamed to a table the
+/// schema does not have is reported, and nothing else is.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_declared_out_grain_on_a_table_that_does_not_exist_is_reported(pool: PgPool) {
+    let mut policy = in_force().clone();
+    let entry = policy
+        .estate
+        .tables
+        .remove("kb_team_members")
+        .expect("kb_team_members is grained");
+    assert!(
+        matches!(entry.grain, Grain::DeclaredOut { .. }),
+        "the probe expects kb_team_members to be declared out"
+    );
+    policy
+        .estate
+        .tables
+        .insert("kb_team_members_dropped".into(), entry);
+
+    let problems = catalog_problems(&policy, &catalog(&pool).await);
+    assert_eq!(problems, ["kb_team_members_dropped: no such table"]);
+}
+
 /// The link-kind check's bite, three ways: a constrained column declared `ref`, an unconstrained
 /// one declared `fk`, and an `fk` whose constraint references a table other than the one named,
 /// are each reported, and nothing else is.

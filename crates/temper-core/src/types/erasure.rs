@@ -226,6 +226,54 @@ pub enum RecordedRefusalReason {
     ProjectionDisagrees,
 }
 
+/// The drain's closed refusal vocabulary: why an erasure member was set aside rather than erased.
+/// Mirrored by the `kb_erasure_refusal_reasons` table, `policy/erasure/estate.toml`'s
+/// `[refusal_reasons]` and the `erasure_refusal_reasons` seeds in `system.yaml`; a test holds the
+/// four copies equal. Distinct from [`RecordedRefusalReason`], which is the single-resource doors'
+/// ledger vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ErasureMemberRefusalReason {
+    /// The item is a cogmap's telos or charter resource, which only map-grain erasure erases.
+    CharterResource,
+    /// A verifier raised on the item, so only a code or data fix lets it finish.
+    Defect,
+    /// The item failed its batch alone until the reaper set it aside.
+    BatchFatal,
+    /// The item's unit raised an error that no other code names.
+    Unclassified,
+}
+
+/// A table whose rows an erasure member can name. Serializes as the DDL spells the table.
+/// Ordered by declaration, so it can key a map that serializes with stable bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ErasureMemberTable {
+    KbResources,
+    KbContexts,
+    KbCogmaps,
+    KbBlobs,
+    KbEdges,
+}
+
+/// What an erasure was declared over, as `kb_erasures.kind` spells it (its
+/// `kb_erasures_kind_check`). Carried by `erasure_declared`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ErasureKind {
+    /// A person's estate; the subject is a profile.
+    Estate,
+    /// One resource; the subject is the resource. Every legacy erasure is of this kind.
+    Resource,
+    /// A selection of items; there is no subject.
+    Selection,
+    /// A resource's block history; the subject is the resource.
+    Block,
+}
+
 impl From<ResourceErasureRefusalReason> for RecordedRefusalReason {
     fn from(reason: ResourceErasureRefusalReason) -> Self {
         match reason {

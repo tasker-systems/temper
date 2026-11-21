@@ -75,6 +75,12 @@ fn payload_schemas_match_snapshots() {
     check::<p::TeamPublicWithinChanged>("team_public_within_changed");
     check::<p::PublicWithinEffectChanged>("public_within_effect_changed");
     check::<p::PublicWithinPolicyChanged>("public_within_policy_changed");
+    check::<p::ErasureDeclared>("erasure_declared");
+    check::<p::ErasureMemberArrived>("erasure_member_arrived");
+    check::<p::ErasureScopeSealed>("erasure_scope_sealed");
+    check::<p::ErasureReopened>("erasure_reopened");
+    check::<p::ErasureBatchApplied>("erasure_batch_applied");
+    check::<p::ErasureCompleted>("erasure_completed");
 }
 
 /// `EventContext` serializes an act's authorship, and nothing else, into `kb_events.metadata`.
@@ -220,6 +226,17 @@ fn the_migration_literal_matches_the_committed_fixture() {
                 "blob_erased.v1.schema.json",
                 "principal_erased.v1.schema.json",
                 "resource_scrubbed.v1.schema.json",
+            ],
+        ),
+        (
+            "20261201000020_erasure_record_event_types.sql",
+            &[
+                "erasure_declared.v1.schema.json",
+                "erasure_member_arrived.v1.schema.json",
+                "erasure_scope_sealed.v1.schema.json",
+                "erasure_reopened.v1.schema.json",
+                "erasure_batch_applied.v1.schema.json",
+                "erasure_completed.v1.schema.json",
             ],
         ),
     ] {
