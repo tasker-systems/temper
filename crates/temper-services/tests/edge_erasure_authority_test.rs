@@ -18,6 +18,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
+use temper_services::test_support;
 use temper_substrate::affinity::EdgeKind;
 use temper_substrate::events::{fire, EdgeHome, EventContext, SeedAction};
 use temper_substrate::ids::{ContextId, EdgeId, EntityId, ResourceId};
@@ -38,32 +39,9 @@ struct World {
 async fn world(pool: &PgPool) -> World {
     let profile = Uuid::now_v7();
     let handle = format!("user-{profile}");
-    sqlx::query(
-        "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
-                 VALUES ($1, $2, $2, $3, '{}'::jsonb)",
-    )
-    .bind(profile)
-    .bind(&handle)
-    .bind(format!("{handle}@x.test"))
-    .execute(pool)
-    .await
-    .expect("seed profile");
-    let emitter: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(profile)
-    .bind(format!("{handle}@web"))
-    .fetch_one(pool)
-    .await
-    .expect("seed emitter");
-    let home: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-              VALUES ('kb_profiles', $1, 'notes', 'notes') RETURNING id",
-    )
-    .bind(profile)
-    .fetch_one(pool)
-    .await
-    .expect("seed @me context");
+    test_support::profile::insert_with_id(pool, profile, &handle).await;
+    let emitter = test_support::entity::insert(pool, profile, &format!("{handle}@web")).await;
+    let home = test_support::context::insert_personal(pool, profile, "notes", "notes").await;
     let in_estate: bool = sqlx::query_scalar("SELECT $2 IN (SELECT _erasure_estate_contexts($1))")
         .bind(profile)
         .bind(home)
