@@ -397,6 +397,10 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::BlockHistoryScrubbed
             // The field scrub's record carries paths and a family handle, never content.
             | EventKind::ResourceScrubbed
+            // One estate edge's erasure record carries ids and paths, never content. What it
+            // empties reproduces through its walk arm, under the same span deferral as
+            // `resource_erased`.
+            | EventKind::EdgeErased
             // A delivery disposition (S2 chunk C) carries reasoning and confidence, not content:
             // no blocks, no chunks, no sidecar. A received webhook (S2 chunk B) carries the
             // remote's verbatim body — foreign content temper did not author and does not chunk.
@@ -719,13 +723,17 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
     ))
     .fetch_all(pool)
     .await?;
-    // The resource erasure act's deferral (spec 2026-09-28, D14: "the replay arm for
+    // The per-item erasure deferral (spec 2026-09-28, D14: "the replay arm for
     // `resource_erased` applies the body only after every event that shares the act's
-    // correlation id, so the act's own folds are in place whichever order they sort in"). For
-    // each erasure, `apply_after` is the last event, in the walk order above, among the events
-    // sharing its correlation id and its `occurred_at`; the body runs once the walk has projected
-    // that event. An erasure that is itself the last applies at its own position. It is read off
-    // the walk itself, so the deferral and the walk cannot disagree about what "last" means.
+    // correlation id, so the act's own folds are in place whichever order they sort in"). Both
+    // per-item erasure authorities take the same span rule: `resource_erased` and `edge_erased`.
+    // For each such record, `apply_after` is the last event, in the walk order above, among the
+    // events sharing its correlation id and its `occurred_at`; the body runs once the walk has
+    // projected that event. A record that is itself the last applies at its own position. It is
+    // read off the walk itself, so the deferral and the walk cannot disagree about what "last"
+    // means. Under the walk's append order a unit's own fold already walks before its record; the
+    // deferral is the same span rule for both, holding each body to the end of the span its
+    // record shares with the other units of the act.
     //
     // The span is bounded to the act's own transaction: every event the act appends shares its
     // `occurred_at` (the column default, now() = the transaction's start), and the request
@@ -755,7 +763,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
         let Some(span) = span_of(r) else {
             continue;
         };
-        if name != "resource_erased" {
+        if !matches!(name.as_str(), "resource_erased" | "edge_erased") {
             continue;
         }
         let id: Uuid = r.get(0);
@@ -764,8 +772,9 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             apply_after.insert(id, last);
         }
     }
-    // Deferred applications, keyed by the event after which they run: (subject, erasure event).
-    let mut pending: HashMap<Uuid, Vec<(Uuid, Uuid)>> = HashMap::new();
+    // Deferred applications, keyed by the event after which they run: (body, subject, erasure
+    // event).
+    let mut pending: HashMap<Uuid, Vec<(ErasureBody, Uuid, Uuid)>> = HashMap::new();
     for r in events {
         let id: Uuid = r.get(0);
         let name: String = r.get(1);
@@ -1240,8 +1249,12 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 .fetch_one(&mut *tx)
                 .await?;
                 match apply_after.get(&id) {
-                    Some(after) => pending.entry(*after).or_default().push((subject, id)),
-                    None => apply_resource_erasure(&mut tx, subject, id).await?,
+                    Some(after) => pending.entry(*after).or_default().push((
+                        ErasureBody::Resource,
+                        subject,
+                        id,
+                    )),
+                    None => apply_erasure_body(&mut tx, ErasureBody::Resource, subject, id).await?,
                 }
             }
             // The block history scrub (spec 2026-09-28, D11; migration 20261003000210). It applies
@@ -1348,6 +1361,47 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .fetch_one(&mut *tx)
                     .await?;
             }
+            // One estate edge's erasure (migration 20261201000060). The body applies at the END of
+            // the record's correlated span, under the same `apply_after` rule as `ResourceErased`
+            // above: each body waits for the last event of the span its record shares with every
+            // other unit appended in that transaction under the same request reference. A record
+            // that is already the last of its span applies here. The payload names the edge, and
+            // the body joins the projection by THAT id and reads no payload, so the idempotent
+            // call reproduces what the live unit left. The call carries the ERASURE event's id,
+            // deferred or not: it stamps the edge's property rows. It calls THE ONE definition,
+            // `_edge_erasure_apply_redaction`; re-implement any of it here and there are two
+            // edge erasures that drift.
+            // TODO(person-act step): once the person act calls `edge_erasure_execute`, say here
+            // that its resource and edge units share one span.
+            EventKind::EdgeErased => {
+                let record: crate::payloads::EdgeErased =
+                    serde_json::from_value(payload.clone()).with_context(|| {
+                        format!("edge_erased event {id} payload is not an EdgeErased")
+                    })?;
+                anyhow::ensure!(
+                    record.subject_table == crate::payloads::AnchorTable::Edges,
+                    "edge_erased event {id} names subject_table {:?}, not kb_edges",
+                    record.subject_table
+                );
+                let subject: Uuid = record.subject_id;
+                // The redaction rows project at the event's own position: they read only the
+                // payload, and nothing later in the span changes them.
+                sqlx::query!(
+                    "SELECT _project_edge_erased_redactions($1, $2)",
+                    id,
+                    payload
+                )
+                .fetch_one(&mut *tx)
+                .await?;
+                match apply_after.get(&id) {
+                    Some(after) => pending.entry(*after).or_default().push((
+                        ErasureBody::Edge,
+                        subject,
+                        id,
+                    )),
+                    None => apply_erasure_body(&mut tx, ErasureBody::Edge, subject, id).await?,
+                }
+            }
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this
             // arm `replay()` errored with "no projector for event type webhook_received" against
@@ -1381,8 +1435,8 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             }
         }
         // An erasure deferred to this event (D14, see `apply_after`) applies now, after it.
-        for (subject, erasure) in pending.remove(&id).unwrap_or_default() {
-            apply_resource_erasure(&mut tx, subject, erasure).await?;
+        for (body, subject, erasure) in pending.remove(&id).unwrap_or_default() {
+            apply_erasure_body(&mut tx, body, subject, erasure).await?;
         }
         tx.commit().await?;
     }
@@ -1427,6 +1481,45 @@ async fn apply_resource_erasure(
     .fetch_one(&mut *conn)
     .await?;
     Ok(())
+}
+
+/// The edge erasure body at replay: THE ONE edge projection body, called with the `edge_erased`
+/// event's id. Macro form, like [`apply_resource_erasure`].
+async fn apply_edge_erasure(
+    conn: &mut sqlx::PgConnection,
+    subject: Uuid,
+    erasure: Uuid,
+) -> Result<()> {
+    sqlx::query!(
+        "SELECT _edge_erasure_apply_redaction($1,$2)",
+        subject,
+        erasure
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// Which per-item erasure body a record runs, at its position or at its span's end.
+#[derive(Clone, Copy)]
+enum ErasureBody {
+    /// `resource_erased`: [`apply_resource_erasure`].
+    Resource,
+    /// `edge_erased`: [`apply_edge_erasure`].
+    Edge,
+}
+
+/// Run one per-item erasure body over its subject, with the erasure record's id.
+async fn apply_erasure_body(
+    conn: &mut sqlx::PgConnection,
+    body: ErasureBody,
+    subject: Uuid,
+    erasure: Uuid,
+) -> Result<()> {
+    match body {
+        ErasureBody::Resource => apply_resource_erasure(conn, subject, erasure).await,
+        ErasureBody::Edge => apply_edge_erasure(conn, subject, erasure).await,
+    }
 }
 
 /// The block history scrub at replay: THE ONE projection of a `block_history_scrubbed` event,

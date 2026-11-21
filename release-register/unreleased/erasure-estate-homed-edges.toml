@@ -1,0 +1,38 @@
+title    = "An edge erasure authority and a per-edge erasure unit, which no act calls yet"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["schema", "erasure-policy"]
+status   = "signal-only"
+body = '''
+Migration 20261201000050 adds the admin event type edge_erased and the redaction authority `edge`:
+an edge_erased record lets an act rewrite the ledger trail of one edge that is folded and homed in a
+context of the estate the record names, to the sentinels resource erasure writes. The ledger guard,
+the trail trigger and the sweep's place closure each read the new authority. The resource act's
+ledger derivation now runs through one shared loop, _erasure_trail_payload_redaction, whose output for
+a resource is unchanged. Migration 20261201000060 adds edge_erasure_execute, the per-edge unit: it
+refuses an edge not homed in the named estate, folds the edge if it is live (relationship_folded,
+reason estate_erased), appends one edge_erased record, nulls the edge's label, sets every property
+the edge owns to its sentinels, and rewrites the edge's labels, properties, earlier fold reasons and
+corrections, and the authorship metadata on its events, to their sentinels on the ledger; the
+estate_erased reason of the fold it appends is kept. Only tests call it today: no act, door or
+command reaches it. The edge's writers now take a share lock on the edge row and refuse an edge an
+edge_erased record names: a property write (property_set, facet_set, a keyed assert,
+property_retracted), relationship_retype, relationship_reweight or relationship_fold of such an
+edge is refused, and one in flight while the unit holds the edge waits for it and is then refused.
+The sweep's findings on such an edge's label and properties give up their digests as an erased
+resource's do. Replay projects edge_erased as it projects resource_erased. The erasure policy
+declares edge_erased's payload paths structural, and records as gaps the regions, lenses and
+data-artifact schemas homed in an estate context; kb_edges' unit, and kb_properties' path through
+kb_edges, stay gaps until an act calls the unit.
+TODO(person-act step): when the person act calls edge_erasure_execute, this entry gains the
+behavioral class for person erasure, names which estate-homed edges it reaches, and says who
+observes the erased edges.
+Who observes: no edge_erased record is written in a deployment, so no write is refused. A writer of
+an edge's properties, or a retype, reweight or fold of an edge, now takes FOR KEY SHARE on the edge
+row, which conflicts only with a FOR UPDATE, a DELETE or an id change of that row: besides the unit,
+it waits briefly behind relationship_assert's lookup of the active edge, fold_goal_edges, and the
+resource erasure and field scrub edge loops. Witnesses: crates/temper-services/tests/edge_erasure_authority_test.rs,
+edge_erasure_trail_test.rs, edge_erasure_unit_test.rs, edge_erasure_replay_test.rs and
+sensitivity_edge_erasure_bridge_test.rs. Release relevance: additive in schema; behavioral only in those short
+lock waits.
+'''

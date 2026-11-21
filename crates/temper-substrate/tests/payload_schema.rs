@@ -68,6 +68,7 @@ fn payload_schemas_match_snapshots() {
     check::<p::ResourceErasureRefused>("resource_erasure_refused");
     check::<p::BlockHistoryScrubbed>("block_history_scrubbed");
     check::<p::ResourceScrubbed>("resource_scrubbed");
+    check::<p::EdgeErased>("edge_erased");
     check::<p::TeamMembershipChanged>("team_membership_changed");
     check::<p::TeamParentLinkChanged>("team_parent_link_changed");
     check::<p::TeamLifecycleChanged>("team_lifecycle_changed");
@@ -238,6 +239,10 @@ fn the_migration_literal_matches_the_committed_fixture() {
                 "erasure_batch_applied.v1.schema.json",
                 "erasure_completed.v1.schema.json",
             ],
+        ),
+        (
+            "20261201000050_edge_erasure_authority.sql",
+            &["edge_erased.v1.schema.json"],
         ),
     ] {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations/");
