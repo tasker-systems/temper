@@ -31,7 +31,7 @@ COMMENT ON TABLE kb_principal_rate_counters IS
   'pair (default off).';
 
 SELECT declare_migration(
-    20261201000010,
+    20261202000010,
     'additive',
     'The rate-limit seam''s per-principal counter. New table kb_principal_rate_counters: profile_id '
     'uuid REFERENCES kb_profiles ON DELETE CASCADE, door text, window_started_at timestamptz, '

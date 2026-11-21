@@ -24,7 +24,7 @@
 # every `table.column` declared in personal-data.toml.
 #
 # COUNT at `count_at`: 179 text/varchar columns; 18 declared in the sibling; `declared_count` declared here.
-count_at = "20261201000010"
+count_at = "20261202000010"
 declared_count = 161
 #
 # THERE IS NO `unadjudicated` CLASS. A class that means "we will decide later" is how a manifest
