@@ -26,6 +26,8 @@ pub mod replay;
 pub mod scenario;
 pub mod shape_schema;
 pub mod substrate;
+#[cfg(feature = "test-support")]
+pub mod test_schema;
 pub mod text;
 pub mod uploads;
 pub mod write;

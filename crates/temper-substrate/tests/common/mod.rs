@@ -37,9 +37,11 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
     // on this pre-auto-join baseline. It changes only `cogmap_authorable_by_profile` (cogmap WRITE) — an
     // axis this scenario never probes (its write checks are `can_modify_resource` on resources, S6) — and
     // is exercised on the full `MIGRATOR` by the temper-api + e2e tiers.
-    pool.execute("DROP SCHEMA IF EXISTS sensitivity CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    // In batches, never one `DROP SCHEMA public CASCADE`: see `temper_substrate::test_schema`.
+    temper_substrate::test_schema::drop_test_schemas(pool).await;
+    pool.execute("CREATE SCHEMA public;")
         .await
-        .expect("drop sensitivity, recreate public schema");
+        .expect("recreate the public schema");
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let mut migrations: Vec<String> = std::fs::read_dir(format!("{root}/migrations"))
         .expect("read migrations dir")
@@ -84,15 +86,8 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
             .await
             .unwrap_or_else(|e| panic!("apply migration {f}: {e}"));
     }
-    pool.execute(
-        "DO $$ DECLARE r record; BEGIN \
-           FOR r IN SELECT tablename FROM pg_tables \
-                     WHERE schemaname = 'public' AND tablename LIKE 'kb\\_%' \
-           LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE'; \
-           END LOOP; END $$;",
-    )
-    .await
-    .expect("truncate kb_ data tables to a seed-free baseline");
+    // One table per transaction: see `temper_substrate::test_schema::truncate_kb_tables`.
+    temper_substrate::test_schema::truncate_kb_tables(pool).await;
 }
 
 /// Fire a cogmap genesis + one `resource_create` homed in it, whose single chunk's sidecar entry

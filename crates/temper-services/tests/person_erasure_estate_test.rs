@@ -813,22 +813,17 @@ async fn a_subject_with_no_personal_team_and_an_empty_estate_erases_and_replays(
 /// suite's helper; the substrate's own lives in its test tree, which this crate cannot import).
 async fn reset_namespace(pool: &PgPool) {
     use sqlx::Executor;
-    pool.execute("DROP SCHEMA IF EXISTS sensitivity CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    // In batches, never one `DROP SCHEMA public CASCADE`: see `temper_substrate::test_schema`.
+    temper_substrate::test_schema::drop_test_schemas(pool).await;
+    pool.execute("CREATE SCHEMA public;")
         .await
-        .expect("drop sensitivity, recreate public schema");
+        .expect("recreate the public schema");
     temper_substrate::MIGRATOR
         .run(pool)
         .await
         .expect("re-apply the migration chain");
-    pool.execute(
-        "DO $$ DECLARE r record; BEGIN \
-           FOR r IN SELECT tablename FROM pg_tables \
-                     WHERE schemaname = 'public' AND tablename LIKE 'kb\\_%' \
-           LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE'; \
-           END LOOP; END $$;",
-    )
-    .await
-    .expect("truncate kb_ data tables to a seed-free baseline");
+    // One table per transaction: see `temper_substrate::test_schema::truncate_kb_tables`.
+    temper_substrate::test_schema::truncate_kb_tables(pool).await;
 }
 
 /// W4. FAILS IF replay of the combined act diverges from live. The world holds what W1, W2, W5 and
