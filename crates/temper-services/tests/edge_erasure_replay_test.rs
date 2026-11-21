@@ -7,7 +7,8 @@
 //! runs both units would leave. Replay projects each record at its position and runs each body at
 //! the span's end; the projections it rebuilds must equal the live ones byte for byte. The world is
 //! built through the real write paths and the units are called by SQL directly, since no act calls
-//! `edge_erasure_execute` yet.
+//! `edge_erasure_execute` yet. The span tombstones the estate's owner before it commits, as the
+//! person act will, since an edge erasure commits only for a tombstoned owner.
 //! TODO(person-act step): once the person act calls the unit, replay a span that act wrote.
 
 mod edge_erasure;
@@ -20,7 +21,7 @@ use temper_services::test_support;
 use temper_substrate::ids::ContextId;
 use temper_substrate::replay;
 
-use edge_erasure::{authored, edge, facet, fold, resource_in, world};
+use edge_erasure::{authored, edge, facet, fold, resource_in, tombstone, world};
 
 /// A context of a team that is not the person's personal team: outside the estate.
 async fn team_context(pool: &PgPool) -> ContextId {
@@ -151,6 +152,12 @@ async fn replay_of_an_estate_edge_erasure_is_byte_identical(pool: PgPool) {
             .await
             .expect("the edge unit erases the estate-homed edge");
     }
+    // The person act's tombstone, after its edge step: the span commits only for a tombstoned
+    // owner. Replay restores the tombstone with kb_profiles, and its commit-time check stands
+    // down under temper.replaying, so the replayed records commit event by event.
+    tombstone(&mut *act, w.profile)
+        .await
+        .expect("tombstone the estate's owner");
     act.commit().await.expect("commit the span");
 
     let resource_records = span_events(&pool, "resource_erased", request_ref).await;

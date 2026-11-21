@@ -295,13 +295,29 @@ async fn the_edge_unit_completes_under_a_session_lock_timeout(pool: PgPool) {
         .execute(&mut *act)
         .await
         .expect("a tight session bound");
-    let erased = sqlx::query("SELECT edge_erasure_execute($1, $2, $2, $3, $4)")
-        .bind(edge)
-        .bind(profile)
-        .bind(emitter)
-        .bind(uuid::Uuid::now_v7())
-        .execute(&mut *act)
-        .await;
+    // One transaction, as the person act runs it: the unit, then the owner's tombstone, which the
+    // edge authority requires at commit (edge_erasure_requires_an_erased_owner).
+    let erased = {
+        let mut tx = sqlx::Connection::begin(&mut *act).await.expect("begin");
+        let out = sqlx::query("SELECT edge_erasure_execute($1, $2, $2, $3, $4)")
+            .bind(edge)
+            .bind(profile)
+            .bind(emitter)
+            .bind(uuid::Uuid::now_v7())
+            .execute(&mut *tx)
+            .await;
+        match out {
+            Ok(_) => {
+                sqlx::query("UPDATE kb_profiles SET tombstoned_at = now() WHERE id = $1")
+                    .bind(profile)
+                    .execute(&mut *tx)
+                    .await
+                    .expect("the owner's tombstone");
+                tx.commit().await
+            }
+            Err(e) => Err(e),
+        }
+    };
     sqlx::query("RESET lock_timeout")
         .execute(&mut *act)
         .await

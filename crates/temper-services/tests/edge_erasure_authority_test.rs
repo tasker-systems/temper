@@ -9,9 +9,14 @@
 //! on that edge's own trail (`_edge_erasure_trail_scope`), and the new value is the sentinel
 //! `erasure` would write for the path's class. Each case forges what the act will do in one
 //! transaction: fold the edge (`relationship_folded` appended and projected), append the
-//! `edge_erased` record, project its rows, then UPDATE `kb_events`. Each refusal is paired with an
-//! admitted twin that differs only in the condition under test, and is asserted by the trigger's
-//! own message, so a refusal for any other reason fails the pair.
+//! `edge_erased` record, project its rows, UPDATE `kb_events`, then tombstone the estate's owner, as
+//! the person act does after its edge step. Each refusal is paired with an admitted twin that
+//! differs only in the condition under test, and is asserted by the trigger's own message, so a
+//! refusal for any other reason fails the pair.
+//!
+//! The owner is checked at commit (`edge_erasure_requires_an_erased_owner`, 20261201000060): a
+//! forge naming a live `estate_of` lands every statement and is refused by COMMIT. The cases that
+//! roll back never reach it.
 
 mod edge_erasure;
 
@@ -22,7 +27,7 @@ use uuid::Uuid;
 use temper_substrate::events::EventContext;
 use temper_substrate::ids::EdgeId;
 
-use edge_erasure::{asserting_event, edge, resource, world, World};
+use edge_erasure::{asserting_event, edge, resource, tombstone, world, World};
 
 const LABEL: &str = "jane roe told us";
 const SENTINEL: &str = "erased-label-1";
@@ -76,6 +81,8 @@ struct Forged {
     /// Project the record's rows with `temper.replaying` on, so the projector's trail check (the
     /// earlier of two) is skipped and the verifier's is the one that answers.
     project_as_replay: bool,
+    /// Tombstone `estate_of` after the UPDATE, as the person act does after its edge step.
+    tombstone: bool,
 }
 
 /// Run `act` on one connection. The first error stops it.
@@ -132,20 +139,28 @@ async fn forge(conn: &mut sqlx::PgConnection, w: &World, act: &Forged) -> Result
     .bind(&act.value)
     .execute(&mut *conn)
     .await?;
+    if act.tombstone {
+        tombstone(&mut *conn, act.estate_of).await?;
+    }
     Ok(())
 }
 
 /// [`forge`] in its own transaction: committed when `commit` and it succeeded, otherwise rolled
-/// back. Returns the error text of a refusal, `None` when every step landed.
+/// back. Returns the error text of a refusal, a statement's or the commit's, `None` when every
+/// step landed.
 async fn attempt(pool: &PgPool, w: &World, act: &Forged, commit: bool) -> Option<String> {
     let mut tx = pool.begin().await.unwrap();
-    let out = forge(&mut tx, w, act).await;
-    if out.is_ok() && commit {
-        tx.commit().await.unwrap();
-    } else {
-        tx.rollback().await.unwrap();
+    match forge(&mut tx, w, act).await {
+        Err(e) => {
+            tx.rollback().await.unwrap();
+            Some(e.to_string())
+        }
+        Ok(()) if commit => tx.commit().await.err().map(|e| e.to_string()),
+        Ok(()) => {
+            tx.rollback().await.unwrap();
+            None
+        }
     }
-    out.err().map(|e| e.to_string())
 }
 
 fn append_only(what: &str, err: Option<String>) {
@@ -161,7 +176,7 @@ fn admitted(what: &str, err: Option<String>) {
 }
 
 /// The admitted act: the folded edge's own assertion, its label at the sentinel, under the estate
-/// that homes it.
+/// that homes it, whose owner is tombstoned before commit.
 fn lawful(x: &Edges) -> Forged {
     Forged {
         subject: x.e,
@@ -170,7 +185,19 @@ fn lawful(x: &Edges) -> Forged {
         target: x.asserted,
         value: SENTINEL.into(),
         project_as_replay: false,
+        tombstone: true,
     }
+}
+
+/// The error text names the estate's owner as not erased: the commit-time check's own message.
+fn owner_not_erased(what: &str, owner: Uuid, err: Option<String>) {
+    let err = err.unwrap_or_else(|| panic!("{what} was admitted"));
+    assert!(
+        err.contains(&format!(
+            "edge erasure: the estate's owner {owner} is not erased"
+        )),
+        "{what}: refused at commit for its owner; got {err}"
+    );
 }
 
 async fn label_of(pool: &PgPool, event: Uuid) -> Value {
@@ -181,6 +208,9 @@ async fn label_of(pool: &PgPool, event: Uuid) -> Value {
         .unwrap()
 }
 
+/// The act commits with its estate's owner tombstoned; the same forge with the owner live fails at
+/// commit (`a_forged_edge_rewrite_naming_a_live_owner_fails_at_commit_not_at_insert`).
+///
 /// FAILS IF `edge_erased` authorises nothing: no event type, no projector, no `edge` authority in
 /// the CHECK, no `edge` arm in the verifier's kind map or subject check, or a sentinel check that
 /// refuses `edge`.
@@ -436,4 +466,107 @@ async fn place_closure_closes_an_edge_redaction(pool: PgPool) {
         None,
         "the other edge's label, which no record names, stays open"
     );
+}
+
+/// The lawful forge with the estate's owner left live. Every statement lands, the fold, the record,
+/// its rows and the rewrite, and COMMIT is refused: the owner is checked at commit, not at insert.
+///
+/// FAILS IF an `edge` rewrite commits for an owner who is not tombstoned (no
+/// `edge_erasure_requires_an_erased_owner` trigger on either table), or if the check runs at a
+/// statement rather than at commit.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_forged_edge_rewrite_naming_a_live_owner_fails_at_commit_not_at_insert(pool: PgPool) {
+    let x = edges(&pool).await;
+    let live_owner = Forged {
+        tombstone: false,
+        ..lawful(&x)
+    };
+    admitted(
+        "every statement of the forge, rolled back before commit",
+        attempt(&pool, &x.w, &live_owner, false).await,
+    );
+    owner_not_erased(
+        "the forge's commit",
+        x.w.profile,
+        attempt(&pool, &x.w, &live_owner, true).await,
+    );
+    assert_eq!(label_of(&pool, x.asserted).await, json!(LABEL));
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_event_field_redactions WHERE event_id = $1")
+            .bind(x.asserted)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 0, "no redaction row persists");
+}
+
+/// The twin of the live-owner forge: the same rewrite, the owner tombstoned before commit.
+///
+/// FAILS IF the commit-time check refuses a tombstoned owner.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_same_rewrite_commits_once_the_owner_is_tombstoned(pool: PgPool) {
+    let x = edges(&pool).await;
+    admitted(
+        "the forge with its owner tombstoned, committed",
+        attempt(&pool, &x.w, &lawful(&x), true).await,
+    );
+    assert_eq!(label_of(&pool, x.asserted).await, json!(SENTINEL));
+}
+
+/// An `edge` row inserted by hand, in a transaction that appends no record, under an `edge_erased`
+/// record a replaying transaction committed for a live owner. Only the kb_event_field_redactions
+/// trigger sees it, since no event is inserted. The twin tombstones the owner in the same
+/// transaction and commits.
+///
+/// FAILS IF `trg_edge_redaction_requires_an_erased_owner` is missing or does not read the row's
+/// record: the row commits under a record whose owner is live.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_edge_row_under_a_record_naming_a_live_owner_fails_at_commit(pool: PgPool) {
+    let x = edges(&pool).await;
+    let payload = json!({
+        "subject_table": "kb_edges",
+        "subject_id": x.e.uuid(),
+        "estate_of": x.w.profile,
+        "folded": false,
+        "redacted_fields": [{ "event": x.asserted, "paths": ["label"] }],
+    });
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let record: Uuid =
+        sqlx::query_scalar("SELECT _event_append('edge_erased', $1, NULL, NULL, $2)")
+            .bind(x.w.emitter)
+            .bind(&payload)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    tx.commit()
+        .await
+        .expect("a replaying transaction commits its record for a live owner");
+
+    let row = |tombstoned: bool| {
+        let pool = pool.clone();
+        let owner = x.w.profile;
+        let event = x.asserted;
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query(
+                "INSERT INTO kb_event_field_redactions (event_id, path, redacted_by, authority) \
+                 VALUES ($1, 'label', $2, 'edge')",
+            )
+            .bind(event)
+            .bind(record)
+            .execute(&mut *tx)
+            .await
+            .expect("the row's insert lands");
+            if tombstoned {
+                tombstone(&mut *tx, owner).await.unwrap();
+            }
+            tx.commit().await.err().map(|e| e.to_string())
+        }
+    };
+    owner_not_erased("the hand-inserted row", x.w.profile, row(false).await);
+    admitted("the twin with the owner tombstoned", row(true).await);
 }

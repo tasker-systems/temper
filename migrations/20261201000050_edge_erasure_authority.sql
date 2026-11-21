@@ -457,7 +457,8 @@ $c$The authorising event's type: `erasure` (resource_erased, whose subject must 
 (resource_scrubbed, whose subject must not be), `principal` (principal_erased, whose subject
 profile must be tombstoned; context names and slugs, principal reasons and Slack ids only) or
 `edge` (edge_erased, whose subject edge must be folded and homed in a context of the estate its
-record names). Written by that type's projector. A structural token, never a value. The DEFAULT
+record names, and whose estate_of must be tombstoned at commit,
+edge_erasure_requires_an_erased_owner). Written by that type's projector. A structural token, never a value. The DEFAULT
 'erasure' is the backfill and the reading of a binary that names no authority; a writer must never
 lean on it for another authority. A row mislabelled `erasure` would occupy the key (event_id, path,
 'erasure'): a later erasure of that path would collide on kb_event_field_redactions_pkey, which

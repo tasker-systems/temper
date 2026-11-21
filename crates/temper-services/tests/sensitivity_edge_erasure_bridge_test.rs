@@ -16,7 +16,7 @@ use uuid::Uuid;
 use temper_substrate::events::EventContext;
 use temper_substrate::ids::{EdgeId, ResourceId};
 
-use edge_erasure::{edge, facet, resource, world, World};
+use edge_erasure::{edge, erase_edge, facet, resource, world, World};
 
 const A_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -102,15 +102,9 @@ async fn an_erased_edges_label_and_facet_findings_are_erased_places(pool: PgPool
         "a live edge's findings are not erased places"
     );
 
-    sqlx::query("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
-        .bind(e.uuid())
-        .bind(w.profile)
-        .bind(op.profile)
-        .bind(op.emitter)
-        .bind(Uuid::now_v7())
-        .execute(&pool)
+    erase_edge(&pool, e, w.profile, &op, Uuid::now_v7())
         .await
-        .expect("the unit erases the stranded edge");
+        .expect("the unit erases the stranded edge, its owner tombstoned");
 
     let held = erased_place_findings(&pool).await;
     assert!(held.contains(&on_label), "the label finding is held");

@@ -179,3 +179,48 @@ pub async fn asserting_event(pool: &PgPool, e: EdgeId) -> Uuid {
         .await
         .expect("the edge's asserting event")
 }
+
+/// Tombstone `profile` on `conn`, the column the person act's tombstone step sets. An edge
+/// erasure's transaction commits only when its record's `estate_of` is tombstoned
+/// (`edge_erasure_requires_an_erased_owner`), so every lawful witness tombstones the owner before
+/// it commits.
+pub async fn tombstone(conn: &mut sqlx::PgConnection, profile: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE kb_profiles SET tombstoned_at = now() WHERE id = $1")
+        .bind(profile)
+        .execute(conn)
+        .await
+        .map(|_| ())
+}
+
+/// `edge_erasure_execute` as a person erasure runs it: one transaction that calls the unit,
+/// tombstones `estate_of` and commits. Returns the unit's result, or the text of the refusal, the
+/// unit's own or the commit's.
+pub async fn erase_edge(
+    pool: &PgPool,
+    e: EdgeId,
+    estate_of: Uuid,
+    operator: &World,
+    request_ref: Uuid,
+) -> Result<Value, String> {
+    let mut tx = pool.begin().await.expect("begin the act");
+    let out: Value = match sqlx::query_scalar("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
+        .bind(e.uuid())
+        .bind(estate_of)
+        .bind(operator.profile)
+        .bind(operator.emitter)
+        .bind(request_ref)
+        .fetch_one(&mut *tx)
+        .await
+    {
+        Ok(out) => out,
+        Err(err) => {
+            tx.rollback().await.expect("roll back the refused act");
+            return Err(err.to_string());
+        }
+    };
+    tombstone(&mut *tx, estate_of)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(out)
+}

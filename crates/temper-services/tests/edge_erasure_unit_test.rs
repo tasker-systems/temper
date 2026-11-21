@@ -7,7 +7,10 @@
 //! record, projects its `edge`-authority redaction rows, sets the edge's label to NULL and its
 //! owned properties to the sentinels, and rewrites every event of the edge's trail to the
 //! sentinels. Each world is built through the real write paths; the unit is called by SQL
-//! directly, since no act calls it yet. The operator and its emitter are a second profile's.
+//! directly, since no act calls it yet. The operator and its emitter are a second profile's. A
+//! lawful run tombstones the estate's owner in the unit's transaction before it commits, as the
+//! person act does after its edge step: the owner is checked at commit
+//! (`edge_erasure_requires_an_erased_owner`).
 //! TODO(person-act step): once the person act calls the unit, witness it through that act too.
 
 mod edge_erasure;
@@ -22,7 +25,9 @@ use temper_substrate::events::{fire, EdgeHome, SeedAction};
 use temper_substrate::ids::{EdgeId, EntityId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
 
-use edge_erasure::{asserting_event, authored, edge, facet, fold, resource, world, World};
+use edge_erasure::{
+    asserting_event, authored, edge, erase_edge, facet, fold, resource, tombstone, world, World,
+};
 
 const LABEL: &str = "jane roe told us";
 const REASONING: &str = "jane roe said so on the call";
@@ -65,7 +70,8 @@ async fn estate(pool: &PgPool) -> Estate {
     }
 }
 
-/// `edge_erasure_execute` under the operator, in its own committed statement. Returns the unit's
+/// `edge_erasure_execute` under the operator, as a person erasure runs it: `estate_of` is
+/// tombstoned in the unit's transaction before it commits ([`erase_edge`]). Returns the unit's
 /// result, or the refusal's text.
 async fn unit(
     pool: &PgPool,
@@ -73,15 +79,7 @@ async fn unit(
     estate_of: Uuid,
     request_ref: Uuid,
 ) -> Result<Value, String> {
-    sqlx::query_scalar("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
-        .bind(x.e.uuid())
-        .bind(estate_of)
-        .bind(x.op.profile)
-        .bind(x.op.emitter)
-        .bind(request_ref)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| e.to_string())
+    erase_edge(pool, x.e, estate_of, &x.op, request_ref).await
 }
 
 async fn event_count(pool: &PgPool) -> i64 {
@@ -503,6 +501,9 @@ async fn race(pool: &PgPool, write: Write) {
         .execute(&mut *act)
         .await
         .expect("the unit runs, its transaction held open");
+    tombstone(&mut *act, x.w.profile)
+        .await
+        .expect("the person act's tombstone, after its edge step");
 
     let mut conn = pool.acquire().await.expect("the writer's connection");
     let (emitter, e) = (x.w.emitter, x.e);
@@ -632,6 +633,9 @@ async fn a_reassertion_racing_the_unit_waits_and_then_mints_a_new_edge(pool: PgP
         .fetch_one(&mut *act)
         .await
         .expect("the unit runs, its transaction held open");
+    tombstone(&mut *act, x.w.profile)
+        .await
+        .expect("the person act's tombstone, after its edge step");
 
     let mut conn = pool.acquire().await.expect("the asserter's connection");
     let (emitter, home) = (x.w.emitter, x.w.home);
@@ -738,4 +742,135 @@ async fn a_reassertion_racing_the_unit_waits_and_then_mints_a_new_edge(pool: PgP
         .unwrap();
         assert_eq!(hits, 0, "the ledger quotes {needle:?}");
     }
+}
+
+/// An edge between two of the world's resources with no label, asserted with no authorship: its
+/// trail holds nothing to redact, so the unit projects no `edge` row for it.
+async fn bare_edge(pool: &PgPool, w: &World, src: ResourceId, tgt: ResourceId) -> EdgeId {
+    let mut conn = pool.acquire().await.expect("acquire");
+    fire(
+        &mut conn,
+        SeedAction::RelationshipAssert {
+            src: AnchorRef::resource(src),
+            tgt: AnchorRef::resource(tgt),
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: None,
+            weight: 1.0,
+            home: EdgeHome::Context(w.home),
+            emitter: EntityId::from(w.emitter),
+        },
+    )
+    .await
+    .expect("assert the bare edge")
+    .relationship()
+    .expect("an edge id")
+}
+
+/// The unit on `e` in one transaction, tombstoning the estate owner first when `tombstoned`.
+/// The call itself must succeed; returns its result and the commit's refusal text, if any.
+async fn unit_then_commit(
+    pool: &PgPool,
+    x: &Estate,
+    e: EdgeId,
+    tombstoned: bool,
+) -> (Value, Option<String>) {
+    let mut tx = pool.begin().await.unwrap();
+    let out: Value = sqlx::query_scalar("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
+        .bind(e.uuid())
+        .bind(x.w.profile)
+        .bind(x.op.profile)
+        .bind(x.op.emitter)
+        .bind(Uuid::now_v7())
+        .fetch_one(&mut *tx)
+        .await
+        .expect("the call itself succeeds: the owner is checked at commit");
+    if tombstoned {
+        tombstone(&mut *tx, x.w.profile).await.unwrap();
+    }
+    (out, tx.commit().await.err().map(|e| e.to_string()))
+}
+
+/// The edge is unchanged and no record names it.
+async fn assert_untouched(pool: &PgPool, e: EdgeId, label: Option<&str>) {
+    let (folded, held): (bool, Option<String>) =
+        sqlx::query_as("SELECT is_folded, label FROM kb_edges WHERE id = $1")
+            .bind(e.uuid())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(!folded, "the edge stays live");
+    assert_eq!(held.as_deref(), label, "and keeps its label");
+    assert!(
+        records_of(pool, e).await.is_empty(),
+        "no edge_erased record"
+    );
+    assert!(folds_of(pool, e).await.is_empty(), "no fold");
+}
+
+/// The unit is called with the estate's owner live, as no person erasure would call it. Each call
+/// succeeds; the commit is refused by `edge_erasure_requires_an_erased_owner` and nothing persists.
+/// The labelled edge's record projects `edge` rows; the bare edge's projects none, so only the
+/// kb_events trigger reaches it. The twin tombstones the owner in the same transaction and commits.
+///
+/// FAILS IF the unit commits outside a person erasure: without
+/// `trg_edge_erased_requires_an_erased_owner` the bare edge's act commits, and without both
+/// triggers the labelled edge's does too; or if the check runs in the call rather than at commit;
+/// or if the twin's tombstone does not admit the act.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_unit_outside_a_person_erasure_is_refused_at_commit(pool: PgPool) {
+    let x = estate(&pool).await;
+    let a = resource(&pool, &x.w, "delta").await;
+    let b = resource(&pool, &x.w, "epsilon").await;
+    let bare = bare_edge(&pool, &x.w, a, b).await;
+    let refused = format!(
+        "edge erasure: the estate's owner {} is not erased",
+        x.w.profile
+    );
+
+    let before = event_count(&pool).await;
+    let (out, err) = unit_then_commit(&pool, &x, x.e, false).await;
+    assert_ne!(
+        out["redacted_fields"],
+        json!([]),
+        "the labelled edge has rows"
+    );
+    let err = err.expect("the labelled edge's act is refused at commit");
+    assert!(err.contains(&refused), "refused for its owner; got {err}");
+
+    let (out, err) = unit_then_commit(&pool, &x, bare, false).await;
+    assert_eq!(
+        out["redacted_fields"],
+        json!([]),
+        "the bare edge has nothing to redact, so no `edge` row is projected"
+    );
+    let err = err.expect("the bare edge's act is refused at commit");
+    assert!(err.contains(&refused), "refused for its owner; got {err}");
+
+    assert_eq!(event_count(&pool).await, before, "nothing appended");
+    assert_untouched(&pool, x.e, Some(LABEL)).await;
+    assert_untouched(&pool, bare, None).await;
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_event_field_redactions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "no redaction row persists");
+
+    // The twin: the same act with the owner tombstoned before commit.
+    let (_, err) = unit_then_commit(&pool, &x, bare, true).await;
+    assert_eq!(
+        err, None,
+        "the bare edge's act commits once the owner is tombstoned"
+    );
+    let (_, err) = unit_then_commit(&pool, &x, x.e, true).await;
+    assert_eq!(
+        err, None,
+        "the labelled edge's act commits once the owner is tombstoned"
+    );
+    assert_sentinelled(&pool, x.e).await;
+    assert_eq!(
+        records_of(&pool, bare).await.len(),
+        1,
+        "the bare edge's record"
+    );
 }

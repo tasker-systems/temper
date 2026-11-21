@@ -20,6 +20,10 @@
 --      an erased edge (_edge_is_erased), so their digests expire.
 --   5. _project_relationship_folded(uuid, jsonb): takes FOR KEY SHARE on the edge row and refuses
 --      a fold of an erased edge (_edge_is_erased).
+--   6. edge_erasure_requires_an_erased_owner(), behind two DEFERRABLE INITIALLY DEFERRED
+--      constraint triggers (an edge_erased record on kb_events, an `edge` row on
+--      kb_event_field_redactions): at commit the record's estate_of must be a tombstoned profile,
+--      so the unit, and any `edge` rewrite, commits only inside a person erasure.
 --
 -- A later edit must not break:
 --   * derive before fold: _edge_erasure_payload_redaction runs before the fold event exists and
@@ -28,6 +32,8 @@
 --     `edge` rewrite only of a folded edge, homed in the estate the record names;
 --   * the body reads no payload, so replay can call it at the record's position;
 --   * a refusal raises before anything is appended;
+--   * the owner check runs at commit, never in the unit: the person act tombstones its subject
+--     after its edge step. It stands down only under temper.replaying;
 --   * each write verb of an edge takes FOR KEY SHARE on the edge row before it writes, so it
 --     commits before the unit's derivation or waits for the act and is then refused: the property
 --     writers (property_set, facet_set, the keyed assert, property_retracted), relationship_retype
@@ -210,6 +216,7 @@ sentinel). Derives _edge_erasure_payload_redaction, folds a live edge (relations
 estate_erased), appends one edge_erased record (subject, actor, estate_of, folded, redacted_fields;
 references subject and request), projects its rows, runs _edge_erasure_apply_redaction, then
 rewrites the derived events in one UPDATE. Every event carries p_request_ref as its correlation.
+Its transaction commits only if p_estate_of is then tombstoned (edge_erasure_requires_an_erased_owner).
 Returns {event_id, folded, redacted_fields}.$c$;
 
 -- ---------------------------------------------------------------------------
@@ -390,6 +397,90 @@ edge_erasure_execute's FOR UPDATE, and raises 'edge % is erased; writes are refu
 _edge_is_erased answers true for the edge; then folds it through _edge_fold_apply.$c$;
 
 
+-- ---------------------------------------------------------------------------
+-- Section 6. The edge authority holds only for a tombstoned estate owner, at commit.
+-- ---------------------------------------------------------------------------
+-- An edge erasure is a step of the person act, so its record's estate_of must name a profile the
+-- act has tombstoned: the strength `erasure` has from erased_at and `principal` from tombstoned_at.
+-- The person act tombstones its subject after the edge step, so the check is deferred to commit.
+-- Two constraint triggers share one function:
+--   * on kb_events, every edge_erased record: a unit call outside a person erasure commits nothing,
+--     including one over an edge with nothing to redact, which projects no `edge` row;
+--   * on kb_event_field_redactions, every `edge` row, read through its redacted_by record: a row
+--     inserted by hand under a record from another transaction is held to the same owner.
+-- The kb_events trigger's WHEN reads category, which kb_events_category_matches_type ties to the
+-- type's (edge_erased is `admin`), so no edge_erased record escapes it; the function confirms the
+-- type by name. Both stand down under temper.replaying: replay commits each event in its own
+-- transaction, and the tombstone rides in with kb_profiles, an input table, not with the walk.
+CREATE FUNCTION edge_erasure_requires_an_erased_owner()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_record    uuid;
+    v_is_edge   boolean;
+    v_estate_of uuid;
+BEGIN
+    IF current_setting('temper.replaying', true) IS NOT DISTINCT FROM 'on' THEN
+        RETURN NULL;
+    END IF;
+    -- Separate statements: PL/pgSQL resolves a NEW field whenever its expression runs.
+    IF TG_TABLE_NAME = 'kb_events' THEN
+        v_record := NEW.id;
+    ELSE
+        v_record := NEW.redacted_by;
+    END IF;
+    SELECT t.name = 'edge_erased', (e.payload ->> 'estate_of')::uuid
+      INTO v_is_edge, v_estate_of
+      FROM kb_events e
+      JOIN kb_event_types t ON t.id = e.event_type_id
+     WHERE e.id = v_record;
+    IF TG_TABLE_NAME = 'kb_events' AND NOT coalesce(v_is_edge, false) THEN
+        RETURN NULL;
+    END IF;
+    IF coalesce(v_is_edge, false)
+       AND EXISTS (SELECT 1 FROM kb_profiles p
+                    WHERE p.id = v_estate_of AND p.tombstoned_at IS NOT NULL) THEN
+        RETURN NULL;
+    END IF;
+    RAISE EXCEPTION 'edge erasure: the estate''s owner % is not erased', v_estate_of
+        USING ERRCODE = 'check_violation', CONSTRAINT = 'edge_erasure_requires_an_erased_owner';
+END;
+$$;
+
+COMMENT ON FUNCTION edge_erasure_requires_an_erased_owner() IS
+$c$At commit (DEFERRABLE INITIALLY DEFERRED constraint triggers trg_edge_erased_requires_an_erased_owner
+on kb_events and trg_edge_redaction_requires_an_erased_owner on kb_event_field_redactions): refuses
+the transaction unless the edge_erased record (the inserted event, or an `edge` row's redacted_by)
+names in estate_of a profile whose tombstoned_at is set. An `edge` row whose redacted_by is no
+edge_erased record is refused too; another kind of event on kb_events passes. Raises 'edge erasure:
+the estate''s owner % is not erased' (check_violation). Stands down while temper.replaying is 'on'.$c$;
+
+CREATE CONSTRAINT TRIGGER trg_edge_erased_requires_an_erased_owner
+    AFTER INSERT ON kb_events
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW
+    WHEN (NEW.category = 'admin')
+    EXECUTE FUNCTION edge_erasure_requires_an_erased_owner();
+
+COMMENT ON TRIGGER trg_edge_erased_requires_an_erased_owner ON kb_events IS
+$c$At commit, an edge_erased record's estate_of must name a tombstoned profile
+(edge_erasure_requires_an_erased_owner). Fires for every admin event; the function confirms the
+type.$c$;
+
+CREATE CONSTRAINT TRIGGER trg_edge_redaction_requires_an_erased_owner
+    AFTER INSERT ON kb_event_field_redactions
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW
+    WHEN (NEW.authority = 'edge')
+    EXECUTE FUNCTION edge_erasure_requires_an_erased_owner();
+
+COMMENT ON TRIGGER trg_edge_redaction_requires_an_erased_owner ON kb_event_field_redactions IS
+$c$At commit, an `edge` row's redacted_by must be an edge_erased record whose estate_of names a
+tombstoned profile (edge_erasure_requires_an_erased_owner).$c$;
+
+
 SELECT declare_migration(
     20261201000060,
     'additive',
@@ -401,9 +492,14 @@ SELECT declare_migration(
     'an arm for findings on such an edge; it also gains a COMMENT. CREATE OR REPLACEs '
     '_project_relationship_folded(uuid, jsonb) at its signature, which takes the same lock and '
     'refuses a fold of an edge an edge_erased record names, and gives it a COMMENT. No edge_erased '
-    'record exists '
+'record exists '
     'before edge_erasure_execute runs, so every existing answer is unchanged, and the added '
     'KEY SHARE conflicts only with a FOR UPDATE, a DELETE or an id change of the edge row (its one '
-    'non-partial unique key is the primary key). No table, column, '
-    'constraint, event type or grant changes.'
+    'non-partial unique key is the primary key). Adds the trigger function '
+    'edge_erasure_requires_an_erased_owner() and two DEFERRABLE INITIALLY DEFERRED constraint '
+    'triggers behind it, on kb_events (WHEN category = admin) and on kb_event_field_redactions '
+    '(WHEN authority = edge), each with a COMMENT: at commit an edge_erased record, or an edge '
+    'row''s record, must name a tombstoned estate_of. No edge_erased record or edge row exists '
+    'when this migration runs, and any other admin event passes, so no existing write is refused. '
+    'No table, column, event type or grant changes.'
 );
