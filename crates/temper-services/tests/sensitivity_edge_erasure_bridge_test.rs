@@ -102,9 +102,10 @@ async fn an_erased_edges_label_and_facet_findings_are_erased_places(pool: PgPool
         "a live edge's findings are not erased places"
     );
 
-    erase_edge(&pool, e, w.profile, &op, Uuid::now_v7())
+    let (_, refused) = erase_edge(&pool, e, w.profile, &op, Uuid::now_v7(), true)
         .await
-        .expect("the unit erases the stranded edge, its owner tombstoned");
+        .expect("the unit erases the stranded edge");
+    assert_eq!(refused, None, "the act commits, its owner tombstoned");
 
     let held = erased_place_findings(&pool).await;
     assert!(held.contains(&on_label), "the label finding is held");

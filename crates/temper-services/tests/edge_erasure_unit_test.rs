@@ -72,14 +72,17 @@ async fn estate(pool: &PgPool) -> Estate {
 
 /// `edge_erasure_execute` under the operator, as a person erasure runs it: `estate_of` is
 /// tombstoned in the unit's transaction before it commits ([`erase_edge`]). Returns the unit's
-/// result, or the refusal's text.
+/// result, or the refusal's text, the unit's own or the commit's.
 async fn unit(
     pool: &PgPool,
     x: &Estate,
     estate_of: Uuid,
     request_ref: Uuid,
 ) -> Result<Value, String> {
-    erase_edge(pool, x.e, estate_of, &x.op, request_ref).await
+    match erase_edge(pool, x.e, estate_of, &x.op, request_ref, true).await? {
+        (out, None) => Ok(out),
+        (_, Some(refused)) => Err(refused),
+    }
 }
 
 async fn event_count(pool: &PgPool) -> i64 {
@@ -767,28 +770,18 @@ async fn bare_edge(pool: &PgPool, w: &World, src: ResourceId, tgt: ResourceId) -
     .expect("an edge id")
 }
 
-/// The unit on `e` in one transaction, tombstoning the estate owner first when `tombstoned`.
-/// The call itself must succeed; returns its result and the commit's refusal text, if any.
+/// The unit on `e` in one transaction ([`erase_edge`]), then tombstoning the estate owner when
+/// `tombstoned`, then the commit. The call itself must succeed; returns its result and the commit's
+/// refusal text, if any.
 async fn unit_then_commit(
     pool: &PgPool,
     x: &Estate,
     e: EdgeId,
     tombstoned: bool,
 ) -> (Value, Option<String>) {
-    let mut tx = pool.begin().await.unwrap();
-    let out: Value = sqlx::query_scalar("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
-        .bind(e.uuid())
-        .bind(x.w.profile)
-        .bind(x.op.profile)
-        .bind(x.op.emitter)
-        .bind(Uuid::now_v7())
-        .fetch_one(&mut *tx)
+    erase_edge(pool, e, x.w.profile, &x.op, Uuid::now_v7(), tombstoned)
         .await
-        .expect("the call itself succeeds: the owner is checked at commit");
-    if tombstoned {
-        tombstone(&mut tx, x.w.profile).await.unwrap();
-    }
-    (out, tx.commit().await.err().map(|e| e.to_string()))
+        .expect("the call itself succeeds: the owner is checked at commit")
 }
 
 /// The edge is unchanged and no record names it.

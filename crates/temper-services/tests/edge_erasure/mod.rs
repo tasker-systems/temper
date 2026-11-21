@@ -1,14 +1,15 @@
 //! The builders the edge-erasure witnesses share: `edge_erasure_trail_test.rs`,
 //! `edge_erasure_authority_test.rs`, `edge_erasure_unit_test.rs`, `edge_erasure_replay_test.rs`,
-//! `sensitivity_edge_erasure_bridge_test.rs` and `person_erasure_estate_edges_test.rs`. One copy, so
-//! the six build the same world: a profile whose `@me` context is in its estate, resources homed
-//! there, and edges, facets and folds written through the real write paths. Profiles, entities and
-//! contexts come from `test_support`.
+//! `sensitivity_edge_erasure_bridge_test.rs`, `person_erasure_estate_edges_test.rs` and
+//! `write_lock_bound_test.rs`. One copy, so the seven build the same world: a profile whose `@me`
+//! context is in its estate, resources homed there or in a team's context outside it, and edges,
+//! facets and folds written through the real write paths. Profiles, entities, teams and contexts
+//! come from `test_support`.
 
-// `allow`, not `expect` (RUST-LINT-3's shared-module exception): this file is compiled into six
+// `allow`, not `expect` (RUST-LINT-3's shared-module exception): this file is compiled into seven
 // test binaries, each using a different subset of it (the authority witnesses never fold or
-// facet; the replay witness homes its resources by hand), so `dead_code` fires in some binaries
-// and not others, and an `expect` would be unfulfilled in whichever binary uses everything.
+// facet; the lock-bound witness never replays), so `dead_code` fires in some binaries and not
+// others, and an `expect` would be unfulfilled in whichever binary uses everything.
 #![allow(
     dead_code,
     reason = "shared test module: each including binary uses a different subset"
@@ -53,6 +54,12 @@ pub async fn world(pool: &PgPool) -> World {
         emitter,
         home: ContextId::from(home),
     }
+}
+
+/// A context of a team that is not the world's personal team: outside the estate.
+pub async fn team_context(pool: &PgPool) -> ContextId {
+    let team = test_support::team::insert(pool, &format!("team-{}", Uuid::now_v7())).await;
+    ContextId::from(test_support::context::insert_team(pool, team, "shared", "shared").await)
 }
 
 /// A resource homed in the world's `@me` context, through the real create path.
@@ -253,16 +260,19 @@ pub async fn tombstone(conn: &mut sqlx::PgConnection, profile: Uuid) -> Result<(
         .map(|_| ())
 }
 
-/// `edge_erasure_execute` as a person erasure runs it: one transaction that calls the unit,
-/// tombstones `estate_of` and commits. Returns the unit's result, or the text of the refusal, the
-/// unit's own or the commit's.
+/// `edge_erasure_execute` in one transaction: the unit, then `estate_of`'s tombstone when
+/// `tombstoned` (as a person erasure tombstones its subject after its edge step), then the commit.
+/// `Err` is the unit's own refusal, rolled back; `Ok` carries the unit's result and the commit's
+/// refusal text, if any. Without the tombstone the commit is refused
+/// (`edge_erasure_requires_an_erased_owner`).
 pub async fn erase_edge(
     pool: &PgPool,
     e: EdgeId,
     estate_of: Uuid,
     operator: &World,
     request_ref: Uuid,
-) -> Result<Value, String> {
+    tombstoned: bool,
+) -> Result<(Value, Option<String>), String> {
     let mut tx = pool.begin().await.expect("begin the act");
     let out: Value = match sqlx::query_scalar("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
         .bind(e.uuid())
@@ -279,9 +289,28 @@ pub async fn erase_edge(
             return Err(err.to_string());
         }
     };
-    tombstone(&mut tx, estate_of)
+    if tombstoned {
+        tombstone(&mut tx, estate_of)
+            .await
+            .expect("tombstone the estate's owner");
+    }
+    let refused = tx.commit().await.err().map(|err| err.to_string());
+    Ok((out, refused))
+}
+
+/// Reset the schema in the current database to a clean, un-seeded baseline, for a replay witness
+/// (the substrate's own helper lives in its test tree, which this crate cannot import).
+pub async fn reset_namespace(pool: &PgPool) {
+    use sqlx::Executor;
+    // In batches, never one `DROP SCHEMA public CASCADE`: see `temper_substrate::test_schema`.
+    temper_substrate::test_schema::drop_test_schemas(pool).await;
+    pool.execute("CREATE SCHEMA public;")
         .await
-        .map_err(|e| e.to_string())?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(out)
+        .expect("recreate the public schema");
+    temper_substrate::MIGRATOR
+        .run(pool)
+        .await
+        .expect("re-apply the migration chain");
+    // One table per transaction: see `temper_substrate::test_schema::truncate_kb_tables`.
+    temper_substrate::test_schema::truncate_kb_tables(pool).await;
 }

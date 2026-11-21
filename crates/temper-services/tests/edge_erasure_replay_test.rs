@@ -19,16 +19,11 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_services::test_support;
-use temper_substrate::ids::ContextId;
 use temper_substrate::replay;
 
-use edge_erasure::{authored, edge, facet, fold, resource_in, tombstone, world};
-
-/// A context of a team that is not the person's personal team: outside the estate.
-async fn team_context(pool: &PgPool) -> ContextId {
-    let team = test_support::team::insert(pool, &format!("team-{}", Uuid::now_v7())).await;
-    ContextId::from(test_support::context::insert_team(pool, team, "shared", "shared").await)
-}
+use edge_erasure::{
+    authored, edge, facet, fold, reset_namespace, resource_in, team_context, tombstone, world,
+};
 
 /// The events of one kind carrying the request reference: (id, occurred_at).
 async fn span_events(
@@ -47,23 +42,6 @@ async fn span_events(
     .fetch_all(pool)
     .await
     .unwrap()
-}
-
-/// Reset the schema in the current database to a clean, un-seeded baseline (the erasure replay
-/// suite's helper; the substrate's own lives in its test tree, which this crate cannot import).
-async fn reset_namespace(pool: &PgPool) {
-    use sqlx::Executor;
-    // In batches, never one `DROP SCHEMA public CASCADE`: see `temper_substrate::test_schema`.
-    temper_substrate::test_schema::drop_test_schemas(pool).await;
-    pool.execute("CREATE SCHEMA public;")
-        .await
-        .expect("recreate the public schema");
-    temper_substrate::MIGRATOR
-        .run(pool)
-        .await
-        .expect("re-apply the migration chain");
-    // One table per transaction: see `temper_substrate::test_schema::truncate_kb_tables`.
-    temper_substrate::test_schema::truncate_kb_tables(pool).await;
 }
 
 /// FAILS IF replay of a span holding a resource erasure and two edge erasures leaves any projection
