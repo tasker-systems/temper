@@ -20,6 +20,9 @@
 --   * the person act's edge step runs after every resource erasure, selects by
 --     _edge_erasure_complete under each edge's lock, locks in id order, and skips and counts an
 --     edge whose home has left the estate since the plan;
+--   * the person act locks its estate contexts after its resource erasures, never at its start:
+--     a standalone resource erasure takes its resource's act queue before its home context's row,
+--     and the reverse order deadlocks the two (the act's context lock comment says how);
 --   * an assertion of an edge's identity racing the step mints a new live edge at the same home
 --     (20261201000060's header says how): a fresh write, lawful as it stands, which the act that
 --     erased the first edge does not erase (ruling 9 of decision
@@ -1243,16 +1246,36 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- ── The estate contexts are locked here, after the resource erasures and before anything
-    --    reads them for the record (R7). context_rename, context_retire, context_restore and
-    --    context_reassign take the same row lock before they read the row, so one that races the
-    --    act waits for it and then finds the context erased; without it, a rename could land a
-    --    real name back on an erased context, or a retirement write a real slug onto the ledger
-    --    after the rewrite below. After the resource erasures, not before: each takes its
-    --    resource's locks and then its home context's row, the order a standalone resource
-    --    erasure takes them, so the two acts cannot deadlock on the pair. In id order, so two
-    --    person acts cannot either. What the act erases and rewrites is read under the lock, not
-    --    taken from the plan.
+    -- ── The estate contexts are locked here, FOR NO KEY UPDATE, after the resource erasures, the
+    --    edge step and the strikes, and before anything reads them for the record (R7).
+    --    context_rename, context_retire, context_restore and context_reassign take the same row
+    --    lock before they read the row, so one that arrives once the act holds it waits for the act
+    --    and then finds the context erased; without it, a rename could land a real name back on an
+    --    erased context, or a retirement write a real slug onto the ledger after the rewrite below.
+    --    In id order, so two person acts do not deadlock on it.
+    --
+    --    Not at the act's start. A standalone resource erasure takes its resource's act queue, then
+    --    its row, then its edges, and then, in steps (7) and (7b) of
+    --    _resource_erasure_apply_redaction, an UPDATE of its home context's row (NO KEY UPDATE)
+    --    when the context holds a shape watermark or a telos centroid. An act holding that context
+    --    from its start and queued on the same resource closes a cycle: the act waits on the
+    --    queue the standalone act holds, which waits on the context row the act holds. Taken here,
+    --    after every resource and edge lock the act takes, the lock is behind them, as the
+    --    standalone act's own context write is. The resource erasures above can still meet a
+    --    standalone one on the pair: one whose step (7) or (7b) wrote a context's row holds it while
+    --    the act queues on the next resource homed there. Postgres breaks that with 40P01 and the
+    --    services retry both acts.
+    --
+    --    So the estate can change between the plan and this lock: context_reassign moves a context
+    --    out until the act first holds its row. For such a context the act's halves follow
+    --    different estates (ruling 11 of decision 01a1f6e8-81bd-758c-be87-a6824b66352a, (a)):
+    --      * the ledger rewrites follow the live estate: the edge step skips its edges
+    --        (_edge_homed_in_estate), and _principal_erasure_redacted_fields leaves its earlier
+    --        names and slugs (_principal_erasure_context_events reads the live estate);
+    --      * the projection erasure follows the plan: the resource loop erases its resources (it
+    --        re-checks a resource's home against the plan's estate), and
+    --        _principal_erasure_contexts_to_erase gives it a context_erased, which retires it and
+    --        sets its name and slug to the sentinels.
     PERFORM 1 FROM kb_contexts c
       WHERE c.id = ANY(v_estate)
       ORDER BY c.id
@@ -1354,7 +1377,10 @@ skipping and counting an edge whose context has left the estate since the plan; 
 live blob homed in the estate; the one principal_erased record, which references each resource and
 edge erasure; the identity arms (_erasure_apply_redaction), which tombstone the subject; and one
 context_erased per estate context, with the ledger rewrite of their names and slugs. Runs with
-lock_timeout = 0 whatever the session, role or database sets. Content committed into a retired
+lock_timeout = 0 whatever the session, role or database sets. The estate contexts are locked
+after the resource erasures, so a context reassigned out of the estate before the act holds its
+row keeps its edges and its earlier names and slugs on the ledger, while its resources are erased
+and it is closed by context_erased. Content committed into a retired
 estate context after the act is a fresh live row that this act does not erase. Does not decide
 legality: the caller's system-admin gate is resolved before any mutation.$c$;
 
@@ -1422,7 +1448,10 @@ SELECT declare_migration(
     'for every edge homed in the estate whose text is not yet erased, after its resource erasures '
     'and before its record, skipping and counting one whose context has left the estate since '
     'the plan: a person erasure now erases those edges, and its record gains a kb_edges target '
-    'and one erasure reference per edge. The record''s payload keys are unchanged. An older binary '
+    'and one erasure reference per edge. Its estate contexts are still locked after its resource '
+    'erasures, so a context reassigned out of the estate before the act holds its row keeps its '
+    'edges and its earlier names and slugs on the ledger, while its resources are erased and it '
+    'is closed by context_erased. The record''s payload keys are unchanged. An older binary '
     'calls the same signatures and reads the same payload keys; its survey and act answer with '
     'the added kb_edges target. Rewrites the COMMENT of kb_event_field_redactions.authority. No '
     'table, column, event type or grant changes.'

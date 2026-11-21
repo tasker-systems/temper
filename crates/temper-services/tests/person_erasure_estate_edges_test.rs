@@ -834,6 +834,15 @@ async fn the_survey_predicts_the_edge_step_over_skip_and_complete_husks(pool: Pg
 /// that context and counts it in the record, and the act completes. FAILS IF the step trusts the
 /// plan's estate: the unit raises `not homed in the estate`, which the service does not retry, and
 /// the act fails.
+///
+/// The act locks its estate contexts after its resource erasures (the context lock comment in
+/// 20261201000070's `principal_erasure_execute` says why not at its start), so a context leaving
+/// between the plan and that lock is handled by halves that follow different estates. The ledger
+/// rewrites follow the live estate: this edge is skipped and kept, as are the context's earlier
+/// names and slugs. The projection erasure follows the plan: the waited resource is erased and the
+/// context gets a `context_erased`. Only the edge half is asserted here. The route is a stand-in:
+/// no door clears `personal_of`; through a door the context leaves by `context_reassign`, which
+/// does not wait on the act until the act first holds the context's row.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn an_estate_context_leaving_the_estate_mid_act_skips_its_edges(pool: PgPool) {
     let w = world(&pool).await;

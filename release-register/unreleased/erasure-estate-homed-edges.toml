@@ -21,7 +21,10 @@ In that migration the person act (principal_erasure_execute) now runs the unit f
 homed in the estate whose text is not yet erased, live or folded before the act, whatever it
 points at, after its resource erasures and before its record and the tombstone. An edge a
 resource erasure of the same act already erased is skipped, and an edge whose context has left the estate since the act's plan
-is skipped and counted. The person act's record gains one kb_edges target naming how many edges it
+is skipped and counted. The act still locks its estate contexts after its resource erasures, so a
+context reassigned out of the estate before the act holds its row keeps its edges and its earlier
+names and slugs on the ledger, while its resources are erased and it is closed by context_erased.
+The person act's record gains one kb_edges target naming how many edges it
 erased, and one `erasure` reference per edge_erased; its payload keys are unchanged. The survey
 (POST /api/admin/erasure/survey, temper admin erasure principal) predicts the same kb_edges target,
 and no longer counts the subject's labels and property values on those edges as text kept outside
