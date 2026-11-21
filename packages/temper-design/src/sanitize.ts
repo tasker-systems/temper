@@ -4,15 +4,23 @@
 // one policy, and it lives here; why a given surface's CSP backs it up is that surface's comment
 // to keep, next to its CSP, not this module's.
 //
+// A consumer of this sanitizer must not depend on its own CSP for anything this pass is the gate
+// for. A CSP is a second line where a surface has one, and some surfaces have none; on every
+// channel listed below, the output here is safe to insert without it.
+//
 // markdown.ts stays DOM-FREE; this module owns the DOM dependency and the one-time hook
 // registration on its own DOMPurify instance, so a renderer that dynamic-imports it on the
 // client never double-adds the hook across remounts.
 //
-// Two attribute channels can carry author-controlled styling into the rendered document; both
-// are closed here, in one pass:
+// Three channels can carry author-controlled styling into the rendered document; all are closed
+// here, in one pass:
 //
 // • style — FORBID_ATTR. Whatever a surface's CSP says about style attributes, the sanitizer is
 //   the gate for authored content.
+//
+// • <style> — FORBID_TAGS, the element, in every namespace, matching the attribute rule. Its
+//   rules would reach the whole document the body is inserted into, chrome included. DOMPurify
+//   drops a forbidden `<style>`'s contents with it.
 //
 // • class — filtered to the prefixes the markdown pipeline legitimately emits. A CSP has no
 //   lever for this channel: a class value is neither a style attribute nor a fetch. But the
@@ -73,7 +81,7 @@ export const SANITIZE_CONFIG = {
 	FORBID_ATTR: ['style', 'srcset', 'background'],
 	// `action` and `formaction` go with the form and button, and `<input>`'s with the pass below;
 	// neither needs its own entry.
-	FORBID_TAGS: ['image', 'feImage', 'form', 'button', 'template'],
+	FORBID_TAGS: ['style', 'image', 'feImage', 'form', 'button', 'template'],
 };
 
 /** Words for a withheld image; exported so the witnesses and the components agree. */

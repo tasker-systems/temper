@@ -196,6 +196,38 @@ Check the exit code before reading output. On failure stdout carries
 `message`. A success may
 carry an advisory `diagnostics` array, which is not a failure.
 
+**Parse stdout alone.** Warnings, hints and tracing go to stderr, so `temper … 2>&1 | jq` fails on
+the first warning ahead of the JSON. Never merge the streams into what you parse: send stderr to a
+file (`2>err.log`) and read it separately.
+
+## A Failed Pipe Is Not a Failed Write
+
+A write can land while its answer is lost. Read `temper`'s own answer, not the pipe's: write
+stdout to a file (`TEMPER_FORMAT=json temper … >out.json 2>err.log; echo $?`) and parse the
+file. The variable pins JSON over any config default. Exit 0, or a refusal such as
+`PRECONDITION_FAILED` or `bad-request`, is a known outcome. A `network` code, an `api` code (a
+server or unclassified error), a timeout or no readable stdout means the outcome is unknown: the
+write may have landed, since a gateway can time out after the server commits. Before retrying a
+create or a commit whose outcome is unknown, check whether it landed, and retry only when it did
+not:
+
+- **A resource:** `temper resource list --type <t> --context <ctx> --title-contains "<title>"`.
+  A row with your title, created after you sent the write, is almost certainly it; `show` it to
+  compare its body with what you sent. The match is a substring and the page is 20 rows, so read
+  `truncated`. Two rows with one title and the same `body_hash` are almost certainly one write
+  landed twice, and the later one is the duplicate. The stored `body_hash` is not a hash of your
+  local file, so compare rows with each other, not with a hash you compute.
+- **A data-artifact commit** (such as a `coordination-claim` or `coordination-outcome`): `temper
+  data-artifact list <work-item> --kind <kind>` prints each record's `content`. Look for one
+  carrying the `claim_id` you sent.
+- **A guarded meta write** can be retried as it is. If the first attempt landed, the retry comes
+  back refused, and its `current` shows the value you meant to write to the guarded key (see
+  `coordinating-through-records.md`, *Read the refusal*).
+
+A `resource create` sent with `--idempotency-key` can be retried as it is, with the same key
+(*Retrying a Create*, below). A `data-artifact commit` takes no idempotency key, so a blind retry
+of one that landed leaves a duplicate, as does a create retried without its first key.
+
 ## Retrying a Create
 
 `resource create --idempotency-key <uuid>` makes a retry safe without checking first: re-issued
@@ -205,9 +237,9 @@ same `K` on every retry. Keys are scoped to you, and a replay returns the first 
 without comparing bodies, so never reuse a key for a different resource. A create sent without the
 flag still carries a key the CLI minted: on a `network` error or a server 5xx (`api`) the `hint`
 names it, and re-issuing with `--idempotency-key <that key>` is the safe retry. Without the key,
-check that the create landed before retrying it. A large body resumes an interrupted attempt saved
-in the vault under that attempt's key; given a different key, the create is refused and names the
-saved one to re-run with. `resource update` and `data-artifact commit` take no key.
+check that the create landed before retrying it (*A Failed Pipe Is Not a Failed Write*, above). A
+large body resumes an interrupted attempt saved in the vault under that attempt's key; given a
+different key, the create is refused and names the saved one to re-run with. `resource update` and `data-artifact commit` take no key.
 
 ## Skill-Only Commands
 

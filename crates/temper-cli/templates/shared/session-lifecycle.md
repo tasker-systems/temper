@@ -61,12 +61,18 @@ or UUID (or its title slug) and links the note to it, which is how a resume find
 note. An unmatched `--task` still saves the note, unlinked: read `task_link.status` in the JSON, and
 anything but `linked` means no link. `create` prints the new resource as JSON; its `ref` is what `--from-session` takes.
 Keep `$K` until you have read that JSON: re-running the same command with the same key returns the
-note already saved instead of saving a second (`reference.md`, *Retrying a Create*).
+note already saved instead of saving a second (`reference.md`, *Retrying a Create*). If you cannot
+read that JSON and no longer have the key, the note may still have been saved. Before you save it
+again, list by `--title-contains` and look for it (`reference.md`, *A Failed Pipe Is Not a Failed Write*).
 {%- else -%}
 ```
 Tool: create_resource
-Input: { "context_ref": "@me/<ctx>", "doc_type_name": "session", "title": "<title>", "content": "<the note>" }
+Input: { "context_ref": "@me/<ctx>", "doc_type_name": "session", "title": "<title>", "content": "<the note>", "idempotency_key": "<UUIDv7>" }
 ```
+Send an `idempotency_key` (a fresh UUIDv7) with the create, and reuse the same key if you retry:
+a retry with the same key returns the note already saved instead of saving a second one. If you
+sent no key and the answer was lost, the note may still have been saved. Before you create it
+again, `list_resources` sessions in that context and look for a row with your title.
 {%- endif %}
 
 ## The handoff preamble
