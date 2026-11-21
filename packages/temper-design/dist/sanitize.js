@@ -5,8 +5,8 @@
 // to keep, next to its CSP, not this module's.
 //
 // A consumer of this sanitizer must not depend on its own CSP for anything this pass is the gate
-// for. A CSP is a second line where a surface has one, and some surfaces have none; the output
-// here is safe to insert without it.
+// for. A CSP is a second line where a surface has one, and some surfaces have none; on every
+// channel listed below, the output here is safe to insert without it.
 //
 // markdown.ts stays DOM-FREE; this module owns the DOM dependency and the one-time hook
 // registration on its own DOMPurify instance, so a renderer that dynamic-imports it on the
@@ -18,7 +18,7 @@
 // • style — FORBID_ATTR. Whatever a surface's CSP says about style attributes, the sanitizer is
 //   the gate for authored content.
 //
-// • <style> — FORBID_TAGS, the element, HTML and SVG alike, matching the attribute rule. Its
+// • <style> — FORBID_TAGS, the element, in every namespace, matching the attribute rule. Its
 //   rules would reach the whole document the body is inserted into, chrome included. DOMPurify
 //   drops a forbidden `<style>`'s contents with it.
 //
