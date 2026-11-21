@@ -10,18 +10,17 @@
 //! directly, since no act calls it yet. The operator and its emitter are a second profile's.
 //! TODO(person-act step): once the person act calls the unit, witness it through that act too.
 
+mod edge_erasure;
+
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
 use temper_core::types::property_owner::PropertyOwner;
-use temper_services::test_support;
-use temper_substrate::affinity::EdgeKind;
-use temper_substrate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
-use temper_substrate::ids::{ContextId, EdgeId, EntityId, ResourceId};
-use temper_substrate::payloads::{AgentAuthorship, AnchorRef, ConfidenceBand, EdgePolarity};
-use temper_substrate::writes::{self, CreateParams};
+use temper_substrate::events::{fire, SeedAction};
+use temper_substrate::ids::{EdgeId, EntityId};
+
+use edge_erasure::{asserting_event, authored, edge, facet, fold, resource, world, World};
 
 const LABEL: &str = "jane roe told us";
 const REASONING: &str = "jane roe said so on the call";
@@ -29,140 +28,6 @@ const OTHER_LABEL: &str = "another free label";
 const OTHER_REASONING: &str = "the other edge's own reasoning";
 /// Text the erased edge alone carries, in its label, its facet and its authorship metadata.
 const NEEDLES: [&str; 4] = [LABEL, REASONING, "jane roe", "confided"];
-
-struct World {
-    profile: Uuid,
-    emitter: Uuid,
-    home: ContextId,
-}
-
-/// A profile, its `@web` emitter and an `@me` context, which `_erasure_estate_contexts(profile)`
-/// returns. The handle is the full id, so same-millisecond UUIDv7 handles cannot collide.
-async fn world(pool: &PgPool) -> World {
-    let profile = Uuid::now_v7();
-    let handle = format!("user-{profile}");
-    test_support::profile::insert_with_id(pool, profile, &handle).await;
-    let emitter = test_support::entity::insert(pool, profile, &format!("{handle}@web")).await;
-    let home = test_support::context::insert_personal(pool, profile, "notes", "notes").await;
-    let in_estate: bool = sqlx::query_scalar("SELECT $2 IN (SELECT _erasure_estate_contexts($1))")
-        .bind(profile)
-        .bind(home)
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    assert!(in_estate, "the @me context is in its owner's estate");
-    World {
-        profile,
-        emitter,
-        home: ContextId::from(home),
-    }
-}
-
-async fn resource(pool: &PgPool, w: &World, title: &str) -> ResourceId {
-    writes::create_resource_with(
-        pool,
-        CreateParams {
-            idempotency_key: None,
-            title,
-            origin_uri: &format!("test://{}", Uuid::now_v7()),
-            body: "a body",
-            doc_type: "research",
-            home: AnchorRef::context(w.home),
-            owner: ProfileId::from(w.profile),
-            originator: ProfileId::from(w.profile),
-            emitter: EntityId::from(w.emitter),
-            properties: &[],
-            chunks: None,
-            sources: Vec::new(),
-        },
-        EventContext::default(),
-    )
-    .await
-    .expect("create through the real path")
-}
-
-fn authored(reasoning: &str) -> EventContext {
-    EventContext {
-        authorship: Some(AgentAuthorship {
-            reasoning: Some(reasoning.into()),
-            confidence: ConfidenceBand::Probable,
-            rationale: None,
-            persona: None,
-            model: None,
-        }),
-        invocation: None,
-        correlation: None,
-    }
-}
-
-/// An edge homed in the world's context, asserted with authorship reasoning on its event.
-async fn edge(
-    pool: &PgPool,
-    w: &World,
-    src: ResourceId,
-    tgt: ResourceId,
-    label: &str,
-    reasoning: &str,
-) -> EdgeId {
-    let mut conn = pool.acquire().await.expect("acquire");
-    fire_with(
-        &mut conn,
-        SeedAction::RelationshipAssert {
-            src: AnchorRef::resource(src),
-            tgt: AnchorRef::resource(tgt),
-            kind: EdgeKind::LeadsTo,
-            polarity: EdgePolarity::Forward,
-            label: Some(label),
-            weight: 1.0,
-            home: EdgeHome::Context(w.home),
-            emitter: EntityId::from(w.emitter),
-        },
-        authored(reasoning),
-    )
-    .await
-    .expect("assert the edge")
-    .relationship()
-    .expect("an edge id")
-}
-
-/// A facet on the edge through the real write path.
-async fn facet(pool: &PgPool, w: &World, e: EdgeId, values: Value) {
-    let mut conn = pool.acquire().await.expect("acquire");
-    fire(
-        &mut conn,
-        SeedAction::FacetSet {
-            owner: PropertyOwner::Edge { id: e },
-            values: &values,
-            weight: 1.0,
-            emitter: EntityId::from(w.emitter),
-        },
-    )
-    .await
-    .expect("set a facet on the edge");
-}
-
-/// The edge's ordinary fold, through the real write path.
-async fn fold(pool: &PgPool, w: &World, e: EdgeId) {
-    let mut conn = pool.acquire().await.expect("acquire");
-    fire(
-        &mut conn,
-        SeedAction::RelationshipFold {
-            edge: e,
-            reason: None,
-            emitter: EntityId::from(w.emitter),
-        },
-    )
-    .await
-    .expect("fold the edge");
-}
-
-async fn asserting_event(pool: &PgPool, e: EdgeId) -> Uuid {
-    sqlx::query_scalar("SELECT asserted_by_event_id FROM kb_edges WHERE id = $1")
-        .bind(e.uuid())
-        .fetch_one(pool)
-        .await
-        .expect("the edge's asserting event")
-}
 
 /// One estate with a labelled, faceted edge and a second edge beside it, and an operator.
 struct Estate {
@@ -179,7 +44,7 @@ async fn estate(pool: &PgPool) -> Estate {
     let a = resource(pool, &w, "alpha").await;
     let b = resource(pool, &w, "beta").await;
     let c = resource(pool, &w, "gamma").await;
-    let e = edge(pool, &w, a, b, LABEL, REASONING).await;
+    let e = edge(pool, &w, a, b, LABEL, authored(REASONING)).await;
     facet(
         pool,
         &w,
@@ -187,7 +52,7 @@ async fn estate(pool: &PgPool) -> Estate {
         json!({ "node_label": "jane roe", "status": "confided" }),
     )
     .await;
-    let other = edge(pool, &w, b, c, OTHER_LABEL, OTHER_REASONING).await;
+    let other = edge(pool, &w, b, c, OTHER_LABEL, authored(OTHER_REASONING)).await;
     let asserted = asserting_event(pool, e).await;
     Estate {
         w,

@@ -12,137 +12,18 @@
 
 use std::collections::BTreeSet;
 
+mod edge_erasure;
+
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
-use temper_core::types::property_owner::PropertyOwner;
-use temper_services::test_support;
-use temper_substrate::affinity::EdgeKind;
-use temper_substrate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
-use temper_substrate::ids::{ContextId, EdgeId, EntityId, ResourceId};
-use temper_substrate::payloads::{AgentAuthorship, AnchorRef, ConfidenceBand, EdgePolarity};
-use temper_substrate::writes::{self, CreateParams};
+use temper_substrate::ids::EdgeId;
+
+use edge_erasure::{asserting_event, authored, edge, facet, resource, world, World};
 
 const LABEL: &str = "jane roe told us";
 const REASONING: &str = "jane roe said so on the call";
-
-struct World {
-    profile: Uuid,
-    emitter: Uuid,
-    home: ContextId,
-}
-
-/// A profile, its `@web` emitter and an `@me` context. The handle is the full id, so
-/// same-millisecond UUIDv7 handles cannot collide.
-async fn world(pool: &PgPool) -> World {
-    let profile = Uuid::now_v7();
-    let handle = format!("user-{profile}");
-    test_support::profile::insert_with_id(pool, profile, &handle).await;
-    let emitter = test_support::entity::insert(pool, profile, &format!("{handle}@web")).await;
-    let home = test_support::context::insert_personal(pool, profile, "notes", "notes").await;
-    World {
-        profile,
-        emitter,
-        home: ContextId::from(home),
-    }
-}
-
-async fn resource(pool: &PgPool, w: &World, title: &str) -> ResourceId {
-    writes::create_resource_with(
-        pool,
-        CreateParams {
-            idempotency_key: None,
-            title,
-            origin_uri: &format!("test://{}", Uuid::now_v7()),
-            body: "a body",
-            doc_type: "research",
-            home: AnchorRef::context(w.home),
-            owner: ProfileId::from(w.profile),
-            originator: ProfileId::from(w.profile),
-            emitter: EntityId::from(w.emitter),
-            properties: &[],
-            chunks: None,
-            sources: Vec::new(),
-        },
-        EventContext::default(),
-    )
-    .await
-    .expect("create through the real path")
-}
-
-fn authored() -> EventContext {
-    EventContext {
-        authorship: Some(AgentAuthorship {
-            reasoning: Some(REASONING.into()),
-            confidence: ConfidenceBand::Probable,
-            rationale: None,
-            persona: None,
-            model: None,
-        }),
-        invocation: None,
-        correlation: None,
-    }
-}
-
-/// An edge homed in the world's context, asserted with authorship reasoning on its event.
-async fn edge(pool: &PgPool, w: &World, src: ResourceId, tgt: ResourceId, label: &str) -> EdgeId {
-    let mut conn = pool.acquire().await.expect("acquire");
-    fire_with(
-        &mut conn,
-        SeedAction::RelationshipAssert {
-            src: AnchorRef::resource(src),
-            tgt: AnchorRef::resource(tgt),
-            kind: EdgeKind::LeadsTo,
-            polarity: EdgePolarity::Forward,
-            label: Some(label),
-            weight: 1.0,
-            home: EdgeHome::Context(w.home),
-            emitter: EntityId::from(w.emitter),
-        },
-        authored(),
-    )
-    .await
-    .expect("assert the edge")
-    .relationship()
-    .expect("an edge id")
-}
-
-/// A facet on the edge through the real write path; returns its event.
-async fn facet(pool: &PgPool, w: &World, e: EdgeId, values: Value) -> Uuid {
-    let mut conn = pool.acquire().await.expect("acquire");
-    fire(
-        &mut conn,
-        SeedAction::FacetSet {
-            owner: PropertyOwner::Edge { id: e },
-            values: &values,
-            weight: 1.0,
-            emitter: EntityId::from(w.emitter),
-        },
-    )
-    .await
-    .expect("set a facet on the edge");
-    sqlx::query_scalar(
-        "SELECT ev.id FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id \
-          WHERE et.name = 'property_asserted' \
-            AND ev.payload #>> '{owner,table}' = 'kb_edges' \
-            AND ev.payload #>> '{owner,id}' = $1::text \
-          ORDER BY ev.id DESC LIMIT 1",
-    )
-    .bind(e.uuid())
-    .fetch_one(pool)
-    .await
-    .expect("the facet's event")
-}
-
-async fn asserting_event(pool: &PgPool, e: EdgeId) -> Uuid {
-    sqlx::query_scalar("SELECT asserted_by_event_id FROM kb_edges WHERE id = $1")
-        .bind(e.uuid())
-        .fetch_one(pool)
-        .await
-        .expect("the edge's asserting event")
-}
 
 /// A re-assertion as every version before 20261117000030 recorded one: the asserting event's
 /// payload under a freshly minted `edge_id`, appended as written, then projected. The projector's
@@ -204,7 +85,7 @@ async fn edged(pool: &PgPool) -> Edged {
     let b = resource(pool, &w, "b").await;
     let c = resource(pool, &w, "c").await;
 
-    let e = edge(pool, &w, a, b, LABEL).await;
+    let e = edge(pool, &w, a, b, LABEL, authored(REASONING)).await;
     let asserted = asserting_event(pool, e).await;
     let facet_ev = facet(
         pool,
@@ -215,7 +96,7 @@ async fn edged(pool: &PgPool) -> Edged {
     .await;
     let phantom = historical_reassertion(pool, &w, e).await;
 
-    let o = edge(pool, &w, b, c, "another label").await;
+    let o = edge(pool, &w, b, c, "another label", authored(REASONING)).await;
     let o_asserted = asserting_event(pool, o).await;
     let o_facet = facet(pool, &w, o, json!({ "node_label": "elsewhere" })).await;
 
