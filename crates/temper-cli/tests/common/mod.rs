@@ -74,6 +74,7 @@ pub fn create_goal(config: &temper_cli::config::Config, context: &str, title: &s
             sources_as_edges: false,
             no_source: false,
             preserve_source: false,
+            idempotency_key: None,
         },
     )
     .unwrap();
@@ -117,6 +118,7 @@ pub fn create_task(
             sources_as_edges: false,
             no_source: false,
             preserve_source: false,
+            idempotency_key: None,
         },
     )
     .unwrap();

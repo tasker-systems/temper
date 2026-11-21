@@ -1,0 +1,21 @@
+title    = "`temper resource create` takes a reusable `--idempotency-key`, and a network error names the key it sent"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+`temper resource create` gains `--idempotency-key <UUID>`. Re-issuing a create with the same key
+returns the resource the first one created instead of a second (the server's existing
+`(owner, idempotency_key)` replay, issue #581; its semantics are unchanged). Without the flag the
+CLI mints the key before dispatch, as it always minted one per invocation, so every in-process
+retry of one invocation still sends one key.
+
+Behavioral: on a network error the error payload's `hint` (stderr in TOON mode) now names the key
+the create sent and says to re-issue with `--idempotency-key <key>`, instead of saying the write
+path has no key and that a retried create mints a duplicate. The `update` hint, and the key-less
+case, keep "reconcile first". The payload's shape is unchanged; only the hint's text differs.
+
+Who observes it: CLI users and agents retrying a create after a lost answer. Older servers already
+replay by key, so a new CLI against any deployed server behaves the same. Release relevance:
+signal-only; no server, wire or schema change.
+'''

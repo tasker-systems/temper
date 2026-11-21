@@ -21,7 +21,7 @@ fn main() {
     // exactly where "surely these four and the fifth should match" gets acted on.
     temper_telemetry::init_cli_logging();
 
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
 
     // The CLI embeds one document for one user, so it should use the machine.
     //
@@ -69,6 +69,11 @@ fn main() {
     let output_format =
         OutputFormat::resolve_with(cli.format.as_deref(), global_cfg.cli.format.as_deref());
 
+    // A `resource create` sends an idempotency key; fix it here, before dispatch, so the key this
+    // invocation sends is known below if the create's answer is lost, and the hint can name it for
+    // the retry to reuse (issue #581).
+    temper_cli::reconcile_hint::pin_create_idempotency_key(&mut cli.command);
+
     // Classify the command before dispatch consumes `cli`: was this a
     // lost-ack-prone write (`resource create`/`update`, an executed erasure)? If
     // it later fails with a transport error, the write may have committed anyway
@@ -94,7 +99,7 @@ fn main() {
         // human at a TTY is no worse off than before.
         let hint = temper_cli::reconcile_hint::reconcile_hint(lost_ack_prone, e);
         if output_format == OutputFormat::Json {
-            let payload = temper_cli::error::render_error_payload(e, hint);
+            let payload = temper_cli::error::render_error_payload(e, hint.as_deref());
             println!("{payload}");
         } else {
             match e {
@@ -120,7 +125,7 @@ fn main() {
             // executed erasure, may hide a write that landed: reconcile before retrying.
             // Guidance goes to stderr, so it never touches the payload.
             if let Some(hint) = hint {
-                temper_cli::output::hint(hint);
+                temper_cli::output::hint(&*hint);
             }
         }
         temper_telemetry::shutdown_telemetry();
@@ -190,6 +195,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     sources_as_edges,
                     no_source,
                     preserve_source,
+                    idempotency_key,
                     act,
                 } => {
                     if show_template {
@@ -221,6 +227,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             sources_as_edges,
                             no_source,
                             preserve_source,
+                            idempotency_key,
                             format: output_format,
                             act: act.into_act_input()?,
                         },

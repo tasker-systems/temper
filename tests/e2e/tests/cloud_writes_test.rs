@@ -123,6 +123,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
                     preserve_source: false,
+                    idempotency_key: None,
                     open_meta: None,
                     goal: None,
                     doc_type: "session",
@@ -935,6 +936,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
                     preserve_source: false,
+                    idempotency_key: None,
                     open_meta: None,
                     goal: None,
                     doc_type: "session",
@@ -1209,6 +1211,7 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
                     preserve_source: false,
+                    idempotency_key: None,
                     open_meta: None,
                     goal: None,
                     doc_type: "task",
@@ -1311,6 +1314,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                 &cli_config2,
                 temper_cli::commands::resource::CreateResourceArgs {
                     preserve_source: false,
+                    idempotency_key: None,
                     open_meta: None,
                     goal: None,
                     doc_type: "task",
@@ -1472,6 +1476,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
                 &cli_config2,
                 temper_cli::commands::resource::CreateResourceArgs {
                     preserve_source: false,
+                    idempotency_key: None,
                     open_meta: None,
                     goal: None,
                     doc_type: "task",

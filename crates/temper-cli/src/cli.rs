@@ -679,7 +679,8 @@ pub enum ResourceAction {
         ///
         /// Not atomic: the edges are asserted after the create commits. A failed edge
         /// warns rather than failing the command — `edge assert` is idempotent, so
-        /// re-asserting is safe, while re-running a create is not.
+        /// re-asserting is safe, while re-running a create is safe only with the
+        /// `--idempotency-key` it was first sent with.
         #[arg(long, requires = "sources")]
         sources_as_edges: bool,
         /// Suppress the `--from <url>` provenance default. By default a URL `--from` sets the
@@ -693,9 +694,18 @@ pub enum ResourceAction {
         /// context/cogmap, and a `derivation_source` edge is asserted from the resource to the
         /// blob — the provenance question later is a graph read (`blob relations`/`blob get`).
         /// Not atomic: blob + edge assert after the create commits, warnings rather than
-        /// failures (re-running is safe on the blob; the create is not re-runnable).
+        /// failures (re-running is safe on the blob; the create is re-runnable only with
+        /// its first `--idempotency-key`).
         #[arg(long, requires = "from")]
         preserve_source: bool,
+        /// Make a retried create safe: re-issuing a create with the same key returns the resource
+        /// the first one created, and never creates a second. Mint one UUID per resource you mean
+        /// to create, before the first attempt, and send it on every retry of that create. Keys
+        /// are scoped to you; a replay returns the first write as it stands and does not compare
+        /// bodies, so a key reused for a different resource returns the old one. Omitted: the
+        /// CLI mints one, and a network error prints it so the retry can reuse it.
+        #[arg(long, value_name = "UUID")]
+        idempotency_key: Option<uuid::Uuid>,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,

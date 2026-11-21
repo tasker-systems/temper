@@ -334,6 +334,10 @@ pub struct CreateResourceArgs<'a> {
     /// `derivation-source-preservable` clause's surface (D3). Gated on `from` by clap.
     /// Fail-fast on non-local `--from` (a URL has no local original to preserve).
     pub preserve_source: bool,
+    /// `--idempotency-key` — the key the create sends, so a retry that sends it again returns the
+    /// first write. `main` pins one before dispatch when the caller gave none; `None` here (a
+    /// caller other than `main`) lets `shape_create` mint one.
+    pub idempotency_key: Option<uuid::Uuid>,
     pub format: crate::format::OutputFormat,
     /// Per-act correlation + authorship for the create act (from `--invocation`/`--confidence`/…).
     pub act: temper_core::types::ActInput,
@@ -494,6 +498,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         sources_as_edges,
         no_source,
         preserve_source,
+        idempotency_key,
         format,
         act,
     } = args;
@@ -596,7 +601,8 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 
     // The create, as every door expresses it: `temper_workflow::shaping` owns its defaults (no
     // body sends none; an absent origin is empty; an idempotency key is minted when none is given)
-    // and the server judges it.
+    // and the server judges it. From `main` the key is always given: `--idempotency-key`, or the
+    // one `reconcile_hint::pin_create_idempotency_key` minted so a network error can name it.
     // The preserve hook below homes its blob where the create lands; the home itself moves into
     // the create.
     let home_table = match home {
@@ -620,7 +626,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         // record from it when no explicit `--sources` were given. `--no-source` and a local-path
         // `--from` leave it unset.
         origin_uri: origin_uri_from_source(from.as_deref(), no_source),
-        idempotency_key: None,
+        idempotency_key,
         act,
     };
 
@@ -687,9 +693,9 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // `--sources-as-edges`: one `derived_from` edge per resource-valued source.
     //
     // Deliberately NOT atomic and deliberately NOT fatal. The create has already
-    // committed and is not idempotent (content dedup was retired, #219), so failing
-    // here would push an author toward re-running the create and duplicating the
-    // node. `relationship_assert` upserts on the active-edge invariant, so a failed
+    // committed, and a re-run converges on it only when it re-sends this invocation's
+    // idempotency key, so failing here would push an author toward a re-run that
+    // duplicates the node. `relationship_assert` upserts on the active-edge invariant, so a failed
     // edge is safely re-assertable with `temper edge assert`. Mirrors `link_session_to_task`.
     let (edges_asserted, edges_failed) = if sources_as_edges {
         use temper_core::types::relationship_requests::AssertRelationshipRequest;
@@ -750,8 +756,8 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // `--preserve-source`: commit the original file as a blob + assert the
     // `derivation_source` edge (resource → blob), the CLI-native-ingest face of
     // `derivation-source-preservable` (D3). Same not-atomic, warn-not-fatal posture as
-    // `--sources-as-edges`: the create is committed and not re-runnable, the blob commit
-    // is a content-addressed get-or-create (re-running converges on the same blob), and
+    // `--sources-as-edges`: the create is committed (re-runnable only with its key), the
+    // blob commit is a content-addressed get-or-create (re-running converges on the same blob), and
     // the edge re-asserts idempotently. The blob homes in the CREATE's own home — the
     // file's provenance lives where the resource does (blob-visibility-self-contained
     // then keeps the two readable by the same audience).
