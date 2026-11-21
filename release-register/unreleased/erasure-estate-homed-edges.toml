@@ -46,6 +46,7 @@ admin reading the ledger sees one edge_erased per erased edge; anyone reading su
 properties or its ledger trail finds its label and properties gone or at their sentinels, whoever
 wrote them. Witnesses: crates/temper-services/tests/person_erasure_estate_edges_test.rs,
 edge_erasure_authority_test.rs, edge_erasure_trail_test.rs, edge_erasure_unit_test.rs,
-edge_erasure_replay_test.rs and sensitivity_edge_erasure_bridge_test.rs. Release relevance: additive
-in schema; behavioral for person erasure, which now reaches these edges.
+edge_erasure_replay_test.rs, sensitivity_edge_erasure_bridge_test.rs and write_lock_bound_test.rs.
+Release relevance: additive in schema; behavioral for person erasure, which now reaches these
+edges.
 '''
