@@ -118,12 +118,14 @@ fn body_file(app: &common::E2eTestApp, content: &str) -> String {
     format!("@{}", path.display())
 }
 
-/// Leave a pending resume manifest for `content` under `saved_key`, as an attempt interrupted
-/// before its begin was acknowledged leaves one.
+/// Leave an unfinished resume manifest for `content` under `saved_key`: with no `resource_id`, as
+/// an attempt interrupted before its begin was acknowledged leaves one; with one, as an attempt
+/// interrupted after it leaves one.
 fn pending_manifest(
     app: &common::E2eTestApp,
     content: &str,
     saved_key: Uuid,
+    resource_id: Option<Uuid>,
 ) -> std::path::PathBuf {
     use temper_cli::actions::ingest_manifest::{self, IngestManifest, SEGMENTER_VERSION};
 
@@ -132,7 +134,7 @@ fn pending_manifest(
         &path,
         &IngestManifest {
             idempotency_key: Some(saved_key),
-            resource_id: None,
+            resource_id,
             source_hash: temper_core::hash::sha256_hex(content.as_bytes()),
             block_budget: temper_ingest::stream::SEGMENT_BUDGET_BYTES as u32,
             segmenter_version: SEGMENTER_VERSION,
@@ -143,6 +145,115 @@ fn pending_manifest(
     )
     .expect("store manifest");
     path
+}
+
+/// Land every segment of `content` under `key` through the server's own primitives, with zero
+/// vectors, and finalize it when `finalize` is set: the state an earlier attempt with that key
+/// left, without paying for a real embed. Valid because the resume diff and finalize compare
+/// chunk and byte hashes, never vectors. Returns the resource's id.
+async fn land_segments(
+    app: &common::E2eTestApp,
+    title: &str,
+    content: &str,
+    key: Uuid,
+    finalize: bool,
+) -> Uuid {
+    use temper_core::types::ingest::{
+        pack_chunks, AppendBlockPayload, FinalizePayload, IngestPayload, PackedChunk,
+        SegmentedBegin,
+    };
+
+    let budget = temper_ingest::stream::SEGMENT_BUDGET_BYTES;
+    let source_hash = temper_core::hash::sha256_hex(content.as_bytes());
+    let segments: Vec<(String, Vec<temper_ingest::chunk::ChunkData>)> =
+        temper_ingest::stream::segment_reader(std::io::Cursor::new(content.as_bytes()), budget)
+            .map(|seg| {
+                let seg = seg.expect("an in-memory segment read never fails");
+                let chunked = temper_ingest::chunk::chunk_markdown_with_prefix(
+                    &seg.text,
+                    &seg.initial_breadcrumb,
+                );
+                (seg.text, chunked)
+            })
+            .collect();
+    assert!(segments.len() >= 2, "the body crosses the segment budget");
+    let zero_packed = |chunks: &[temper_ingest::chunk::ChunkData]| {
+        let packed: Vec<PackedChunk> = chunks
+            .iter()
+            .map(|c| PackedChunk {
+                chunk_index: c.chunk_index,
+                header_path: c.header_path.clone(),
+                heading_depth: c.heading_depth,
+                content: c.content.clone(),
+                content_hash: c.content_hash.clone(),
+                embedding: vec![0.0_f32; 768],
+                embedded_with: None,
+            })
+            .collect();
+        pack_chunks(&packed).expect("pack_chunks")
+    };
+
+    let begin = app
+        .client
+        .ingest()
+        .begin_segmented(&IngestPayload {
+            idempotency_key: Some(key),
+            segmented: Some(SegmentedBegin {
+                total_blocks_hint: Some(segments.len() as u32),
+                block_budget: budget as u32,
+                source_hash: Some(source_hash.clone()),
+            }),
+            goal: None,
+            title: title.to_string(),
+            origin_uri: String::new(),
+            context_ref: format!("@me/{CONTEXT}"),
+            home_cogmap_id: None,
+            doc_type_name: "session".to_string(),
+            content_hash: None,
+            content: segments[0].0.clone(),
+            metadata: None,
+            managed_meta: None,
+            open_meta: None,
+            chunks_packed: Some(zero_packed(&segments[0].1)),
+            act: Default::default(),
+            sources: Vec::new(),
+        })
+        .await
+        .expect("begin_segmented");
+    let mut body_hash = begin.body_hash;
+    for (seq, (text, chunked)) in segments.iter().enumerate().skip(1) {
+        body_hash = app
+            .client
+            .ingest()
+            .append_block(
+                begin.resource_id,
+                &AppendBlockPayload {
+                    seq: seq as u32,
+                    content: text.clone(),
+                    content_hash: temper_core::hash::sha256_hex(text.as_bytes()),
+                    chunks_packed: Some(zero_packed(chunked)),
+                    sources: Vec::new(),
+                },
+            )
+            .await
+            .unwrap_or_else(|e| panic!("append seq {seq}: {e}"))
+            .body_hash;
+    }
+    if finalize {
+        app.client
+            .ingest()
+            .finalize(
+                begin.resource_id,
+                &FinalizePayload {
+                    expected_blocks: segments.len() as u32,
+                    expected_body_hash: body_hash,
+                    expected_content_hash: Some(source_hash),
+                },
+            )
+            .await
+            .expect("finalize");
+    }
+    begin.resource_id
 }
 
 /// FAILS IF a create re-issued with its first key mints a second resource or answers with a
@@ -188,7 +299,7 @@ async fn a_given_key_that_conflicts_with_a_pending_resume_is_refused(pool: sqlx:
     let title = "Idempotency Key Resume Conflict";
     let content = large_body();
     let saved = Uuid::now_v7();
-    let manifest = pending_manifest(&app, &content, saved);
+    let manifest = pending_manifest(&app, &content, saved, None);
     let given = Uuid::now_v7().to_string();
 
     let body = body_file(&app, &content);
@@ -209,7 +320,10 @@ async fn a_given_key_that_conflicts_with_a_pending_resume_is_refused(pool: sqlx:
 /// FAILS IF a large create with a minted key, resuming an attempt saved under another key, does
 /// not converge on that key's resource, or leaves the hint naming the minted key the server never
 /// saw instead of the saved one.
-#[cfg(feature = "test-embed")]
+///
+/// The interrupted attempt landed every segment (with zero vectors) and was cut off before its
+/// finalize, so the resume embeds nothing: it reads the landed blocks and finalizes. Key pinning
+/// and the hint are the whole of what this witnesses, and neither needs a real embed.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_minted_key_gives_way_to_the_saved_key_and_the_hint_names_it(pool: sqlx::PgPool) {
     use temper_cli::reconcile_hint::LostAckProne;
@@ -218,7 +332,8 @@ async fn a_minted_key_gives_way_to_the_saved_key_and_the_hint_names_it(pool: sql
     let title = "Idempotency Key Minted Resume";
     let content = large_body();
     let saved = Uuid::now_v7();
-    pending_manifest(&app, &content, saved);
+    let landed = land_segments(&app, title, &content, saved, false).await;
+    pending_manifest(&app, &content, saved, Some(landed));
     let minted = Uuid::now_v7();
 
     let body_flag = body_file(&app, &content);
@@ -291,6 +406,9 @@ async fn a_minted_key_gives_way_to_the_saved_key_and_the_hint_names_it(pool: sql
 
 /// FAILS IF a large (segmented) create re-issued with its first key creates a second resource, or
 /// a manifest naming a resource that has since finished sends the run appending into it.
+///
+/// The first write is landed through the primitives with zero vectors; the CLI's replay still
+/// embeds its segment 0 before the begin it re-sends, so this one needs ONNX.
 #[cfg(feature = "test-embed")]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_keyed_large_create_reissued_is_one_resource(pool: sqlx::PgPool) {
@@ -300,8 +418,9 @@ async fn a_keyed_large_create_reissued_is_one_resource(pool: sqlx::PgPool) {
     let key = Uuid::now_v7().to_string();
     let body = body_file(&app, &content);
 
-    let first = create(&app, title, &key, &["--body", &body]).await;
+    let first_id = land_segments(&app, title, &content, key.parse().expect("uuid"), true).await;
     let replay = create(&app, title, &key, &["--body", &body]).await;
+    let first = serde_json::json!({ "id": first_id.to_string() });
     assert_eq!(replay["id"], first["id"], "{first} vs {replay}");
     assert_eq!(count_titled(&pool, title).await, 1, "one resource");
 
