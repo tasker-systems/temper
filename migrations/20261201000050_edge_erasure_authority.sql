@@ -359,8 +359,9 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALU
       "$ref": "#/$defs/ProfileId"
     },
     "folded": {
-      "description": "True when the act folded the edge itself, by a `relationship_folded` appended before this\nevent in the act's transaction. Absent means the edge was already folded.",
-      "type": "boolean"
+      "description": "True when the act folded the edge itself, by a `relationship_folded` appended before this\nevent in the act's transaction; false when the edge was already folded. The act always\nwrites it; a reader takes an absent value as false.",
+      "type": "boolean",
+      "default": false
     },
     "redacted_fields": {
       "description": "The ledger paths this act redacted to their sentinels, in the shape `resource_erased` uses.",
