@@ -24,6 +24,12 @@
 --   * the phantom arm reads the edge's row, so the edge trail is read while the kb_edges row
 --     exists;
 --   * every reader of an authority maps all of them: the guard, the trail trigger, place_closure.
+--
+-- From Section 3's ALTER on, the migration runs under SET LOCAL lock_timeout = '500ms', the bound
+-- and the reasons of 20261201000010_erasure_records_schema.sql: the ALTER takes ACCESS EXCLUSIVE
+-- on kb_event_field_redactions and validates every row, and unbounded it would queue every reader
+-- and writer of that table behind the longest open transaction. When the bound fires the migration
+-- rolls back, the serving deployment keeps its schema, and the next deploy retries.
 
 -- ---------------------------------------------------------------------------
 -- Section 1. One derivation loop over a trail.
@@ -435,6 +441,8 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALU
   }
 }
 $JS$::jsonb, 1, 'admin');
+
+SET LOCAL lock_timeout = '500ms';
 
 ALTER TABLE kb_event_field_redactions
     DROP CONSTRAINT kb_event_field_redactions_authority_check,
@@ -1172,7 +1180,8 @@ SELECT declare_migration(
     '_edge_erasure_trail_scope(uuid), _edge_erasure_payload_redaction(uuid) and '
     '_project_edge_erased_redactions(uuid, jsonb), and the admin event type edge_erased with its '
     'payload_schema. Widens kb_event_field_redactions_authority_check to admit ''edge'' (every '
-    'existing row still passes). CREATE OR REPLACE, each with its signature, defaults, return type '
+    'existing row still passes), under SET LOCAL lock_timeout = 500ms: if its lock is not granted in '
+    'time, the migration rolls back and the serving deployment is untouched. CREATE OR REPLACE, each with its signature, defaults, return type '
     'and search_path unchanged: _resource_erasure_payload_redaction (the shared loop over the same '
     'trail with the same numbering, so its rows are unchanged), _project_field_redactions, '
     '_erasure_sentinel_admits, kb_events_append_only, kb_events_redaction_in_trail, '
