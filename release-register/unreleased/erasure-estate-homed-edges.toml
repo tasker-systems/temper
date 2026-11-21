@@ -15,16 +15,19 @@ appends one edge_erased record, nulls the edge's label, sets every property the 
 sentinels, and rewrites the edge's labels, properties, earlier fold reasons and corrections, and
 the authorship metadata on its events, to their sentinels on the ledger; the estate_erased reason of
 the fold it appends is kept. Migration 20261201000070 lets an edge_erased record commit only when
-the profile it names is tombstoned in the same transaction.
+the profile it names is tombstoned by the time the transaction commits.
 
-In that migration the person act (principal_erasure_execute) now runs the unit for every edge homed in the estate
-whose text is not yet erased, live or folded before the act, whatever it points at, after its
-resource erasures and before its record and the tombstone. An edge a resource erasure of the same
-act already erased is skipped. The person act's record gains one kb_edges target naming how many
-edges it erased, and one `erasure` reference per edge_erased; its payload keys are unchanged. The
-survey (POST /api/admin/erasure/survey, temper admin erasure principal) predicts the same kb_edges
-target, and no longer counts the subject's labels and property values on those edges as text kept
-outside the estate.
+In that migration the person act (principal_erasure_execute) now runs the unit for every edge
+homed in the estate whose text is not yet erased, live or folded before the act, whatever it
+points at, after its resource erasures and before its record and the tombstone. An edge a
+resource erasure of the same act already erased is skipped, and an edge whose context has left the estate since the act's plan
+is skipped and counted. The person act's record gains one kb_edges target naming how many edges it
+erased, and one `erasure` reference per edge_erased; its payload keys are unchanged. The survey
+(POST /api/admin/erasure/survey, temper admin erasure principal) predicts the same kb_edges target,
+and no longer counts the subject's labels and property values on those edges as text kept outside
+the estate; a charter's survey outcome names as kept only its edges homed outside the estate. The
+person act now runs with lock_timeout = 0, as the resource, edge and block history acts do, so a
+lock_timeout set on the pool, the role or the database cannot cancel it.
 
 Once the act commits, a property write (property_set, facet_set, a keyed assert,
 property_retracted), relationship_retype, relationship_reweight or relationship_fold of an erased

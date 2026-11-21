@@ -52,8 +52,9 @@ The act runs against a **subject profile** — the profile an erasure request na
 executed by an instance administrator (system-admin standing) on the organization's
 determination. In one server-side transaction it:
 
-- Erases everything homed in the subject's **estate**: their own personal (`@me`) contexts
-  **and their personal team's contexts** — **whoever authored or uploaded it**. Each
+- Erases what is homed in the subject's **estate**, their own personal (`@me`) contexts
+  **and their personal team's contexts**, **whoever authored or uploaded it**, except what this
+  item names as held or not erased. Each
   resource there, except a cognitive map's charter, goes through the same act that erases a
   single [resource](./resource-erasure.md): its text,
   structured content, embeddings, search data, title, origin, properties and history are
@@ -62,7 +63,7 @@ determination. In one server-side transaction it:
   it is ended and its label cleared, including relationships from a team's content into the
   estate (line 1). Every relationship homed in the estate is ended too, whether it was live or
   already folded, and its label and properties cleared, in the projections and in the event
-  ledger, whatever it points at. What an estate context homes that the act does not yet erase:
+  ledger, whatever it points at. What an estate context homes that the act does not erase:
   its data-artifact schemas, its cognitive-map regions and lenses, and jobs scoped to the context
   alone.
   Content a guest wrote there under line 2 dies with it, files included; the bytes are

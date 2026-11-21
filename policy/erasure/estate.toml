@@ -152,7 +152,7 @@ unit = { bound = "blob_delete" }
 home = { table = "kb_blobs", table_column = "home_table", id_column = "home_id" }
 
 [tables.kb_edges]
-note = "homed in the estate: every edge whose text is not yet erased, live or folded before the act, is erased by edge_erasure_execute, which the person act runs for each after its resource erasures: a live edge is folded, its label nulled and its edge-owned properties set to their sentinels in the projection, and its labels and properties rewritten to their sentinels on its own ledger trail. Also reached by each endpoint: resource erasure nulls the label of every edge with the resource at either end and replaces its edge-owned properties. kb_edges_source_table_check and kb_edges_target_table_check also admit kb_blobs and kb_cogmaps, each an also_reached entry below"
+note = "homed in the estate: every edge whose text is not yet erased, live or folded before the act, is erased by edge_erasure_execute, which the person act runs for each after its resource erasures: a live edge is folded, its label nulled and its edge-owned properties set to their sentinels in the projection, and its labels and properties rewritten to their sentinels on its own ledger trail. An edge homed in a cogmap (home_anchor_table = 'kb_cogmaps') is not selected, whichever cogmap homes it: which cogmaps are the estate's is the cogmap scope rule's gap (task 01a12dcf-2ef5-729d-b6ef-051fdee3ef8c). Also reached by each endpoint: resource erasure nulls the label of every edge with the resource at either end and replaces its edge-owned properties. kb_edges_source_table_check and kb_edges_target_table_check also admit kb_blobs and kb_cogmaps, each an also_reached entry below"
 
 [tables.kb_edges.grain]
 kind = "per-item"
