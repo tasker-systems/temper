@@ -24,6 +24,7 @@ use temper_substrate::writes::{self, CreateParams};
 const LABEL: &str = "jane roe told us";
 const REASONING: &str = "jane roe said so on the call";
 const OTHER_LABEL: &str = "another free label";
+const OTHER_REASONING: &str = "the other edge's own reasoning";
 /// Text the erased edge alone carries, in its label, its facet and its authorship metadata.
 const NEEDLES: [&str; 4] = [LABEL, REASONING, "jane roe", "confided"];
 
@@ -101,10 +102,10 @@ async fn resource(pool: &PgPool, w: &World, title: &str) -> ResourceId {
     .expect("create through the real path")
 }
 
-fn authored() -> EventContext {
+fn authored(reasoning: &str) -> EventContext {
     EventContext {
         authorship: Some(AgentAuthorship {
-            reasoning: Some(REASONING.into()),
+            reasoning: Some(reasoning.into()),
             confidence: ConfidenceBand::Probable,
             rationale: None,
             persona: None,
@@ -116,7 +117,14 @@ fn authored() -> EventContext {
 }
 
 /// An edge homed in the world's context, asserted with authorship reasoning on its event.
-async fn edge(pool: &PgPool, w: &World, src: ResourceId, tgt: ResourceId, label: &str) -> EdgeId {
+async fn edge(
+    pool: &PgPool,
+    w: &World,
+    src: ResourceId,
+    tgt: ResourceId,
+    label: &str,
+    reasoning: &str,
+) -> EdgeId {
     let mut conn = pool.acquire().await.expect("acquire");
     fire_with(
         &mut conn,
@@ -130,7 +138,7 @@ async fn edge(pool: &PgPool, w: &World, src: ResourceId, tgt: ResourceId, label:
             home: EdgeHome::Context(w.home),
             emitter: EntityId::from(w.emitter),
         },
-        authored(),
+        authored(reasoning),
     )
     .await
     .expect("assert the edge")
@@ -192,7 +200,7 @@ async fn estate(pool: &PgPool) -> Estate {
     let a = resource(pool, &w, "alpha").await;
     let b = resource(pool, &w, "beta").await;
     let c = resource(pool, &w, "gamma").await;
-    let e = edge(pool, &w, a, b, LABEL).await;
+    let e = edge(pool, &w, a, b, LABEL, REASONING).await;
     facet(
         pool,
         &w,
@@ -200,7 +208,7 @@ async fn estate(pool: &PgPool) -> Estate {
         json!({ "node_label": "jane roe", "status": "confided" }),
     )
     .await;
-    let other = edge(pool, &w, b, c, OTHER_LABEL).await;
+    let other = edge(pool, &w, b, c, OTHER_LABEL, OTHER_REASONING).await;
     let asserted = asserting_event(pool, e).await;
     Estate {
         w,
@@ -399,6 +407,23 @@ async fn the_unit_folds_and_sentinels_one_edge(pool: PgPool) {
             .unwrap();
     assert!(!folded, "the edge beside it stays live");
     assert_eq!(label.as_deref(), Some(OTHER_LABEL), "and keeps its label");
+    let (payload_label, reasoning): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT payload ->> 'label', metadata ->> 'reasoning' FROM kb_events WHERE id = $1",
+    )
+    .bind(asserting_event(&pool, x.other).await)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        payload_label.as_deref(),
+        Some(OTHER_LABEL),
+        "the edge beside it keeps its ledger label"
+    );
+    assert_eq!(
+        reasoning.as_deref(),
+        Some(OTHER_REASONING),
+        "and its authorship reasoning"
+    );
 }
 
 /// FAILS IF a second run over an erased edge appends anything, or answers other than `already
