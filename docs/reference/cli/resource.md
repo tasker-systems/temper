@@ -102,13 +102,16 @@ Options:
       --sources-as-edges
           Also assert a `derived_from` edge from the new resource to each resource-valued `--sources` entry. Remote URLs are skipped (no edge target).
           
-          Not atomic: the edges are asserted after the create commits. A failed edge warns rather than failing the command — `edge assert` is idempotent, so re-asserting is safe, while re-running a create is not.
+          Not atomic: the edges are asserted after the create commits. A failed edge warns rather than failing the command — `edge assert` is idempotent, so re-asserting is safe, while re-running a create is safe only with the `--idempotency-key` it was first sent with.
 
       --no-source
           Suppress the `--from <url>` provenance default. By default a URL `--from` sets the resource's origin and seeds a Remote block-provenance record from it (so `create --from <url>` is citation-grade with no extra flags); `--no-source` opts out, leaving the origin empty and recording no provenance. Mutually exclusive with `--sources`
 
       --preserve-source
-          Preserve the original as a blob (`derivation-source-preservable`, D3): with a LOCAL file `--from`, the file's raw bytes are committed as a blob homed in the same context/cogmap, and a `derivation_source` edge is asserted from the resource to the blob — the provenance question later is a graph read (`blob relations`/`blob get`). Not atomic: blob + edge assert after the create commits, warnings rather than failures (re-running is safe on the blob; the create is not re-runnable)
+          Preserve the original as a blob (`derivation-source-preservable`, D3): with a LOCAL file `--from`, the file's raw bytes are committed as a blob homed in the same context/cogmap, and a `derivation_source` edge is asserted from the resource to the blob — the provenance question later is a graph read (`blob relations`/`blob get`). Not atomic: blob + edge assert after the create commits, warnings rather than failures (re-running is safe on the blob; the create is re-runnable only with its first `--idempotency-key`)
+
+      --idempotency-key <UUID>
+          Make a retried create safe: re-issuing a create with the same key returns the resource the first one created, and never creates a second. Mint one UUID per resource you mean to create, before the first attempt, and send it on every retry of that create. Keys are scoped to you; a replay returns the first write as it stands and does not compare bodies, so a key reused for a different resource returns the old one. Omitted: the CLI mints one, and a network error prints it so the retry can reuse it
 
       --invocation <INVOCATION>
           Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
