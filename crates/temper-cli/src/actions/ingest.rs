@@ -475,6 +475,7 @@ pub async fn run_segmented_create(
     // `manifest_path` is the ONE path every checkpoint below writes to. It is whatever
     // `find_resumable` returned for a resume (so a legacy `<resource_id>.json` is updated in place,
     // never orphaned), or `<attempt_key>.json` for a fresh session.
+    let fresh_begin = existing.is_none();
     let (resource_id, mut manifest, landed, manifest_path) = match existing {
         Some((manifest_path, mut manifest)) => {
             // A resume continues under the key the interrupted attempt saved. A key the caller
@@ -483,8 +484,8 @@ pub async fn run_segmented_create(
             // nobody's promise, so the resume proceeds and records the saved key for the hint.
             if key_given && manifest.idempotency_key != Some(attempt_key) {
                 let saved = manifest.idempotency_key.map_or_else(
-                    || "no idempotency key".to_string(),
-                    |k| format!("idempotency key {k}"),
+                    || "with no idempotency key".to_string(),
+                    |k| format!("under idempotency key {k}"),
                 );
                 let resume = manifest.idempotency_key.map_or_else(
                     || "re-run without --idempotency-key to resume it".to_string(),
@@ -597,10 +598,6 @@ pub async fn run_segmented_create(
             manifest.correlation_id = Some(response.correlation_id);
             manifest.blocks = response.blocks.clone();
             crate::actions::ingest_manifest::store(&manifest_path, &manifest)?;
-            crate::output::progress_line(format!(
-                "  uploaded segment {}/{total_segments} (resource created)",
-                response.blocks.len()
-            ));
             (
                 response.resource_id,
                 manifest,
@@ -609,6 +606,22 @@ pub async fn run_segmented_create(
             )
         }
     };
+
+    // Whichever branch named the resource, it may be one an earlier attempt already finished: a
+    // fresh begin replayed onto it by key, a resume of a manifest whose last write was lost after
+    // finalize, or a retry after this very check failed. Asked once here, so every branch is
+    // covered and none appends into a complete resource.
+    if let Some(done) = finished_earlier(client, resource_id, &manifest_path, &mut manifest).await?
+    {
+        return Ok(done);
+    }
+
+    if fresh_begin {
+        crate::output::progress_line(format!(
+            "  uploaded segment {}/{total_segments} (resource created)",
+            landed.len()
+        ));
+    }
 
     // Embed (CPU) and upload (network) used to strictly alternate: embed a segment, wait for
     // its POST, embed the next. On a 1.2 MB body that left the network idle for ~95s and the
@@ -625,15 +638,6 @@ pub async fn run_segmented_create(
     // A capacity-1 channel is what enforces depth-1: the embedder blocks on `send` until the
     // uploader has taken the previous segment, so at most one segment is queued and one is
     // being POSTed.
-    // Whichever branch named the resource, it may be one an earlier attempt already finished: a
-    // fresh begin replayed onto it by key, a resume of a manifest whose last write was lost after
-    // finalize, or a retry after this very check failed. Asked once here, so every branch is
-    // covered and none appends into a complete resource.
-    if let Some(done) = finished_earlier(client, resource_id, &manifest_path, &mut manifest).await?
-    {
-        return Ok(done);
-    }
-
     let missing_seqs = crate::actions::ingest_manifest::resume_gap(&local_infos, &landed);
     let mut chunked = chunked;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<(u32, String)>(1);
