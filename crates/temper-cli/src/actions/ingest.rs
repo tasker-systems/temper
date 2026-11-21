@@ -366,14 +366,14 @@ fn ended_ingest_error(
     )))
 }
 
-/// The resource a begin answered with, when an earlier attempt under the same idempotency key
-/// already finalized it; else `None`, and the ingest carries on.
+/// The resource this ingest is landing in, when it is already complete; else `None`, and the
+/// ingest carries on.
 ///
-/// A replayed begin returns the resource its key first created, whatever state it is in now. A
-/// finished one answers with its finalized block set, which no longer lines up with this
-/// attempt's segments, and an append into it is refused: so a finished resource is the answer,
-/// as a replayed one-shot create's is. Its manifest is marked finalized, so no later run resumes
-/// it.
+/// A begin replayed by key returns the resource its key first created, whatever state it is in
+/// now, and a manifest can name a resource finalized after the manifest's last write. A finished
+/// resource answers with its finalized block set, which no longer lines up with this attempt's
+/// segments, and an append into it is refused: so a finished resource is the answer, as a
+/// replayed one-shot create's is. Its manifest is marked finalized, so no later run resumes it.
 #[cfg(feature = "embed")]
 async fn finished_earlier(
     client: &temper_client::TemperClient,
@@ -491,7 +491,7 @@ pub async fn run_segmented_create(
                     |k| format!("re-run with --idempotency-key {k} to resume it"),
                 );
                 return Err(TemperError::BadRequest(format!(
-                    "an interrupted ingest of this same body is saved at {} under {saved}, not \
+                    "an interrupted ingest of this same body is saved at {} {saved}, not \
                      {attempt_key}; {resume}, or delete that file to start a fresh create under \
                      {attempt_key}",
                     manifest_path.display()
@@ -538,16 +538,6 @@ pub async fn run_segmented_create(
                     manifest.resource_id = Some(response.resource_id);
                     manifest.correlation_id = Some(response.correlation_id);
                     crate::actions::ingest_manifest::store(&manifest_path, &manifest)?;
-                    if let Some(done) = finished_earlier(
-                        client,
-                        response.resource_id,
-                        &manifest_path,
-                        &mut manifest,
-                    )
-                    .await?
-                    {
-                        return Ok(done);
-                    }
                     response.resource_id
                 }
             };
@@ -607,12 +597,6 @@ pub async fn run_segmented_create(
             manifest.correlation_id = Some(response.correlation_id);
             manifest.blocks = response.blocks.clone();
             crate::actions::ingest_manifest::store(&manifest_path, &manifest)?;
-            if let Some(done) =
-                finished_earlier(client, response.resource_id, &manifest_path, &mut manifest)
-                    .await?
-            {
-                return Ok(done);
-            }
             crate::output::progress_line(format!(
                 "  uploaded segment {}/{total_segments} (resource created)",
                 response.blocks.len()
@@ -641,6 +625,15 @@ pub async fn run_segmented_create(
     // A capacity-1 channel is what enforces depth-1: the embedder blocks on `send` until the
     // uploader has taken the previous segment, so at most one segment is queued and one is
     // being POSTed.
+    // Whichever branch named the resource, it may be one an earlier attempt already finished: a
+    // fresh begin replayed onto it by key, a resume of a manifest whose last write was lost after
+    // finalize, or a retry after this very check failed. Asked once here, so every branch is
+    // covered and none appends into a complete resource.
+    if let Some(done) = finished_earlier(client, resource_id, &manifest_path, &mut manifest).await?
+    {
+        return Ok(done);
+    }
+
     let missing_seqs = crate::actions::ingest_manifest::resume_gap(&local_infos, &landed);
     let mut chunked = chunked;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<(u32, String)>(1);

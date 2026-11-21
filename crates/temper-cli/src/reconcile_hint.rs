@@ -99,8 +99,8 @@ the create runs once."
 /// create may return, and [`reconcile_hint`] can name it.
 ///
 /// The create sends this key, with one exception: a segmented create that resumes an interrupted
-/// attempt from its local manifest continues under the key that attempt saved, and records it
-/// with [`record_resumed_create_key`]. Every in-process retry of a request re-sends the same body
+/// attempt from its local manifest continues under, and the hint names, the key that attempt
+/// saved ([`record_resumed_create_key`]). Every in-process retry of a request re-sends the same body
 /// and `Idempotency-Key` header, so one invocation is one key.
 pub fn pin_create_idempotency_key(command: &mut Commands) -> Option<Uuid> {
     match command {
@@ -120,7 +120,9 @@ pub fn pin_create_idempotency_key(command: &mut Commands) -> Option<Uuid> {
 }
 
 /// The key a segmented create resumed under, when it resumed: `Some(None)` for a legacy manifest
-/// that saved no key. One create runs per process, so one slot serves it.
+/// that saved no key. Read only by `main`, through [`LostAckProne::as_dispatched`], and only for
+/// a top-level `resource create`, which runs one create per process; an in-process caller that
+/// creates many (`memory migrate`) may write it, and nothing reads it there.
 static RESUMED_CREATE_KEY: Mutex<Option<Option<Uuid>>> = Mutex::new(None);
 
 /// Record that this process's create resumed an interrupted attempt under `key`, the key that
@@ -304,6 +306,22 @@ mod tests {
             action: create_action(),
         };
         let minted = pin_create_idempotency_key(&mut unkeyed).expect("a create gets a key");
+        let Commands::Resource {
+            action:
+                ResourceAction::Create {
+                    idempotency_key,
+                    minted_idempotency_key,
+                    ..
+                },
+        } = &unkeyed
+        else {
+            unreachable!("built as a create")
+        };
+        assert_eq!(
+            *idempotency_key, None,
+            "a minted key never poses as the caller's, which `main` reads as given"
+        );
+        assert_eq!(*minted_idempotency_key, Some(minted));
         assert_eq!(
             pin_create_idempotency_key(&mut unkeyed),
             Some(minted),

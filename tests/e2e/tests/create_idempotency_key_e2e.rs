@@ -289,7 +289,8 @@ async fn a_minted_key_gives_way_to_the_saved_key_and_the_hint_names_it(pool: sql
     assert_eq!(count_titled(&pool, title).await, 1, "{replay}");
 }
 
-/// FAILS IF a large (segmented) create re-issued with its first key creates a second resource.
+/// FAILS IF a large (segmented) create re-issued with its first key creates a second resource, or
+/// a manifest naming a resource that has since finished sends the run appending into it.
 #[cfg(feature = "test-embed")]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_keyed_large_create_reissued_is_one_resource(pool: sqlx::PgPool) {
@@ -303,4 +304,34 @@ async fn a_keyed_large_create_reissued_is_one_resource(pool: sqlx::PgPool) {
     let replay = create(&app, title, &key, &["--body", &body]).await;
     assert_eq!(replay["id"], first["id"], "{first} vs {replay}");
     assert_eq!(count_titled(&pool, title).await, 1, "one resource");
+
+    // A manifest whose last write was lost after the server finalized: it still reads pending and
+    // names the finished resource, so the resume must return it rather than append.
+    use temper_cli::actions::ingest_manifest::{self, IngestManifest, SEGMENTER_VERSION};
+    let id: Uuid = first["id"].as_str().expect("id").parse().expect("uuid id");
+    let key: Uuid = key.parse().expect("uuid key");
+    let blocks = app
+        .client
+        .ingest()
+        .list_blocks(id)
+        .await
+        .expect("list_blocks")
+        .blocks;
+    ingest_manifest::store(
+        &ingest_manifest::manifest_path(app.vault_dir.path(), key),
+        &IngestManifest {
+            idempotency_key: Some(key),
+            resource_id: Some(id),
+            source_hash: temper_core::hash::sha256_hex(content.as_bytes()),
+            block_budget: temper_ingest::stream::SEGMENT_BUDGET_BYTES as u32,
+            segmenter_version: SEGMENTER_VERSION,
+            correlation_id: None,
+            blocks,
+            finalized: false,
+        },
+    )
+    .expect("store stale manifest");
+    let resumed = create(&app, title, &key.to_string(), &["--body", &body]).await;
+    assert_eq!(resumed["id"], first["id"], "{first} vs {resumed}");
+    assert_eq!(count_titled(&pool, title).await, 1, "still one resource");
 }
