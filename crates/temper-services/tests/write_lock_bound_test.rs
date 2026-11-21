@@ -337,19 +337,20 @@ async fn the_edge_unit_completes_under_a_session_lock_timeout(pool: PgPool) {
     assert_eq!(label, None, "the unit nulled the edge's label");
 }
 
-/// **The person act completes under any default bound.** The database's default `lock_timeout`
-/// is set tight, as a pool-wide, role-level or database-level default would set it, and the
-/// service runs the act on a fresh pool whose connections start with it: the service sets no
-/// `lock_timeout` of its own on the act's transaction. A writer holds an estate-homed edge's row
-/// `FOR KEY SHARE` past that bound. The edge's ends are team resources, so no resource erasure
-/// locks it first: the act's own edge step, in `principal_erasure_execute`'s body, meets the
-/// writer, waits it out, and erases the edge.
+/// **The person act completes under any session bound.** A writer holds an estate-homed edge's
+/// row `FOR KEY SHARE` for longer than a tight `lock_timeout` set on the act's own session, as a
+/// pool-wide or role-level default would set it. The edge's ends are team resources, so no
+/// resource erasure locks it first: the act's own edge step, in `principal_erasure_execute`'s
+/// body, meets the writer, waits it out, and erases the edge. The act is called by SQL, as the
+/// other acts' pins here call theirs: the service door cannot observe the pin, because
+/// `operator_still_holds` sets `lock_timeout = 0` (`set_config(…, true)`) on the act's transaction
+/// before the act runs. The act is asserted to have waited for the writer, so the bound was met.
 ///
 /// FAILS IF `principal_erasure_execute` loses its `SET lock_timeout = 0` (a later
 /// `CREATE OR REPLACE` that does not restate it): the edge step's `FOR UPDATE` is cancelled with
-/// `55P03`, which the service does not retry, and the act fails.
+/// `55P03`.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_person_act_completes_under_a_database_lock_timeout(pool: PgPool) {
+async fn the_person_act_completes_under_a_session_lock_timeout(pool: PgPool) {
     let w = edge_erasure::world(&pool).await;
     let team = edge_erasure::team_context(&pool).await;
     let src = edge_erasure::resource_in(&pool, &w, team, "edge-source").await;
@@ -365,29 +366,6 @@ async fn the_person_act_completes_under_a_database_lock_timeout(pool: PgPool) {
     .await
     .uuid();
     let op = edge_erasure::world(&pool).await;
-    temper_services::test_support::grant_governance(&pool, op.profile).await;
-    let admin = temper_services::test_support::system_admin_proof_for(&pool, op.profile).await;
-
-    sqlx::query(
-        "DO $$ BEGIN \
-             EXECUTE format('ALTER DATABASE %I SET lock_timeout = ''100ms''', current_database()); \
-         END $$",
-    )
-    .execute(&pool)
-    .await
-    .expect("a tight database default");
-    let bounded = sqlx::postgres::PgPoolOptions::new()
-        .connect_with(pool.connect_options().as_ref().clone())
-        .await
-        .expect("a pool whose connections start with the default");
-    let shown: String = sqlx::query_scalar("SHOW lock_timeout")
-        .fetch_one(&bounded)
-        .await
-        .expect("show");
-    assert_eq!(
-        shown, "100ms",
-        "setup: the act's connections carry the bound"
-    );
 
     let mut writer = pool.begin().await.expect("begin");
     sqlx::query("SELECT 1 FROM kb_edges WHERE id = $1 FOR KEY SHARE")
@@ -400,18 +378,38 @@ async fn the_person_act_completes_under_a_database_lock_timeout(pool: PgPool) {
         writer.commit().await.expect("the writer commits");
     });
 
-    let erased = temper_services::services::erasure_service::execute_erasure(
-        &bounded,
-        &admin,
-        ProfileId::from(w.profile),
-        uuid::Uuid::now_v7(),
-        Surface::ApiHttp,
-        &Default::default(),
-    )
-    .await;
+    let mut act = pool.acquire().await.expect("acquire");
+    sqlx::query("SET lock_timeout = '100ms'")
+        .execute(&mut *act)
+        .await
+        .expect("a tight session bound");
+    let started = Instant::now();
+    let erased = {
+        let mut tx = sqlx::Connection::begin(&mut *act).await.expect("begin");
+        let out = sqlx::query("SELECT principal_erasure_execute($1, $2, $3, $4)")
+            .bind(w.profile)
+            .bind(op.profile)
+            .bind(op.emitter)
+            .bind(uuid::Uuid::now_v7())
+            .execute(&mut *tx)
+            .await;
+        match out {
+            Ok(_) => tx.commit().await,
+            Err(e) => Err(e),
+        }
+    };
+    let waited = started.elapsed();
+    sqlx::query("RESET lock_timeout")
+        .execute(&mut *act)
+        .await
+        .expect("reset");
     release.await.unwrap();
 
-    erased.expect("the person act completes whatever lock_timeout its connection starts with");
+    erased.expect("the person act completes whatever lock_timeout its session carries");
+    assert!(
+        waited >= Duration::from_millis(500),
+        "setup: the act waited on the writer's edge lock (took {waited:?}), so it met the bound"
+    );
     let (folded, label): (bool, Option<String>) =
         sqlx::query_as("SELECT is_folded, label FROM kb_edges WHERE id = $1")
             .bind(edge)
