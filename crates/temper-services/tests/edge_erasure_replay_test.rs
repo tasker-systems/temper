@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
 use temper_core::types::property_owner::PropertyOwner;
+use temper_services::test_support;
 use temper_substrate::affinity::EdgeKind;
 use temper_substrate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
 use temper_substrate::ids::{ContextId, EdgeId, EntityId, ResourceId};
@@ -32,32 +33,9 @@ struct World {
 async fn world(pool: &PgPool) -> World {
     let profile = Uuid::now_v7();
     let handle = format!("user-{profile}");
-    sqlx::query(
-        "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
-                 VALUES ($1, $2, $2, $3, '{}'::jsonb)",
-    )
-    .bind(profile)
-    .bind(&handle)
-    .bind(format!("{handle}@x.test"))
-    .execute(pool)
-    .await
-    .expect("seed profile");
-    let emitter: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(profile)
-    .bind(format!("{handle}@web"))
-    .fetch_one(pool)
-    .await
-    .expect("seed emitter");
-    let home: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-              VALUES ('kb_profiles', $1, 'notes', 'notes') RETURNING id",
-    )
-    .bind(profile)
-    .fetch_one(pool)
-    .await
-    .expect("seed @me context");
+    test_support::profile::insert_with_id(pool, profile, &handle).await;
+    let emitter = test_support::entity::insert(pool, profile, &format!("{handle}@web")).await;
+    let home = test_support::context::insert_personal(pool, profile, "notes", "notes").await;
     World {
         profile,
         emitter,
@@ -67,16 +45,8 @@ async fn world(pool: &PgPool) -> World {
 
 /// A context of a team that is not the person's personal team: outside the estate.
 async fn team_context(pool: &PgPool) -> ContextId {
-    let id: Uuid = sqlx::query_scalar(
-        "WITH t AS (INSERT INTO kb_teams (slug, name) VALUES ('team-' || gen_random_uuid(), 'T') \
-                    RETURNING id) \
-         INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-              SELECT 'kb_teams', t.id, 'shared', 'shared' FROM t RETURNING id",
-    )
-    .fetch_one(pool)
-    .await
-    .expect("seed another team's context");
-    ContextId::from(id)
+    let team = test_support::team::insert(pool, &format!("team-{}", Uuid::now_v7())).await;
+    ContextId::from(test_support::context::insert_team(pool, team, "shared", "shared").await)
 }
 
 async fn resource(pool: &PgPool, w: &World, home: ContextId, title: &str) -> ResourceId {
@@ -226,7 +196,7 @@ async fn reset_namespace(pool: &PgPool) {
 async fn replay_of_an_estate_edge_erasure_is_byte_identical(pool: PgPool) {
     let w = world(&pool).await;
     let op = world(&pool).await;
-    temper_services::test_support::grant_governance(&pool, op.profile).await;
+    test_support::grant_governance(&pool, op.profile).await;
     let team = team_context(&pool).await;
 
     // An estate resource with its own labelled edge, erased by the resource unit.
