@@ -188,10 +188,11 @@ async fn reset_namespace(pool: &PgPool) {
     .expect("truncate kb_ data tables to a seed-free baseline");
 }
 
-/// FAILS IF replay of a span holding a resource erasure and two edge erasures diverges from live:
-/// a missing `edge_erased` arm, a redaction projector not run at the record's position, or an edge
-/// body run at a position other than the span's end leaves a projection table different from the
-/// one the units left.
+/// FAILS IF replay of a span holding a resource erasure and two edge erasures leaves any projection
+/// table different from the one the units left: a missing `edge_erased` arm, say, or redaction rows
+/// or edge bodies replay does not reproduce. It shows the span's projections are byte-identical;
+/// nothing later in the span touches the edges, so it does not show at which position replay runs
+/// an edge body.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn replay_of_an_estate_edge_erasure_is_byte_identical(pool: PgPool) {
     let w = world(&pool).await;

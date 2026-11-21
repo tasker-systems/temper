@@ -315,6 +315,34 @@ async fn an_edge_record_refuses_an_edge_homed_outside_the_estate(pool: PgPool) {
     assert_eq!(label_of(&pool, x.asserted).await, json!(LABEL));
 }
 
+/// The edge is re-homed by SQL to `kb_cogmaps` inside the probe's transaction, its
+/// `home_anchor_id` kept at the estate's context, so only the home-table conjunct differs from
+/// the admitted twin.
+///
+/// FAILS IF the subject check admits an edge whose home is not a context, because its anchor id
+/// matches one of the estate's contexts.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_edge_record_refuses_an_edge_not_homed_in_a_context(pool: PgPool) {
+    let x = edges(&pool).await;
+    admitted(
+        "the twin whose edge is homed in the estate's context",
+        attempt(&pool, &x.w, &lawful(&x), false).await,
+    );
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("UPDATE kb_edges SET home_anchor_table = 'kb_cogmaps' WHERE id = $1")
+        .bind(x.e.uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("re-home the edge's table in the probe's transaction");
+    let out = forge(&mut tx, &x.w, &lawful(&x)).await;
+    tx.rollback().await.unwrap();
+    append_only(
+        "a record naming an edge homed on a cogmap with the context's id",
+        out.err().map(|e| e.to_string()),
+    );
+    assert_eq!(label_of(&pool, x.asserted).await, json!(LABEL));
+}
+
 /// The record names another edge's assertion. The projector refuses it outside replay; projected
 /// as replay projects it, the verifier refuses the rewrite.
 ///

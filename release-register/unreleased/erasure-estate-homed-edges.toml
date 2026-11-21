@@ -12,9 +12,12 @@ ledger derivation now runs through one shared loop, _erasure_trail_payload_redac
 a resource is unchanged. Migration 20261201000060 adds edge_erasure_execute, which erases one edge
 homed in the estate: it folds the edge if it is live (relationship_folded, reason estate_erased),
 appends one edge_erased record, nulls the edge's label, sets every property the edge owns to its
-sentinels, and rewrites the edge's labels, properties, fold reasons and corrections, and the
-authorship metadata on its events, to their sentinels on the ledger. The person act runs it for each
-edge homed in the estate that no resource erasure reached, whatever the edge points at.
+sentinels, and rewrites the edge's labels, properties, earlier fold reasons and corrections, and
+the authorship metadata on its events, to their sentinels on the ledger; the estate_erased reason of
+the fold it appends is kept. The person act runs it for each
+edge homed in the estate that no resource erasure reached, whatever the edge points at. A property
+or relationship write to such an edge waits for the act's lock on the edge and is then refused, and
+the sweep's findings on its label and properties give up their digests as an erased resource's do.
 TODO(open ruling): the sentence naming which estate-homed edges the person act reaches: live ones only,
 or also those folded before the act.
 Replay projects edge_erased as it projects resource_erased. The erasure policy binds kb_edges'
@@ -23,6 +26,7 @@ payload paths structural, and records as gaps the regions, lenses and data-artif
 an estate context. Who observes: an admin reading the ledger sees one edge_erased per erased edge,
 and anyone reading such an edge, its properties or its ledger trail finds its label and properties
 gone or at their sentinels, whoever wrote them. Witnesses: crates/temper-services/tests/edge_erasure_authority_test.rs,
-edge_erasure_trail_test.rs, edge_erasure_unit_test.rs and edge_erasure_replay_test.rs. Release
+edge_erasure_trail_test.rs, edge_erasure_unit_test.rs, edge_erasure_replay_test.rs and
+sensitivity_edge_erasure_bridge_test.rs. Release
 relevance: additive in schema; behavioral for person erasure, which now reaches these edges.
 '''
