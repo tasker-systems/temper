@@ -263,6 +263,28 @@ const CLASSIFIED: &[(&str, Class)] = &[
         Class::NotCallerFacing("erasure act: authorized in resource_erasure_service"),
     ),
     (
+        "_edge_erasure_apply_redaction/2",
+        Class::NotCallerFacing("erasure act: redacts the one edge the act names"),
+    ),
+    (
+        "_edge_erasure_trail_scope/1",
+        Class::NotCallerFacing("erasure act: computes the edge's trail the act redacts"),
+    ),
+    (
+        "edge_erasure_execute/5",
+        Class::NotCallerFacing(
+            "erasure act: the per-edge unit, called under the person erasure act's authority; \
+             returns its record's id and redacted fields, never an edge",
+        ),
+    ),
+    (
+        "kb_events_append_only/0",
+        Class::NotCallerFacing(
+            "ledger trigger: reads an edge_erased record's subject edge to admit a rewrite; \
+             returns no edge",
+        ),
+    ),
+    (
         "resource_erasure_survey_plan/1",
         Class::NotCallerFacing(
             "erasure act's own scope computation, shared with the survey door, which authorizes \
