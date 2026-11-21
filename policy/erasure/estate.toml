@@ -151,23 +151,14 @@ fence = { gap = { task = "01a12dcf-24ab-705d-809a-35e3a2f9c169", what = "a fence
 unit = { bound = "blob_delete" }
 home = { table = "kb_blobs", table_column = "home_table", id_column = "home_id" }
 
-# TODO(open ruling, item 01a1286c-88a1-7521-a3eb-be6b2a06c1dc): does the person act erase an
-# estate-homed edge that was already folded before the act? A: yes, erased without a new fold.
-# B: live edges only, the folded ones a declared gap on slice 2a.
-# The entry below is the B answer: its note and unit say nothing of edges folded before the act.
-# The B gap is NOT an also_reached entry, since a gap needs a path that differs from the grain's.
-# if B: a gap naming "edges homed in the estate folded before the act" on task 01a12dcf-2ef5-729d-b6ef-051fdee3ef8c
-# TODO(person-act step): when the person act calls edge_erasure_execute for each estate-homed edge
-# no resource erasure reached, the note below says so and drops "does not yet call it".
 [tables.kb_edges]
-note = "homed in the estate. No act yet erases an edge through its home: the per-edge unit edge_erasure_execute (migration 20261201000060) folds the edge and sentinels its label and edge-owned properties, but the person act does not yet call it, so the unit stays a gap. Also reached by each endpoint: resource erasure nulls the label of every edge with the resource at either end and replaces its edge-owned properties. kb_edges_source_table_check and kb_edges_target_table_check also admit kb_blobs and kb_cogmaps, each an also_reached entry below"
+note = "homed in the estate: every edge whose text is not yet erased, live or folded before the act, is erased by edge_erasure_execute, which the person act runs for each after its resource erasures: a live edge is folded, its label nulled and its edge-owned properties set to their sentinels in the projection, and its labels and properties rewritten to their sentinels on its own ledger trail. Also reached by each endpoint: resource erasure nulls the label of every edge with the resource at either end and replaces its edge-owned properties. kb_edges_source_table_check and kb_edges_target_table_check also admit kb_blobs and kb_cogmaps, each an also_reached entry below"
 
 [tables.kb_edges.grain]
 kind = "per-item"
 container = false
 fence = { bound = "is_folded" }
-# TODO(person-act step): unit = { bound = "edge_erasure_execute" }
-unit = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "redaction of the label of an edge homed in the estate" } }
+unit = { bound = "edge_erasure_execute" }
 home = { table = "kb_edges", table_column = "home_anchor_table", id_column = "home_anchor_id" }
 
 [[tables.kb_edges.also_reached]]
@@ -239,7 +230,7 @@ kind = "covered"
 parent = { table = "kb_resources", link = { fk = "resource_id" } }
 
 [tables.kb_properties]
-note = "owned through kb_properties_owner_table_check's pair. Resource erasure replaces the keys and values of the resource's properties, of every edge touching it and of every block of it. The CHECK also admits kb_cogmaps, an also_reached entry below"
+note = "owned through kb_properties_owner_table_check's pair. Resource erasure replaces the keys and values of the resource's properties, of every edge touching it and of every block of it; edge_erasure_execute replaces those of every edge homed in the estate. The CHECK also admits kb_cogmaps, an also_reached entry below"
 
 [tables.kb_properties.grain]
 kind = "covered"
@@ -247,8 +238,7 @@ parent = { table = "kb_resources", link = { pair = { table_column = "owner_table
 
 [[tables.kb_properties.also_reached]]
 path = { table = "kb_edges", link = { pair = { table_column = "owner_table", id_column = "owner_id" } } }
-# TODO(person-act step): mechanism = { bound = "edge_erasure_execute" }
-mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "properties owned by an edge homed in the estate" } }
+mechanism = { bound = "edge_erasure_execute" }
 
 [[tables.kb_properties.also_reached]]
 path = { table = "kb_content_blocks", link = { pair = { table_column = "owner_table", id_column = "owner_id" } } }

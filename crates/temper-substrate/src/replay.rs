@@ -1363,16 +1363,14 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             }
             // One estate edge's erasure (migration 20261201000060). The body applies at the END of
             // the record's correlated span, under the same `apply_after` rule as `ResourceErased`
-            // above: each body waits for the last event of the span its record shares with every
-            // other unit appended in that transaction under the same request reference. A record
+            // above: the person act runs its resource and edge units in one transaction under one
+            // request reference, and each body waits for the last event of that span. A record
             // that is already the last of its span applies here. The payload names the edge, and
             // the body joins the projection by THAT id and reads no payload, so the idempotent
             // call reproduces what the live unit left. The call carries the ERASURE event's id,
             // deferred or not: it stamps the edge's property rows. It calls THE ONE definition,
             // `_edge_erasure_apply_redaction`; re-implement any of it here and there are two
             // edge erasures that drift.
-            // TODO(person-act step): once the person act calls `edge_erasure_execute`, say here
-            // that its resource and edge units share one span.
             EventKind::EdgeErased => {
                 let record: crate::payloads::EdgeErased =
                     serde_json::from_value(payload.clone()).with_context(|| {

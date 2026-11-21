@@ -273,9 +273,30 @@ const CLASSIFIED: &[(&str, Class)] = &[
     (
         "edge_erasure_execute/5",
         Class::NotCallerFacing(
-            "erasure act: the per-edge unit; today only tests call it, by SQL, and the person \
-             erasure act is to call it under its own authority; returns its record's id and \
-             redacted fields, never an edge",
+            "erasure act: the per-edge unit, called by principal_erasure_execute under its own \
+             authority; returns its record's id and redacted fields, never an edge",
+        ),
+    ),
+    (
+        "_edge_erasure_complete/1",
+        Class::NotCallerFacing(
+            "erasure predicate: whether one edge's text is already erased, for the edge unit and \
+             the person act's edge step; returns a boolean, never an edge",
+        ),
+    ),
+    (
+        "principal_erasure_execute/4",
+        Class::NotCallerFacing(
+            "erasure act: selects the edges homed in its estate for the edge unit; authorized in \
+             erasure_service; returns its record, never an edge",
+        ),
+    ),
+    (
+        "principal_erasure_survey_plan/1",
+        Class::NotCallerFacing(
+            "erasure act's own scope computation, shared with the survey door, which authorizes \
+             the operator first; counts the edges homed in the estate and reads their trails, \
+             never returns an edge",
         ),
     ),
     (
