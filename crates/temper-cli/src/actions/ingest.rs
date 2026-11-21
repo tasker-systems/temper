@@ -253,6 +253,9 @@ pub struct SegmentedCreateParams<'a> {
     pub vault_root: &'a std::path::Path,
     pub input: &'a temper_workflow::shaping::CreateInput,
     pub budget: usize,
+    /// Whether `input.idempotency_key` is the caller's own (`--idempotency-key`) rather than one
+    /// minted for this invocation. A resume under a different saved key refuses a given key.
+    pub key_given: bool,
 }
 
 /// Inputs to [`begin_segmented_attempt`], bundled per the >5-domain-params rule.
@@ -363,6 +366,38 @@ fn ended_ingest_error(
     )))
 }
 
+/// The resource a begin answered with, when an earlier attempt under the same idempotency key
+/// already finalized it; else `None`, and the ingest carries on.
+///
+/// A replayed begin returns the resource its key first created, whatever state it is in now. A
+/// finished one answers with its finalized block set, which no longer lines up with this
+/// attempt's segments, and an append into it is refused: so a finished resource is the answer,
+/// as a replayed one-shot create's is. Its manifest is marked finalized, so no later run resumes
+/// it.
+#[cfg(feature = "embed")]
+async fn finished_earlier(
+    client: &temper_client::TemperClient,
+    resource_id: uuid::Uuid,
+    manifest_path: &std::path::Path,
+    manifest: &mut crate::actions::ingest_manifest::IngestManifest,
+) -> Result<Option<temper_core::types::resource_view::ResourceView>> {
+    let view = client
+        .resources()
+        .get(resource_id, None)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    if view.ingest_state != Some(temper_core::types::resource::IngestState::Complete) {
+        return Ok(None);
+    }
+    manifest.finalized = true;
+    crate::actions::ingest_manifest::store(manifest_path, manifest)?;
+    crate::output::progress_line(
+        "  already created by an earlier attempt with this idempotency key; nothing to upload"
+            .to_string(),
+    );
+    Ok(Some(view))
+}
+
 /// Stream a large body (`input.content` over `budget` bytes) through the segmented ingest
 /// endpoints: segment 0 lands via `begin_segmented` (the create path), segments `1..N` via
 /// `append_block`, then `finalize`. Writes the `.temper/` resume manifest after every landed
@@ -393,6 +428,7 @@ pub async fn run_segmented_create(
         vault_root,
         input,
         budget,
+        key_given,
     } = params;
 
     let wall_start = std::time::Instant::now();
@@ -441,6 +477,27 @@ pub async fn run_segmented_create(
     // never orphaned), or `<attempt_key>.json` for a fresh session.
     let (resource_id, mut manifest, landed, manifest_path) = match existing {
         Some((manifest_path, mut manifest)) => {
+            // A resume continues under the key the interrupted attempt saved. A key the caller
+            // chose that differs would go unsent, and unbound on the server, so a later retry with
+            // it would create a second resource: refuse, naming the saved key. A minted key is
+            // nobody's promise, so the resume proceeds and records the saved key for the hint.
+            if key_given && manifest.idempotency_key != Some(attempt_key) {
+                let saved = manifest.idempotency_key.map_or_else(
+                    || "no idempotency key".to_string(),
+                    |k| format!("idempotency key {k}"),
+                );
+                let resume = manifest.idempotency_key.map_or_else(
+                    || "re-run without --idempotency-key to resume it".to_string(),
+                    |k| format!("re-run with --idempotency-key {k} to resume it"),
+                );
+                return Err(TemperError::BadRequest(format!(
+                    "an interrupted ingest of this same body is saved at {} under {saved}, not \
+                     {attempt_key}; {resume}, or delete that file to start a fresh create under \
+                     {attempt_key}",
+                    manifest_path.display()
+                )));
+            }
+            crate::reconcile_hint::record_resumed_create_key(manifest.idempotency_key);
             // Resume. Prefer the resource id the interrupted attempt recorded; if its begin ack was
             // lost before it could record one, replay begin with the PERSISTED key so the server
             // converges on the committed resource — or mints fresh if the write never dispatched —
@@ -481,6 +538,16 @@ pub async fn run_segmented_create(
                     manifest.resource_id = Some(response.resource_id);
                     manifest.correlation_id = Some(response.correlation_id);
                     crate::actions::ingest_manifest::store(&manifest_path, &manifest)?;
+                    if let Some(done) = finished_earlier(
+                        client,
+                        response.resource_id,
+                        &manifest_path,
+                        &mut manifest,
+                    )
+                    .await?
+                    {
+                        return Ok(done);
+                    }
                     response.resource_id
                 }
             };
@@ -540,6 +607,12 @@ pub async fn run_segmented_create(
             manifest.correlation_id = Some(response.correlation_id);
             manifest.blocks = response.blocks.clone();
             crate::actions::ingest_manifest::store(&manifest_path, &manifest)?;
+            if let Some(done) =
+                finished_earlier(client, response.resource_id, &manifest_path, &mut manifest)
+                    .await?
+            {
+                return Ok(done);
+            }
             crate::output::progress_line(format!(
                 "  uploaded segment {}/{total_segments} (resource created)",
                 response.blocks.len()

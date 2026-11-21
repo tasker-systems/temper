@@ -334,10 +334,14 @@ pub struct CreateResourceArgs<'a> {
     /// `derivation-source-preservable` clause's surface (D3). Gated on `from` by clap.
     /// Fail-fast on non-local `--from` (a URL has no local original to preserve).
     pub preserve_source: bool,
-    /// `--idempotency-key` — the key the create sends, so a retry that sends it again returns the
-    /// first write. `main` pins one before dispatch when the caller gave none; `None` here (a
-    /// caller other than `main`) lets `shape_create` mint one.
+    /// The key the create sends, so a retry that sends it again returns the first write: the
+    /// caller's `--idempotency-key`, or the one `main` minted before dispatch. `None` (a caller
+    /// other than `main`) lets the create path mint one.
     pub idempotency_key: Option<uuid::Uuid>,
+    /// Whether `idempotency_key` is the caller's own. A segmented create that finds an
+    /// interrupted attempt saved under another key refuses a key the caller chose, rather than
+    /// resuming under the saved one and leaving the caller's key unbound.
+    pub idempotency_key_given: bool,
     pub format: crate::format::OutputFormat,
     /// Per-act correlation + authorship for the create act (from `--invocation`/`--confidence`/…).
     pub act: temper_core::types::ActInput,
@@ -499,6 +503,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         no_source,
         preserve_source,
         idempotency_key,
+        idempotency_key_given,
         format,
         act,
     } = args;
@@ -649,6 +654,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
                 vault_root: &config.vault_root,
                 input: &input,
                 budget,
+                key_given: idempotency_key_given,
             };
             runtime.block_on(crate::actions::ingest::run_segmented_create(params))?
         } else {

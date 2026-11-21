@@ -97,7 +97,10 @@ fn main() {
         // that merges streams and parses JSON gets a parseable payload even on
         // failure. In TOON mode, keep the existing stderr prose rendering — a
         // human at a TTY is no worse off than before.
-        let hint = temper_cli::reconcile_hint::reconcile_hint(lost_ack_prone, e);
+        let hint = temper_cli::reconcile_hint::reconcile_hint(
+            lost_ack_prone.map(temper_cli::reconcile_hint::LostAckProne::as_dispatched),
+            e,
+        );
         if output_format == OutputFormat::Json {
             let payload = temper_cli::error::render_error_payload(e, hint.as_deref());
             println!("{payload}");
@@ -196,6 +199,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     no_source,
                     preserve_source,
                     idempotency_key,
+                    minted_idempotency_key,
                     act,
                 } => {
                     if show_template {
@@ -227,7 +231,8 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             sources_as_edges,
                             no_source,
                             preserve_source,
-                            idempotency_key,
+                            idempotency_key: idempotency_key.or(minted_idempotency_key),
+                            idempotency_key_given: idempotency_key.is_some(),
                             format: output_format,
                             act: act.into_act_input()?,
                         },

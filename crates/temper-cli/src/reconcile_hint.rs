@@ -42,6 +42,7 @@
 //! scrub has its own hint, which names the two answers that mean the act landed.
 
 use std::borrow::Cow;
+use std::sync::Mutex;
 
 use temper_core::error::TemperError;
 use uuid::Uuid;
@@ -92,22 +93,47 @@ the create runs once."
     )
 }
 
-/// Give a `resource create` the idempotency key it will send, minting one when the caller gave
-/// none, and return it; `None` for any other command. Run **before** dispatch, so the key exists
-/// in `main` beside the error the create may return, and [`reconcile_hint`] can name it.
+/// Give a `resource create` the idempotency key it will send and return it: the caller's
+/// `--idempotency-key`, else a key minted into the command's `minted_idempotency_key`; `None` for
+/// any other command. Run **before** dispatch, so the key exists in `main` beside the error the
+/// create may return, and [`reconcile_hint`] can name it.
 ///
-/// The minted key is the one the create sends: `temper_workflow::shaping::shape_create` mints only
-/// when its input carries none, and this leaves none for it to mint. Every in-process retry of the
-/// request re-sends the same body and `Idempotency-Key` header, so one invocation is one key.
+/// The create sends this key, with one exception: a segmented create that resumes an interrupted
+/// attempt from its local manifest continues under the key that attempt saved, and records it
+/// with [`record_resumed_create_key`]. Every in-process retry of a request re-sends the same body
+/// and `Idempotency-Key` header, so one invocation is one key.
 pub fn pin_create_idempotency_key(command: &mut Commands) -> Option<Uuid> {
     match command {
         Commands::Resource {
-            action: ResourceAction::Create {
-                idempotency_key, ..
-            },
-        } => Some(*idempotency_key.get_or_insert_with(Uuid::now_v7)),
+            action:
+                ResourceAction::Create {
+                    idempotency_key,
+                    minted_idempotency_key,
+                    ..
+                },
+        } => Some(
+            idempotency_key
+                .unwrap_or_else(|| *minted_idempotency_key.get_or_insert_with(Uuid::now_v7)),
+        ),
         _ => None,
     }
+}
+
+/// The key a segmented create resumed under, when it resumed: `Some(None)` for a legacy manifest
+/// that saved no key. One create runs per process, so one slot serves it.
+static RESUMED_CREATE_KEY: Mutex<Option<Option<Uuid>>> = Mutex::new(None);
+
+/// Record that this process's create resumed an interrupted attempt under `key`, the key that
+/// attempt saved (`None`: it saved none), so the network-error hint names the key the server saw
+/// rather than the one pinned before dispatch.
+pub fn record_resumed_create_key(key: Option<Uuid>) {
+    if let Ok(mut slot) = RESUMED_CREATE_KEY.lock() {
+        *slot = Some(key);
+    }
+}
+
+fn resumed_create_key() -> Option<Option<Uuid>> {
+    RESUMED_CREATE_KEY.lock().ok().and_then(|slot| *slot)
 }
 
 /// A write whose outcome a lost acknowledgment can hide, and so which errors call for reconciling.
@@ -125,6 +151,20 @@ pub enum LostAckProne {
     FieldScrubAct,
 }
 
+impl LostAckProne {
+    /// This classification as dispatch left it: a create that resumed an interrupted attempt names
+    /// the key it resumed under ([`record_resumed_create_key`]) instead of the one pinned before
+    /// dispatch. Every other classification is returned unchanged.
+    pub fn as_dispatched(self) -> Self {
+        match (self, resumed_create_key()) {
+            (LostAckProne::ResourceCreate { .. }, Some(idempotency_key)) => {
+                LostAckProne::ResourceCreate { idempotency_key }
+            }
+            (other, _) => other,
+        }
+    }
+}
+
 /// Which kind of lost-ack-prone write `command` is, else `None`: `resource create` (a retry without
 /// its key mints a duplicate; the key is read from the command, so pin it first with
 /// [`pin_create_idempotency_key`]), `resource update`
@@ -138,11 +178,14 @@ pub enum LostAckProne {
 pub fn lost_ack_prone(command: &Commands) -> Option<LostAckProne> {
     match command {
         Commands::Resource {
-            action: ResourceAction::Create {
-                idempotency_key, ..
-            },
+            action:
+                ResourceAction::Create {
+                    idempotency_key,
+                    minted_idempotency_key,
+                    ..
+                },
         } => Some(LostAckProne::ResourceCreate {
-            idempotency_key: *idempotency_key,
+            idempotency_key: idempotency_key.or(*minted_idempotency_key),
         }),
         Commands::Resource {
             action: ResourceAction::Update { .. },
@@ -216,6 +259,7 @@ mod tests {
             no_source: false,
             preserve_source: false,
             idempotency_key: None,
+            minted_idempotency_key: None,
             act: crate::cli::ActArgs::default(),
         }
     }

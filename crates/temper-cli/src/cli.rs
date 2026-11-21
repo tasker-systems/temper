@@ -704,8 +704,14 @@ pub enum ResourceAction {
         /// are scoped to you; a replay returns the first write as it stands and does not compare
         /// bodies, so a key reused for a different resource returns the old one. Omitted: the
         /// CLI mints one, and a network error prints it so the retry can reuse it.
-        #[arg(long, value_name = "UUID")]
+        #[arg(long, value_name = "UUID", conflicts_with = "show_template")]
         idempotency_key: Option<uuid::Uuid>,
+        /// The key `main` minted for a create given no `--idempotency-key`
+        /// (`reconcile_hint::pin_create_idempotency_key`). Never parsed: kept apart from the
+        /// caller's key because a key the caller chose is a promise the create must keep, and a
+        /// minted one is not.
+        #[arg(skip)]
+        minted_idempotency_key: Option<uuid::Uuid>,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,

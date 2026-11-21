@@ -205,7 +205,9 @@ same `K` on every retry. Keys are scoped to you, and a replay returns the first 
 without comparing bodies, so never reuse a key for a different resource. A create sent without the
 flag still carries a key the CLI minted: on a `network` error the `hint` names it, and re-issuing
 with `--idempotency-key <that key>` is the safe retry. Without the key, check that the create
-landed before retrying it. `resource update` and `data-artifact commit` take no key.
+landed before retrying it. A large body resumes an interrupted attempt saved in the vault under
+that attempt's key; given a different key, the create is refused and names the saved one to
+re-run with. `resource update` and `data-artifact commit` take no key.
 
 ## Skill-Only Commands
 
