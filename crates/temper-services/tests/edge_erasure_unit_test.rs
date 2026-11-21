@@ -17,8 +17,10 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::property_owner::PropertyOwner;
-use temper_substrate::events::{fire, SeedAction};
-use temper_substrate::ids::{EdgeId, EntityId};
+use temper_substrate::affinity::EdgeKind;
+use temper_substrate::events::{fire, EdgeHome, SeedAction};
+use temper_substrate::ids::{EdgeId, EntityId, ResourceId};
+use temper_substrate::payloads::{AnchorRef, EdgePolarity};
 
 use edge_erasure::{asserting_event, authored, edge, facet, fold, resource, world, World};
 
@@ -447,11 +449,11 @@ fn sqlstate(err: &anyhow::Error) -> Option<String> {
 
 /// Wait until a backend running `statement` is blocked on a lock `holder` holds. Panics if none is
 /// within ten seconds, or if `writer` finished first, which means it never waited.
-async fn await_blocked(
+async fn await_blocked<T>(
     pool: &PgPool,
     holder: i32,
     statement: &str,
-    writer: &tokio::task::JoinHandle<anyhow::Result<()>>,
+    writer: &tokio::task::JoinHandle<T>,
 ) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -591,4 +593,149 @@ async fn a_property_write_racing_the_unit_waits_and_then_is_refused(pool: PgPool
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_fold_racing_the_unit_waits_and_then_is_refused(pool: PgPool) {
     race(&pool, Write::Fold).await;
+}
+
+/// The unit runs in a transaction left open; an assertion of the erased edge's identity (its
+/// endpoints, kind, polarity, label and home: what `uq_kb_edges_assertion` keys on) starts on its
+/// own connection, carrying no authorship, and is seen blocked in `relationship_assert`'s
+/// active-edge lookup on the unit's row lock. When the act commits, the lookup's re-check finds
+/// the edge folded with no label and answers none, so the assertion mints a new live edge. That is
+/// a fresh write of the asserter's own text, not the erased edge coming back
+/// (20261201000060's header).
+///
+/// FAILS IF the assertion never waits on the unit; if it is refused; if it reweights, unfolds or
+/// relabels the erased edge instead of inserting another; if the new edge is not live at the same
+/// home with the asserter's label, under its own asserting event that names it; or if the new
+/// event joins the erased edge's record, its redaction rows or the erased predicate, or brings
+/// back any text the asserter did not send.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_reassertion_racing_the_unit_waits_and_then_mints_a_new_edge(pool: PgPool) {
+    let x = estate(&pool).await;
+    let (src, tgt): (Uuid, Uuid) =
+        sqlx::query_as("SELECT source_id, target_id FROM kb_edges WHERE id = $1")
+            .bind(x.e.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let mut act = pool.begin().await.expect("begin the unit's transaction");
+    let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *act)
+        .await
+        .unwrap();
+    let out: Value = sqlx::query_scalar("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
+        .bind(x.e.uuid())
+        .bind(x.w.profile)
+        .bind(x.op.profile)
+        .bind(x.op.emitter)
+        .bind(Uuid::now_v7())
+        .fetch_one(&mut *act)
+        .await
+        .expect("the unit runs, its transaction held open");
+
+    let mut conn = pool.acquire().await.expect("the asserter's connection");
+    let (emitter, home) = (x.w.emitter, x.w.home);
+    let asserter = tokio::spawn(async move {
+        fire(
+            &mut conn,
+            SeedAction::RelationshipAssert {
+                src: AnchorRef::resource(ResourceId::from(src)),
+                tgt: AnchorRef::resource(ResourceId::from(tgt)),
+                kind: EdgeKind::LeadsTo,
+                polarity: EdgePolarity::Forward,
+                label: Some(LABEL),
+                weight: 1.0,
+                home: EdgeHome::Context(home),
+                emitter: EntityId::from(emitter),
+            },
+        )
+        .await
+        .and_then(|fired| fired.relationship())
+    });
+    await_blocked(&pool, holder, "%relationship_assert%", &asserter).await;
+
+    act.commit().await.expect("the act commits");
+    let fresh = asserter
+        .await
+        .expect("the asserter's task")
+        .expect("the assertion that waited is admitted when it resumes");
+    assert_ne!(fresh, x.e, "the assertion inserted another edge");
+
+    // The erased edge stays erased: folded once, by the unit, under one record.
+    assert_sentinelled(&pool, x.e).await;
+    assert_eq!(folds_of(&pool, x.e).await.len(), 1, "the unit's fold alone");
+    let records = records_of(&pool, x.e).await;
+    assert_eq!(records.len(), 1, "one edge_erased record");
+
+    // The new edge: live, at the same home, with the asserter's label, under its own event.
+    let (folded, label, home_table, home_id): (bool, Option<String>, String, Uuid) =
+        sqlx::query_as(
+            "SELECT is_folded, label, home_anchor_table, home_anchor_id FROM kb_edges \
+              WHERE id = $1",
+        )
+        .bind(fresh.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(!folded, "the new edge is live");
+    assert_eq!(label.as_deref(), Some(LABEL), "with the asserter's label");
+    assert_eq!(
+        (home_table.as_str(), home_id),
+        ("kb_contexts", x.w.home.uuid()),
+        "at the erased edge's home"
+    );
+    let fresh_asserted = asserting_event(&pool, fresh).await;
+    assert_ne!(fresh_asserted, x.asserted, "under its own asserting event");
+    let named: Option<String> =
+        sqlx::query_scalar("SELECT payload ->> 'edge_id' FROM kb_events WHERE id = $1")
+            .bind(fresh_asserted)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        named,
+        Some(fresh.uuid().to_string()),
+        "the new event names the new edge"
+    );
+
+    // Nothing joins the erased edge's erasure.
+    let erased: bool = sqlx::query_scalar("SELECT _edge_is_erased($1)")
+        .bind(fresh.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(!erased, "the new edge is not erased");
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_event_field_redactions WHERE event_id = $1")
+            .bind(fresh_asserted)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 0, "no redaction row names the new event");
+    assert_eq!(
+        records[0]["redacted_fields"], out["redacted_fields"],
+        "the record names what the unit rewrote, nothing after it"
+    );
+
+    // The ledger quotes the label once, in the new event, and nothing else of the erased edge.
+    let quoting: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM kb_events \
+          WHERE strpos(payload::text, $1) > 0 OR strpos(coalesce(metadata::text, ''), $1) > 0",
+    )
+    .bind(LABEL)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(quoting, vec![fresh_asserted], "the label is the asserter's");
+    for needle in [REASONING, "confided"] {
+        let hits: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_events \
+              WHERE strpos(payload::text, $1) > 0 OR strpos(coalesce(metadata::text, ''), $1) > 0",
+        )
+        .bind(needle)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(hits, 0, "the ledger quotes {needle:?}");
+    }
 }

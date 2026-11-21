@@ -33,9 +33,20 @@
 --     writers (property_set, facet_set, the keyed assert, property_retracted), relationship_retype
 --     and relationship_reweight through _resource_write_guard_owner, after the edge's resource
 --     endpoints (Section 3); relationship_fold in _project_relationship_folded (Section 5).
---     relationship_corrected and relationship_decayed have no write path. A reassertion of the
---     edge's identity waits on the unit's row lock and then inserts a new edge row; it writes
---     nothing of the erased one.
+--     relationship_corrected and relationship_decayed have no write path.
+--   * an assertion of the edge's identity (uq_kb_edges_assertion) is not refused, by design.
+--     relationship_assert's active-edge lookup (NOT is_folded, FOR UPDATE) waits on the unit's row
+--     lock. When the unit commits, the READ COMMITTED re-check finds the edge folded with a NULL
+--     label, so the lookup answers none. The assertion then inserts a new live edge at the same
+--     home: its own minted id, the label its own payload carries, and its own relationship_asserted
+--     event. The erased edge keeps its fold, its NULL label, its sentinels and its rewritten trail.
+--     The new event is outside that trail: it names the new edge, and _edge_phantom_reassertions
+--     reads only events whose edge_id has no row. The label is the asserter's own text, so this is
+--     a fresh write. docs/concepts/erasure-and-terms-of-use.md rules that "a fresh commit into a
+--     retired home mints live, lawful content, and any later erasure of the same estate strikes it
+--     again". This unit retires nothing. The Rust doors check container authorship
+--     (context_authorable_by_profile, which requires an active context) before the wait, so only
+--     an assertion that passed them while the home was live gets here.
 
 -- ---------------------------------------------------------------------------
 -- Section 1. The projection body for one edge.
