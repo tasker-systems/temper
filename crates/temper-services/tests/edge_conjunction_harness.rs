@@ -286,6 +286,20 @@ const CLASSIFIED: &[(&str, Class)] = &[
         ),
     ),
     (
+        "_edge_is_erased/1",
+        Class::NotCallerFacing(
+            "erasure predicate: names kb_edges only as an edge_erased record's subject_table, \
+             read by the edge's write guards and the sweep; returns a boolean, never an edge",
+        ),
+    ),
+    (
+        "_edge_homed_in_estate/2",
+        Class::NotCallerFacing(
+            "erasure predicate: reads one edge's home for the edge unit and the `edge` \
+             authority's subject check; returns a boolean, never an edge",
+        ),
+    ),
+    (
         "resource_erasure_survey_plan/1",
         Class::NotCallerFacing(
             "erasure act's own scope computation, shared with the survey door, which authorizes \

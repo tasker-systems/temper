@@ -76,9 +76,10 @@
 //!     erasure's, so the closure matches names; whoever registers such a kind must add it to a
 //!     class or to `AUTHORITY_BY_ROLE`, in review;
 //!   * a consumer that recognises an erasure by its record's subject or by table, without naming a
-//!     kind. `sensitivity.erased_place_findings` is rostered for the `edge_erased` it names, but its
-//!     arms for an erased resource and an edge's erased endpoint read `kb_resources.erased_at`, so a
-//!     resource erasure kind missing there fails nothing.
+//!     kind. `sensitivity.erased_place_findings` names no kind: its arms for an erased resource and
+//!     an edge's erased endpoint read `kb_resources.erased_at`, and its erased-edge arms, the write
+//!     guard's kb_edges arm and the fold projection call `_edge_is_erased`, which is rostered for
+//!     the `edge_erased` it names. A kind missing from any of those callers fails nothing here.
 //!
 //! The checker is a pure function over (consumers, roster, vocabulary), so the bite probes run in
 //! memory over the real bodies with one change each, one probe per failure branch.
@@ -363,19 +364,10 @@ const ROSTER: &[Entry] = &[
         "the edge erasure act, appending its own kind",
     ),
     own(
-        "_resource_write_guard_owner(text,uuid)",
+        "_edge_is_erased(uuid)",
         &["edge_erased"],
-        "the write guard refuses a write to a folded edge its own edge_erased record names",
-    ),
-    own(
-        "_project_relationship_folded(uuid,jsonb)",
-        &["edge_erased"],
-        "the fold projection refuses a fold of an edge its own edge_erased record names",
-    ),
-    own(
-        "sensitivity.erased_place_findings()",
-        &["edge_erased"],
-        "holds the label and property findings of an edge its own edge_erased record names",
+        "whether an edge_erased record names the edge: the one predicate of the edge's writers \
+         and of the sweep's erased-edge findings",
     ),
     own(
         "resource_field_scrub_execute(uuid,text,uuid,boolean,uuid,uuid,uuid)",
