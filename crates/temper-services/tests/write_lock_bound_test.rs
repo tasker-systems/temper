@@ -11,6 +11,8 @@
 //! as long as each witness needs.
 #![cfg(feature = "test-db")]
 
+mod edge_erasure;
+
 use std::time::{Duration, Instant};
 
 use sqlx::PgPool;
@@ -333,6 +335,91 @@ async fn the_edge_unit_completes_under_a_session_lock_timeout(pool: PgPool) {
             .expect("the edge");
     assert!(folded, "the unit folded the edge");
     assert_eq!(label, None, "the unit nulled the edge's label");
+}
+
+/// **The person act completes under any default bound.** The database's default `lock_timeout`
+/// is set tight, as a pool-wide, role-level or database-level default would set it, and the
+/// service runs the act on a fresh pool whose connections start with it: the service sets no
+/// `lock_timeout` of its own on the act's transaction. A writer holds an estate-homed edge's row
+/// `FOR KEY SHARE` past that bound. The edge's ends are team resources, so no resource erasure
+/// locks it first: the act's own edge step, in `principal_erasure_execute`'s body, meets the
+/// writer, waits it out, and erases the edge.
+///
+/// FAILS IF `principal_erasure_execute` loses its `SET lock_timeout = 0` (a later
+/// `CREATE OR REPLACE` that does not restate it): the edge step's `FOR UPDATE` is cancelled with
+/// `55P03`, which the service does not retry, and the act fails.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_person_act_completes_under_a_database_lock_timeout(pool: PgPool) {
+    let w = edge_erasure::world(&pool).await;
+    let team = edge_erasure::team_context(&pool).await;
+    let src = edge_erasure::resource_in(&pool, &w, team, "edge-source").await;
+    let tgt = edge_erasure::resource_in(&pool, &w, team, "edge-target").await;
+    let edge = edge_erasure::edge(
+        &pool,
+        &w,
+        src,
+        tgt,
+        "a label the act nulls",
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .uuid();
+    let op = edge_erasure::world(&pool).await;
+    temper_services::test_support::grant_governance(&pool, op.profile).await;
+    let admin = temper_services::test_support::system_admin_proof_for(&pool, op.profile).await;
+
+    sqlx::query(
+        "DO $$ BEGIN \
+             EXECUTE format('ALTER DATABASE %I SET lock_timeout = ''100ms''', current_database()); \
+         END $$",
+    )
+    .execute(&pool)
+    .await
+    .expect("a tight database default");
+    let bounded = sqlx::postgres::PgPoolOptions::new()
+        .connect_with(pool.connect_options().as_ref().clone())
+        .await
+        .expect("a pool whose connections start with the default");
+    let shown: String = sqlx::query_scalar("SHOW lock_timeout")
+        .fetch_one(&bounded)
+        .await
+        .expect("show");
+    assert_eq!(
+        shown, "100ms",
+        "setup: the act's connections carry the bound"
+    );
+
+    let mut writer = pool.begin().await.expect("begin");
+    sqlx::query("SELECT 1 FROM kb_edges WHERE id = $1 FOR KEY SHARE")
+        .bind(edge)
+        .execute(&mut *writer)
+        .await
+        .expect("the writer's edge lock");
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(1_000)).await;
+        writer.commit().await.expect("the writer commits");
+    });
+
+    let erased = temper_services::services::erasure_service::execute_erasure(
+        &bounded,
+        &admin,
+        ProfileId::from(w.profile),
+        uuid::Uuid::now_v7(),
+        Surface::ApiHttp,
+        &Default::default(),
+    )
+    .await;
+    release.await.unwrap();
+
+    erased.expect("the person act completes whatever lock_timeout its connection starts with");
+    let (folded, label): (bool, Option<String>) =
+        sqlx::query_as("SELECT is_folded, label FROM kb_edges WHERE id = $1")
+            .bind(edge)
+            .fetch_one(&pool)
+            .await
+            .expect("the edge");
+    assert!(folded, "the act folded the edge");
+    assert_eq!(label, None, "the act nulled the edge's label");
 }
 
 /// **A write queued behind another update is cut off too.** A side transaction holds the row
