@@ -201,11 +201,11 @@
 "kb_machine_clients.revoked_by_profile_id"         = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_machine_clients.secret_rotated_by_profile_id"  = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_oauth_flow.profile_id"                         = { class = "reference", ceiling = "pseudonym", achieved = "-" }
-"kb_principal_rate_counters.profile_id"            = { class = "reference", ceiling = "pseudonym", achieved = "-", note = "a windowed request count per door; cascades with the profile" }
 "kb_oauth_refresh_replays.profile_id"              = { class = "reference", ceiling = "pseudonym", achieved = "-", note = "evidence a credential was copied; RESTRICTed against retention sweeps" }
 "kb_oauth_refresh_tokens.profile_id"               = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_principal_governance.profile_id"               = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_principal_governance.granted_by"               = { class = "reference", ceiling = "pseudonym", achieved = "-" }
+"kb_principal_rate_counters.profile_id"            = { class = "reference", ceiling = "pseudonym", achieved = "-", note = "a windowed request count per door; after erasure keyed on the pseudonym" }
 "kb_principal_review_requests.profile_id"          = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_principal_review_requests.decided_by"          = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_principal_standing.profile_id"                 = { class = "reference", ceiling = "pseudonym", achieved = "-" }

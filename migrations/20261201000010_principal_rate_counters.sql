@@ -3,8 +3,10 @@
 -- call leaves no artifact to count from.
 --
 -- Its own table, not rows in kb_rate_counters: the key is a profile, so it is a foreign key into
--- kb_profiles that the erasure manifests' fk derivation finds, and a profile's counters go with
--- the profile. kb_rate_counters stays keyed on request paths only.
+-- kb_profiles, which the erasure manifests' fk derivation finds and declares (a pseudonymous
+-- reference). Erasure tombstones a profile and keeps its UUID, so a counter row stays keyed on the
+-- pseudonym; ON DELETE CASCADE only keeps a counter from outliving a deleted profile row.
+-- kb_rate_counters stays keyed on request paths only.
 --
 -- LOAD-BEARING: call_count and window_started_at move together in ONE statement
 -- (rate_limit::bump_principal), for the same reason as kb_rate_counters: PgBouncer transaction

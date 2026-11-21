@@ -308,11 +308,12 @@ fn mount_group(group: &Group, state: &AppState) -> Router<AppState> {
         None => router,
     };
     // The per-principal budget next, inner to the precondition refusal and to every gate of the
-    // tier, so only a caller every gate admitted spends it. It wraps each of the group's paths
-    // whole, the method router's 405 fallback included: where a budgeted path is shared with a
-    // read group the merge serves the budgeted group's fallback, so an admitted caller's unmounted
-    // method on that path spends one call too, and past the budget is answered 429. That costs
-    // only the caller's own budget.
+    // tier, so only a caller every gate admitted spends it. `route_layer` keeps the router-level
+    // fallback (an unmatched path's 404) out of the budget, but in axum it still wraps each path's
+    // method router whole, its 405 fallback included. Where a budgeted path is shared with a read
+    // group, the merge keeps the later-merged router's fallback, and the blob rows come after
+    // `gated_routes`, so an admitted caller's unmounted method on that path spends one call and
+    // past the budget is answered 429. That costs only the caller's own budget.
     let router = match group.rate_limit {
         Some(door) => router.route_layer(from_fn_with_state(
             principal_rate_limit::PrincipalLimit {
@@ -326,9 +327,9 @@ fn mount_group(group: &Group, state: &AppState) -> Router<AppState> {
     // The precondition refusal next, before the tier, so it is inside every gate of the tier stack: it runs
     // after `require_auth`, `refuse_machine`, `require_system_access` and the HMAC signature, and a
     // caller one of them refuses meets that refusal exactly as it would without the header.
-    // `Router::layer` (not `route_layer`) so it also wraps the method router's fallback: an
-    // admitted caller sending an unmounted write with a policed header keeps the refusal, with
-    // the fallback's `Allow`.
+    // `Router::layer`, so it wraps the method router's fallback (as `route_layer` would too) and
+    // the router-level fallback besides: an admitted caller sending an unmounted write with a
+    // policed header keeps the refusal, with the fallback's `Allow`.
     let router = match group.preconditions {
         Preconditions::Refused => {
             router.layer(from_fn(preconditions::refuse_unhonoured_preconditions))

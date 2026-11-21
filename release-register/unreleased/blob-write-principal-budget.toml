@@ -10,9 +10,9 @@ share one request budget per principal when the operator sets RATE_LIMIT_BLOB_WR
 RATE_LIMIT_BLOB_WRITE_WINDOW_SECS. A call past the budget is refused 429 TOO_MANY_REQUESTS with a
 Retry-After, the seam's existing refusal. Unset, which is the default, the doors behave exactly as
 before and no counter is written. Counts live in a new table, kb_principal_rate_counters, keyed on
-(profile, door) and deleted with the profile. The erasure policy declares its two columns:
-profile_id as a pseudonymous reference (personal-data.toml), door as structural
-(sensitivity-scan.toml).
+(profile, door), profile_id a foreign key to kb_profiles. The erasure policy declares its two
+columns: profile_id as a pseudonymous reference (personal-data.toml; erasure keeps the profile's
+UUID as the pseudonym, so the rows stay keyed on it), door as structural (sensitivity-scan.toml).
 
 Shape: each of the five operations gains a documented 429 response in openapi.json (additive);
 the SDKs regenerate accordingly. Who observes: only deployments that set the budget, and on them a

@@ -31,7 +31,7 @@
 //! |---|---|---|---|---|
 //! | reconcile pair (`internal_routes`) | the route itself | `kb_rate_counters` (no per-call artifact exists — the handlers trace only) | [`require_route_rate_limit`] middleware | one budget per route for the whole deployment: every signed caller shares it, so a flood from the one secret-bearer spends it for all |
 //! | `POST /api/access/requests` | the verified JWT principal | the `kb_join_requests` rows themselves (the audit trail) | the `create_join_request` guard | one budget per principal; other principals are untouched |
-//! | the blob write doors ([`PrincipalDoor::BlobWrite`]): `POST /api/blobs`, `POST /api/blobs/uploads`, `POST /api/blobs/uploads/{id}/segments`, `POST /api/blobs/uploads/{id}/finalize`, `DELETE /api/blobs/{id}` | the verified principal (person or machine), one budget shared across the five doors | `kb_principal_rate_counters`, one row per principal and door, deleted with the profile (a refused or failed attempt leaves no artifact to count) | `require_principal_rate_limit` middleware (temper-api) over [`check_principal`] | one budget per principal across every instance; a principal past it is refused on all five doors, other principals are untouched. It bounds a principal's call rate, not how many of its calls run at once, and many principals together are not bounded by it |
+//! | the blob write doors ([`PrincipalDoor::BlobWrite`]): `POST /api/blobs`, `POST /api/blobs/uploads`, `POST /api/blobs/uploads/{id}/segments`, `POST /api/blobs/uploads/{id}/finalize`, `DELETE /api/blobs/{id}` | the verified principal (person or machine), one budget shared across the five doors | `kb_principal_rate_counters`, one row per principal and door, a foreign key to the profile (a refused or failed attempt leaves no artifact to count) | `require_principal_rate_limit` middleware (temper-api) over [`check_principal`] | one budget per principal across every instance; a principal past it is refused on all five doors, other principals are untouched. It bounds a principal's call rate, not how many of its calls run at once, and many principals together are not bounded by it |
 //!
 //! **Why these five, and not the other blob doors.** Each of the five can hold a pool
 //! connection across provider I/O or move request bytes into the database: commit and
@@ -41,13 +41,6 @@
 //! `GET /api/blobs/{id}`, `GET /api/blobs/uploads/{id}`, `GET /api/blobs/{id}/relations`)
 //! and `POST /api/blobs/{id}/relations` (one edge write, no provider I/O, no hash lock)
 //! are not bounded by this door.
-//!
-//! **Not yet bounded: `/mcp` itself.** The MCP `blob_manage` tool relays its commit to
-//! `POST /api/blobs` with the caller's own bearer, so that call spends the caller's
-//! blob-write budget at the API. That is not parity: the `/mcp` door's own work (the
-//! JSON-RPC parse, the base64 decode, the relay) happens before the API counts anything,
-//! and nothing bounds it. Ruling R4 of the codebase recon rulings (2026-11-08) puts `/mcp`
-//! in scope and revisits spec A8; that bound is later work.
 //!
 //! One note on placement: the spec's chosen approach sketched the layer "in
 //! `temper-services::transport`"; it lives in this module instead (its own home,
@@ -65,6 +58,12 @@
 //! it, and its AS entry points are public-by-protocol where keying is hardest. Spec A8
 //! declared it open; ruling R4 (codebase recon rulings, 2026-11-08) brings it into scope
 //! for a later build. Until that lands, no limit here covers the `/mcp` door's own work.
+//!
+//! The MCP blob tools are not yet bounded either, and this is not parity with the HTTP
+//! doors. The `blob_manage` commit relays to `POST /api/blobs` with the caller's own
+//! bearer, so that relayed call spends the caller's blob-write budget at the API; but the
+//! `/mcp` door's own work for it (the JSON-RPC parse, the base64 decode, the relay)
+//! happens before the API counts anything, and nothing bounds it.
 
 use axum::extract::Request;
 use axum::extract::State;
@@ -303,7 +302,7 @@ impl PrincipalDoor {
 /// route, with the retry value taken from the database's clock in the same statement.
 ///
 /// Returns `(allowed, retry_after_secs)`, with `allowed` meaning `call_count <= max`.
-pub async fn bump_principal(
+async fn bump_principal(
     pool: &PgPool,
     profile_id: ProfileId,
     door: PrincipalDoor,

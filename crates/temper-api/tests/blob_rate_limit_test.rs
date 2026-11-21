@@ -368,25 +368,18 @@ async fn an_unmounted_method_on_a_budgeted_path_spends_the_budget(pool: PgPool) 
     );
 }
 
-/// **Erasure witness: a principal's counters go with its profile.** The counter references the
-/// profile by foreign key with `ON DELETE CASCADE`, so the erasure manifests' fk derivation finds
-/// it and a deleted profile leaves no counter behind.
+/// **Erasure-visibility witness: the counter references its profile by foreign key.** That is
+/// what lets the erasure manifests' fk derivation nominate the column, and `ON DELETE CASCADE`
+/// keeps a counter from outliving a deleted profile row. (Erasure itself tombstones a profile and
+/// keeps its UUID, so after erasure the rows stay keyed on the pseudonym.)
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_profiles_counters_go_with_the_profile(pool: PgPool) {
-    let app = app_with_budget(pool, budget(5)).await;
-    let (ctx, token) = principal(&app.pool).await;
-    assert_eq!(
-        commit(&app, &token, ctx, vec![1]).await.status().as_u16(),
-        200
-    );
-    assert_eq!(counter_rows(&app.pool).await, 1);
-
+async fn the_counters_profile_reference_is_a_cascading_foreign_key(pool: PgPool) {
     let cascades: bool = sqlx::query_scalar(
         "SELECT confdeltype = 'c' FROM pg_constraint \
           WHERE conrelid = 'kb_principal_rate_counters'::regclass AND contype = 'f' \
             AND confrelid = 'kb_profiles'::regclass",
     )
-    .fetch_one(&app.pool)
+    .fetch_one(&pool)
     .await
     .expect("the profile foreign key");
     assert!(
