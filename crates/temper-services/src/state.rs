@@ -731,9 +731,9 @@ impl Shared {
     /// 2. **The token must actually carry an `aud` claim.** `set_audience` alone does NOT enforce
     ///    that. `required_spec_claims` defaults to `{"exp"}`, and jsonwebtoken's own docs say:
     ///    *"Validation only happens if `aud` claim is present in the token."* A token with **no**
-    ///    `aud` — or a malformed one that fails to parse as a string — hits the fallthrough arm and
-    ///    is **accepted**. Fixing (1) without (2) closes half the door and documents the other half
-    ///    as shut.
+    ///    `aud` is **accepted** unless `aud` is a required claim. (A malformed `aud` is refused
+    ///    whenever audience checking is on.) Fixing (1) without (2) closes half the door and
+    ///    documents the other half as shut.
     /// 3. The audience set is a SET, not a single value: the MCP surface passes its own RFC 8707
     ///    resource audience *plus* the API audience, because machine tokens and sessions minted
     ///    before `MCP_AUDIENCE` existed carry the API audience and both surfaces are one instance.
