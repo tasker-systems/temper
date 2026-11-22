@@ -34,11 +34,14 @@
 --
 -- One residual is kept (ruling 12 of that decision): the edge step does not hold an edge's home
 -- context. A context_reassign that moves the context out of the estate after the step found an
--- edge to erase homed there, and commits before the act's context lock, makes the act abort: the
--- unit raises `edge % is not homed in the estate of %` when the reassign lands between the step's
--- check and the unit's, and otherwise the commit check refuses the record, its edge no longer
--- homed in the estate. Neither is retried, so the service answers 500; nothing the act did persists, and the
--- act run again completes, its edge step reading the live estate and leaving that context's edges.
+-- edge to erase homed there, and commits before the act's context lock, makes the act abort at
+-- one of three points. The unit raises `edge % is not homed in the estate of %` when the reassign
+-- lands between the step's check and the unit's. kb_events_append_only's edge arm refuses the
+-- unit's UPDATE kb_events (`event ledger is append-only`) when it lands between the unit's check
+-- and that UPDATE. Otherwise the commit check (edge_erasure_requires_an_erased_owner) refuses the
+-- record, its edge no longer homed in the estate. None is retried, so the service answers 500;
+-- nothing the act did persists, and the act run again completes, its edge step reading the live
+-- estate and leaving that context's edges.
 --
 -- Section 7 runs under SET LOCAL lock_timeout = '500ms', the bound and the reasons of
 -- 20261201000010_erasure_records_schema.sql: each CREATE TRIGGER and CREATE CONSTRAINT TRIGGER
@@ -234,9 +237,10 @@ erased.$c$;
 -- estate under the edge's lock, the unit folds the edge, and no write path unfolds one. The home
 -- is read again here, against the estate at commit. Once the act holds its estate contexts' rows
 -- (principal_erasure_execute's context lock), no door moves one out; a context reassigned out of
--- the estate after the edge step and before that lock fails the act at commit instead, and the act
--- run again leaves that context's edges, its edge step reading the live estate (the residual this
--- migration's header names).
+-- the estate after the edge step and before that lock fails the act at commit instead (or earlier,
+-- at the unit's home check or kb_events_append_only's edge arm, when it lands inside the unit),
+-- and the act run again leaves that context's edges, its edge step reading the live estate (the
+-- residual this migration's header names).
 CREATE FUNCTION edge_erasure_requires_an_erased_owner()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1240,10 +1244,11 @@ BEGIN
     --    the owner check runs at commit (edge_erasure_requires_an_erased_owner), and reads each
     --    record's edge folded and homed in the estate again then.
     --
-    --    The step does not lock the edge's home context, so the three reads can disagree: a
-    --    context_reassign moving the context out of the estate after this check and committing
-    --    before the act's context lock below aborts the act, in the unit (`not homed in the
-    --    estate`) or at commit (the owner check). Neither is retried: the service answers 500,
+    --    The step does not lock the edge's home context, so the reads of its home can disagree:
+    --    a context_reassign moving the context out of the estate after this check and committing
+    --    before the act's context lock below aborts the act, in the unit's home check (`not homed
+    --    in the estate`), at the unit's UPDATE kb_events (kb_events_append_only's edge arm reads
+    --    the home again), or at commit (the owner check). None is retried: the service answers 500,
     --    nothing the act did persists, and the act run again leaves that context's edges, this
     --    check reading the live estate (ruling 12 of decision 01a1f6e8-81bd-758c-be87-a6824b66352a).
     --    ────────────────────────────────────────────────────────────────────────────────────────
@@ -1335,7 +1340,8 @@ BEGIN
     --    the act queues on the next resource homed there. Postgres breaks that with 40P01 and the
     --    services retry both acts. A field scrub and a block history scrub take their resource's
     --    act queue and row in the same order, and neither writes a context row
-    --    (_block_history_scrub_apply returns before step (7)), so neither closes that cycle.
+    --    (_block_history_scrub_apply calls _resource_erasure_apply_redaction with a block set,
+    --    which returns before step (4)), so neither closes that cycle.
     --
     --    So the estate can change between the plan and this lock: context_reassign moves a context
     --    out until the act first holds its row. For such a context the act's halves follow
@@ -1453,8 +1459,9 @@ The estate contexts are locked after the strikes. A context reassigned out of th
 the act holds its row, and before the edge step finds an edge to erase homed in it, keeps the
 edges its resource erasures did not reach and its earlier names and slugs on the ledger, while its
 resources are erased and it is closed by context_erased. One reassigned out after the edge step
-found such an edge aborts the act (in edge_erasure_execute's home check, or at commit in
-edge_erasure_requires_an_erased_owner); nothing persists, and the act run again completes. Content
+found such an edge aborts the act (in edge_erasure_execute's home check, at its UPDATE kb_events
+in kb_events_append_only's edge arm, or at commit in edge_erasure_requires_an_erased_owner);
+nothing persists, and the act run again completes. Content
 committed into a retired estate context after the act is a fresh live row that this act does not
 erase. Does not decide legality: the caller's system-admin gate is resolved before any
 mutation.$c$;
@@ -1570,8 +1577,9 @@ SELECT declare_migration(
     'reassigned out of the estate before the act holds its row, and before the edge step finds an '
     'edge to erase homed in it, keeps its edges and its earlier names and slugs on the ledger, '
     'while its resources are erased and it is closed by context_erased; one reassigned out after '
-    'the edge step found such an edge aborts the act (the unit''s home check or the commit-time '
-    'owner check), which the service answers with a 500, nothing persisting, and the act run again '
+    'the edge step found such an edge aborts the act (the unit''s home check, the edge arm of '
+    'kb_events_append_only at the unit''s ledger rewrite, or the commit-time owner check), which '
+    'the service answers with a 500, nothing persisting, and the act run again '
     'completes. '
     'principal_erasure_execute, principal_erasure_survey_plan and _principal_erasure_edges_outcome '
     'pin search_path = public, pg_temp; every name they read is in public or schema-qualified. '

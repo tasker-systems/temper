@@ -9,7 +9,9 @@ an edge_erased record lets an act rewrite the ledger trail of one edge that is f
 context of the estate the record names, to the sentinels resource erasure writes. The ledger guard,
 the trail trigger and the sweep's place closure each read the new authority. The resource act's
 ledger derivation now runs through one shared loop, _erasure_trail_payload_redaction, whose output for
-a resource is unchanged. Migration 20261202000030 adds edge_erasure_execute, which erases one edge
+a resource is unchanged but for one case: a label a writer typed as its own sentinel
+(erased-label-<n>, numbered to n) has no redaction row, so a later act on its pair numbers it after
+the sentinels already written there and can rewrite it once, where it was left as it was. Migration 20261202000030 adds edge_erasure_execute, which erases one edge
 homed in the estate: it folds the edge if it is live (relationship_folded, reason estate_erased),
 appends one edge_erased record, nulls the edge's label, sets every property the edge owns to its
 sentinels, and rewrites the edge's labels, properties, earlier fold reasons and corrections, and
@@ -25,9 +27,10 @@ is skipped and counted. The act still locks its estate contexts after its resour
 context reassigned out of the estate before the act holds its row keeps the edges its resource
 erasures did not reach and its earlier names and slugs on the ledger, while its resources are erased and it is closed by context_erased.
 One reassigned out after the edge step found an edge to erase homed in it, and before the act
-holds its row, makes the act fail: the edge erasure's home check, or the commit-time check that the
-record's edge is homed in the estate, refuses it, the service answers 500, nothing the act did
-persists, and running the act again completes.
+holds its row, makes the act fail: the edge erasure's home check, the ledger guard at the edge
+erasure's rewrite of the edge's events, or the commit-time check that the record's edge is homed in
+the estate refuses it, the service answers 500, nothing the act did persists, and running the act
+again completes.
 The person act's record gains one kb_edges target naming how many edges it
 erased, and one `erasure` reference per edge_erased; its payload keys are unchanged. The survey
 (POST /api/admin/erasure/survey, temper admin erasure principal) predicts the same kb_edges target,
