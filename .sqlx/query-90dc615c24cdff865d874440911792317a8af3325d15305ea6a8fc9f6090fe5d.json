@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT replay_posture() AS \"violations!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "violations!",
+        "type_info": "TextArray"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "90dc615c24cdff865d874440911792317a8af3325d15305ea6a8fc9f6090fe5d"
+}

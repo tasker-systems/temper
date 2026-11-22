@@ -22,6 +22,9 @@
 //! and materialized view in its own transaction, then the schemas, by then holding little.
 //! [`truncate_kb_tables`] truncates one table per transaction. The end states are those of the
 //! one-statement forms: neither schema exists, and every `kb_` table is empty.
+//!
+//! [`mark_replay_target`] marks a test database as a replay target, so a fixture that sets
+//! `temper.replaying` on a populated database sees the guards stand down as the replay walk does.
 
 use sqlx::{Executor, PgPool};
 
@@ -100,4 +103,16 @@ pub async fn truncate_kb_tables(pool: &PgPool) {
             .await
             .unwrap_or_else(|e| panic!("truncate {table}: {e}"));
     }
+}
+
+/// Mark this test database a replay target: the `kb_replay_target` row that `_replay_mode()`
+/// (20261203000010) requires beside `temper.replaying`. The replay walk marks its own target
+/// through `_replay_target_mark()`, which refuses a populated ledger; a fixture that sets the flag
+/// over rows it seeded marks the database here instead. Panics on failure, as a test fixture
+/// should.
+pub async fn mark_replay_target<'e, E: Executor<'e, Database = sqlx::Postgres>>(executor: E) {
+    executor
+        .execute("INSERT INTO kb_replay_target (id) VALUES (true) ON CONFLICT (id) DO NOTHING")
+        .await
+        .expect("mark the database a replay target");
 }

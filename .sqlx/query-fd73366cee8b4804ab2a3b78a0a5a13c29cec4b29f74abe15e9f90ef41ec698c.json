@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT replay_posture() AS \"reasons!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "reasons!",
+        "type_info": "TextArray"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "fd73366cee8b4804ab2a3b78a0a5a13c29cec4b29f74abe15e9f90ef41ec698c"
+}

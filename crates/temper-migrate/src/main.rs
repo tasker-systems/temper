@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use temper_migrate::{connect, ledger, MIGRATOR};
+use temper_migrate::{connect, ledger, replay_posture, MIGRATOR};
 
 /// Apply pending migrations, recording each apply's outcome in `kb_migration_ledger`.
 ///
@@ -35,6 +35,34 @@ const HALTED: i32 = 3;
 /// operator's next move is different and the ledger has nothing to say about it — see
 /// [`ledger::divergent_version`].
 const DIVERGED: i32 = 4;
+
+/// The database carries a replay-target marker or a persistent `temper.replaying` default, either
+/// of which a deployed database must never hold. Distinct from 1 because nothing failed: the
+/// schema applied, and the database itself is what the operator must inspect.
+const UNSAFE_REPLAY_POSTURE: i32 = 5;
+
+/// Refuse the run when [`replay_posture`] names any reason. Called after applying, in both modes,
+/// because the check is itself a migration's function and a fresh database gains it here.
+async fn refuse_unsafe_replay_posture(conn: &mut sqlx::PgConnection) -> Result<()> {
+    let reasons = replay_posture(conn).await?;
+    if reasons.is_empty() {
+        return Ok(());
+    }
+    eprintln!();
+    eprintln!("UNSAFE REPLAY POSTURE");
+    eprintln!();
+    for reason in &reasons {
+        eprintln!("  * {reason}");
+    }
+    eprintln!();
+    eprintln!(
+        "The guards that keep erasure and the ledger honest stand down only for a replay walk's\n\
+         scratch database: temper.replaying on AND a kb_replay_target row. A deployed database\n\
+         holds neither. Find what marked it or set the default before serving from it; the\n\
+         schema above was applied."
+    );
+    std::process::exit(UNSAFE_REPLAY_POSTURE);
+}
 
 /// Exit on the divergence class if that is what this is; otherwise hand the error back unchanged.
 ///
@@ -89,7 +117,7 @@ async fn main() -> Result<()> {
     if !cli.additive_only {
         classify(ledger::run_with_ledger(&MIGRATOR, &mut conn).await)?;
         println!("migrations applied; outcomes recorded in kb_migration_ledger");
-        return Ok(());
+        return refuse_unsafe_replay_posture(&mut conn).await;
     }
 
     let run = classify(ledger::run_additive_only(&MIGRATOR, &mut conn).await)?;
@@ -107,6 +135,8 @@ async fn main() -> Result<()> {
                 .join(", ")
         );
     }
+
+    refuse_unsafe_replay_posture(&mut conn).await?;
 
     // The halt is reported AFTER what was applied, because both are true and the operator needs to
     // know the schema moved before being told where it stopped.

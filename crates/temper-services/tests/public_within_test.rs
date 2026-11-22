@@ -611,6 +611,24 @@ async fn the_trigger_and_the_checks_refuse_the_barred_shapes(pool: PgPool) {
         .execute(&mut *tx)
         .await
         .unwrap();
+    // The setting alone, in a database without the replay-target marker, lowers no guard.
+    {
+        let mut sp = sqlx::Connection::begin(&mut *tx).await.unwrap();
+        let err = sqlx::query(
+            "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) VALUES ($1, $2, NULL)",
+        )
+        .bind(w.eng_sec_red)
+        .bind(w.eng)
+        .execute(&mut *sp)
+        .await
+        .expect_err("unmarked, the setting alone restores no opener-less row");
+        assert_eq!(
+            err.as_database_error().and_then(|e| e.constraint()),
+            Some("kb_team_public_within_opened_by")
+        );
+        sp.rollback().await.unwrap();
+    }
+    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
     sqlx::query(
         "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) VALUES ($1, $2, NULL)",
     )
@@ -3382,6 +3400,81 @@ async fn a_hard_deleted_team_records_each_row_before_the_cascade(pool: PgPool) {
         row_exists(&pool, w.eng_sec, w.eng).await,
         "another team's row is untouched"
     );
+}
+
+/// The hard-delete triggers stand down only for a real replay: with `temper.replaying` on in a
+/// database without the replay-target marker, a hard delete is still recorded before the cascade;
+/// with the marker (the replay walk's own target), it restores as it stands and records nothing.
+///
+/// FAILS IF: any of the three hard-delete triggers reads the setting instead of `_replay_mode()`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hard_delete_under_the_setting_alone_is_still_recorded(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let records = |team: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT e.payload ->> 'act' FROM kb_events e \
+                   JOIN kb_event_types et ON et.id = e.event_type_id \
+                  WHERE et.name = 'team_public_within_changed' \
+                    AND (e.payload ->> 'team_id')::uuid = $1 ORDER BY e.id",
+            )
+            .bind(team)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let unmarked = team(&pool, "eng-unmarked", &[w.eng]).await;
+    let marked = team(&pool, "eng-marked", &[w.eng]).await;
+    for t in [unmarked, marked] {
+        join(&pool, t, d.both, "owner").await;
+        open_by(&pool, d.both, t, w.eng).await.unwrap();
+    }
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM kb_teams WHERE id = $1")
+        .bind(unmarked)
+        .execute(&mut *tx)
+        .await
+        .expect("hard delete");
+    tx.commit().await.unwrap();
+    assert_eq!(
+        records(unmarked).await,
+        ["opened", "cascade_deleted"],
+        "unmarked, the setting alone does not stand the hard-delete triggers down"
+    );
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
+    sqlx::query("DELETE FROM kb_teams WHERE id = $1")
+        .bind(marked)
+        .execute(&mut *tx)
+        .await
+        .expect("hard delete under replay");
+    let cascade_recorded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'team_public_within_changed' AND e.payload ->> 'act' = 'cascade_deleted' \
+            AND (e.payload ->> 'team_id')::uuid = $1",
+    )
+    .bind(marked)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(
+        cascade_recorded, 0,
+        "control: in a marked target the triggers stand down and record nothing"
+    );
+    tx.rollback().await.unwrap();
 }
 
 async fn hard_delete(pool: &PgPool, teams: &[Uuid]) {

@@ -4975,6 +4975,26 @@ async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgP
         .execute(&mut *tx)
         .await
         .unwrap();
+    // The setting alone, in a database without the replay-target marker, lowers no guard.
+    {
+        let mut sp = sqlx::Connection::begin(&mut *tx).await.unwrap();
+        let err = writes::set_property_in_tx(
+            &mut sp,
+            resource,
+            "late_note",
+            &serde_json::json!("refused while unmarked"),
+            emitter,
+            EventContext::default(),
+        )
+        .await
+        .expect_err("unmarked, the setting alone does not lower the write guard");
+        assert!(
+            format!("{err:#}").contains("is erased; writes are refused"),
+            "{err:#}"
+        );
+        sp.rollback().await.unwrap();
+    }
+    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
     writes::set_property_in_tx(
         &mut tx,
         resource,
@@ -5262,6 +5282,7 @@ async fn the_facet_regrain_cannot_reinflate_an_erased_resource(pool: sqlx::PgPoo
         .execute(&mut *tx)
         .await
         .unwrap();
+    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
     sqlx::query("SELECT * FROM _facet_regrain_from_events($1)")
         .bind(r.uuid())
         .execute(&mut *tx)
