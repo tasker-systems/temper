@@ -27,7 +27,7 @@ use uuid::Uuid;
 use temper_substrate::events::EventContext;
 use temper_substrate::ids::EdgeId;
 
-use edge_erasure::{asserting_event, edge, resource, tombstone, world, World};
+use edge_erasure::{asserting_event, edge, fold, resource, tombstone, world, World};
 
 const LABEL: &str = "jane roe told us";
 const SENTINEL: &str = "erased-label-1";
@@ -515,14 +515,16 @@ async fn the_same_rewrite_commits_once_the_owner_is_tombstoned(pool: PgPool) {
 
 /// An `edge` row inserted by hand, in a transaction that appends no record, under an `edge_erased`
 /// record a replaying transaction committed for a live owner. Only the kb_event_field_redactions
-/// trigger sees it, since no event is inserted. The twin tombstones the owner in the same
-/// transaction and commits.
+/// trigger sees it, since no event is inserted. The record's edge is folded first, so the twin,
+/// which tombstones the owner in the same transaction, meets every other conjunct of the
+/// commit-time check and commits.
 ///
 /// FAILS IF `trg_edge_redaction_requires_an_erased_owner` is missing or does not read the row's
 /// record: the row commits under a record whose owner is live.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn an_edge_row_under_a_record_naming_a_live_owner_fails_at_commit(pool: PgPool) {
     let x = edges(&pool).await;
+    fold(&pool, &x.w, x.e).await;
     let payload = json!({
         "subject_table": "kb_edges",
         "subject_id": x.e.uuid(),
@@ -569,4 +571,113 @@ async fn an_edge_row_under_a_record_naming_a_live_owner_fails_at_commit(pool: Pg
     };
     owner_not_erased("the hand-inserted row", x.w.profile, row(false).await);
     admitted("the twin with the owner tombstoned", row(true).await);
+}
+
+/// The commit-time check's message for a record whose edge is not folded, or not homed in the estate
+/// it names.
+fn not_an_estate_edge(what: &str, e: EdgeId, owner: Uuid, err: Option<String>) {
+    let err = err.unwrap_or_else(|| panic!("{what} was admitted"));
+    assert!(
+        err.contains(&format!(
+            "edge erasure: edge {} is not a folded edge homed in the estate of {owner}",
+            e.uuid()
+        )),
+        "{what}: refused at commit for its edge; got {err}"
+    );
+}
+
+/// A forged `edge_erased` record alone, with no redaction row and no rewrite, its `estate_of` an
+/// owner already tombstoned. Committed, it would refuse every later write to the edge it names
+/// (`_edge_is_erased`), over text no act redacted. At commit its edge must be folded and homed in
+/// that estate: the twin naming a folded edge of the estate commits; a record naming the estate's
+/// live edge, and one naming a folded edge homed in another person's estate, are each refused, and
+/// neither edge is then erased.
+///
+/// FAILS IF the commit-time check reads only the owner's tombstone: either forge commits. Each
+/// refusal isolates one conjunct: the live edge is homed in the estate, and the other estate's edge
+/// is folded.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_forged_record_for_a_tombstoned_owner_needs_a_folded_edge_of_its_estate(pool: PgPool) {
+    let w = world(&pool).await;
+    let stranger = world(&pool).await;
+    let a = resource(&pool, &w, "alpha").await;
+    let b = resource(&pool, &w, "beta").await;
+    let c = resource(&pool, &w, "gamma").await;
+    let folded = edge(&pool, &w, a, b, LABEL, EventContext::default()).await;
+    let live = edge(
+        &pool,
+        &w,
+        b,
+        c,
+        "another free label",
+        EventContext::default(),
+    )
+    .await;
+    let d = resource(&pool, &stranger, "delta").await;
+    let f = resource(&pool, &stranger, "epsilon").await;
+    let elsewhere = edge(
+        &pool,
+        &stranger,
+        d,
+        f,
+        "a stranger's label",
+        EventContext::default(),
+    )
+    .await;
+    fold(&pool, &w, folded).await;
+    fold(&pool, &stranger, elsewhere).await;
+    let mut conn = pool.acquire().await.unwrap();
+    tombstone(&mut conn, w.profile)
+        .await
+        .expect("the owner is tombstoned before the forge");
+    drop(conn);
+
+    let record = |subject: EdgeId| {
+        let pool = pool.clone();
+        let emitter = w.emitter;
+        let owner = w.profile;
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("SELECT _event_append('edge_erased', $1, NULL, NULL, $2)")
+                .bind(emitter)
+                .bind(json!({
+                    "subject_table": "kb_edges",
+                    "subject_id": subject.uuid(),
+                    "estate_of": owner,
+                    "folded": false,
+                    "redacted_fields": [],
+                }))
+                .execute(&mut *tx)
+                .await
+                .expect("the record's append lands");
+            tx.commit().await.err().map(|e| e.to_string())
+        }
+    };
+    not_an_estate_edge(
+        "a record naming the estate's live edge",
+        live,
+        w.profile,
+        record(live).await,
+    );
+    not_an_estate_edge(
+        "a record naming a folded edge of another estate",
+        elsewhere,
+        w.profile,
+        record(elsewhere).await,
+    );
+    admitted(
+        "the twin naming a folded edge of the estate",
+        record(folded).await,
+    );
+    for (e, what) in [
+        (live, "the live edge"),
+        (elsewhere, "the other estate's edge"),
+    ] {
+        let erased: bool = sqlx::query_scalar("SELECT _edge_is_erased($1)")
+            .bind(e.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(!erased, "{what} is not erased");
+    }
 }
