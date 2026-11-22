@@ -19,7 +19,6 @@ use uuid::Uuid;
 use temper_core::types::erasure::EstateDisposition;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::property_owner::PropertyOwner;
-use temper_services::error::ApiError;
 use temper_services::services::erasure_service::{
     execute_erasure, survey_erasure, ErasureCompletion,
 };
@@ -1239,12 +1238,18 @@ async fn await_waiting<T>(
 /// the edge's home context (ruling 12 of decision 01a1f6e8-81bd-758c-be87-a6824b66352a), so the
 /// reassign commits while the act waits, and the commit check
 /// (`edge_erasure_requires_an_erased_owner`) refuses the record, whose edge is no longer homed in
-/// the estate: the act fails as a whole and the service answers 500. Nothing it did persists, and
-/// the act run again completes, leaving the reassigned context's edge live.
+/// the estate: the act fails as a whole with `23514` under that constraint's name. Nothing it did
+/// persists, and the act run again completes, leaving the reassigned context's edge live.
+///
+/// The act is called by SQL, as `write_lock_bound_test`'s person-act pin calls it, so the
+/// refusal is read as the database raised it rather than as the service's generic 500. The
+/// reassign's transaction carries `lock_timeout = 2s`, so a lock on the edge's home context held
+/// by the act fails it within the bound instead of waiting out the test's run.
 ///
 /// FAILS IF the reassign waits on the act (a lock on the edge's home context taken before the
 /// act's context lock), or if the act commits a record for an edge homed outside the estate, or
-/// if any of the failed act's writes persist, or if the re-run does not complete.
+/// fails another way, or if any of the failed act's writes persist, or if the re-run does not
+/// complete.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_reassign_during_the_act_fails_it_and_a_rerun_completes(pool: PgPool) {
     let w = world(&pool).await;
@@ -1271,7 +1276,7 @@ async fn a_reassign_during_the_act_fails_it_and_a_rerun_completes(pool: PgPool) 
         authored(REASONING),
     )
     .await;
-    let admin = operator(&pool).await;
+    let op = world(&pool).await;
     let quoted = ledger_quoting(&pool, LABEL).await;
     assert!(
         quoted > 0,
@@ -1289,17 +1294,20 @@ async fn a_reassign_during_the_act_fails_it_and_a_rerun_completes(pool: PgPool) 
         .await
         .unwrap();
     let pool2 = pool.clone();
-    let subject = w.profile;
+    let (subject, operator_profile, operator_emitter) = (w.profile, op.profile, op.emitter);
     let act = tokio::spawn(async move {
-        execute_erasure(
-            &pool2,
-            &admin,
-            ProfileId::from(subject),
-            Uuid::now_v7(),
-            Surface::ApiHttp,
-            &Default::default(),
-        )
-        .await
+        let mut tx = pool2.begin().await.expect("begin");
+        let out = sqlx::query("SELECT principal_erasure_execute($1, $2, $3, $4)")
+            .bind(subject)
+            .bind(operator_profile)
+            .bind(operator_emitter)
+            .bind(Uuid::now_v7())
+            .execute(&mut *tx)
+            .await;
+        match out {
+            Ok(_) => tx.commit().await,
+            Err(e) => Err(e),
+        }
     });
     await_waiting(
         &pool,
@@ -1310,6 +1318,11 @@ async fn a_reassign_during_the_act_fails_it_and_a_rerun_completes(pool: PgPool) 
     )
     .await;
 
+    let mut reassign = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL lock_timeout = '2s'")
+        .execute(&mut *reassign)
+        .await
+        .unwrap();
     sqlx::query_scalar::<_, Uuid>("SELECT context_reassign($1, $2)")
         .bind(json!({
             "context_id": high,
@@ -1317,7 +1330,11 @@ async fn a_reassign_during_the_act_fails_it_and_a_rerun_completes(pool: PgPool) 
             "to_owner_id": target,
         }))
         .bind(w.emitter)
-        .fetch_one(&pool)
+        .fetch_one(&mut *reassign)
+        .await
+        .expect("the reassign takes no lock the act holds");
+    reassign
+        .commit()
         .await
         .expect("the reassign commits while the act waits at its context lock");
     assert!(
@@ -1330,9 +1347,18 @@ async fn a_reassign_during_the_act_fails_it_and_a_rerun_completes(pool: PgPool) 
         .await
         .unwrap()
         .expect_err("the commit check refuses a record whose edge left the estate");
-    assert!(
-        matches!(err, ApiError::Internal(ref m) if m == "principal erasure act failed"),
-        "the service answers the incumbent 500: {err:?}"
+    let db = err
+        .as_database_error()
+        .unwrap_or_else(|| panic!("the act fails in the database: {err:?}"));
+    assert_eq!(
+        db.code().as_deref(),
+        Some("23514"),
+        "the commit check raises check_violation: {err:?}"
+    );
+    assert_eq!(
+        db.constraint(),
+        Some("edge_erasure_requires_an_erased_owner"),
+        "the owner check refuses the act: {err:?}"
     );
 
     assert!(
