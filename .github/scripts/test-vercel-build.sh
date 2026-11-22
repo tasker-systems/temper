@@ -146,6 +146,18 @@ if [ "$rc" -eq 4 ] \
   ok "a divergence (exit 4) is not reported as a failed apply, and omits the ledger query"
 else bad "a divergence (exit 4) is not reported as a failed apply, and omits the ledger query" "exit=$rc" "$out"; fi
 
+# ── 6c. An UNSAFE REPLAY POSTURE (exit 5) is not reported as a failed apply ─────────────────────
+# The schema applied and the database carries a replay-target marker or a temper.replaying
+# default; the ledger query would return nothing for it, so it must not be printed.
+reset_saw
+out="$(run_build DATABASE_URL=postgres://x STUB_RC=5)"; rc=$?
+if [ "$rc" -eq 5 ] \
+   && printf '%s' "$out" | grep -q 'marked as a replay target' \
+   && ! printf '%s' "$out" | grep -q "state <> 'success'" \
+   && ! printf '%s' "$out" | grep -q 'shape-breaking migration is pending'; then
+  ok "an unsafe replay posture (exit 5) is not reported as a failed apply, and omits the ledger query"
+else bad "an unsafe replay posture (exit 5) is not reported as a failed apply, and omits the ledger query" "exit=$rc" "$out"; fi
+
 # ── 7. The static-build phase gets a NON-EMPTY output directory ─────────────────────────────────
 # Setting a buildCommand at all makes Vercel run a static-build phase that demands an output
 # directory, even on a project whose only outputs are api/*.rs. Two real builds established the
