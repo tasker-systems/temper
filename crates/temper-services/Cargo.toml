@@ -41,7 +41,7 @@ serde = { version = "1", features = ["derive"] }
 # plain notation, and the parse must land on the float it was committed as, so it is served as
 # committed (`transport::ARTIFACT_ASK_PAGE_BYTES`).
 serde_json = { version = "1", features = ["float_roundtrip"] }
-jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "12", features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 # The blob provider client's streaming read (D6) bridges reqwest's byte stream to the
 # substrate seam's `ByteStream`; `bytes` is the chunk type both sides speak. Already in
