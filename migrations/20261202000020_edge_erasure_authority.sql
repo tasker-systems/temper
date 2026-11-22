@@ -15,7 +15,8 @@
 --   2. _edge_erasure_trail_scope(uuid) is an edge's own events, domain only, and
 --      _edge_erasure_payload_redaction(uuid) the shared loop over it.
 --   3. edge_erased, admin and NULL-anchored, and the redaction authority `edge`; the predicates
---      _edge_is_erased(uuid) (a record names the edge) and _edge_homed_in_estate(uuid, uuid).
+--      _edge_is_erased(uuid) (a record names the edge, read through the partial index
+--      idx_kb_events_edge_erased_subject) and _edge_homed_in_estate(uuid, uuid).
 --   4. _project_edge_erased_redactions projects its rows through _project_field_redactions.
 --   5. The guard: an `edge` row admits a rewrite when its record's edge is folded and homed in a
 --      context of _erasure_estate_contexts(estate_of) (_edge_homed_in_estate), the event is on
@@ -36,8 +37,9 @@
 --
 -- From Section 3's ALTER on, the migration runs under SET LOCAL lock_timeout = '500ms', the bound
 -- and the reasons of 20261201000010_erasure_records_schema.sql: the ALTER takes ACCESS EXCLUSIVE
--- on kb_event_field_redactions and validates every row, and unbounded it would queue every reader
--- and writer of that table behind the longest open transaction. When the bound fires the migration
+-- on kb_event_field_redactions and validates every row, and the CREATE INDEX takes SHARE on
+-- kb_events, which every append needs; unbounded, either would queue that table's writers (and
+-- the ALTER its readers) behind the longest open transaction. When the bound fires the migration
 -- rolls back, the serving deployment keeps its schema, and the next deploy retries.
 
 -- ---------------------------------------------------------------------------
@@ -518,6 +520,9 @@ $JS$::jsonb, 1, 'admin');
 
 SET LOCAL lock_timeout = '500ms';
 
+-- One validating ADD under the lock: the DROP takes ACCESS EXCLUSIVE, held to the migration's
+-- commit, so a NOT VALID / VALIDATE split buys nothing inside one transaction (the reason
+-- 20261127000010_block_content_hash_follows_redaction.sql gives for its CHECK).
 ALTER TABLE kb_event_field_redactions
     DROP CONSTRAINT kb_event_field_redactions_authority_check,
     ADD CONSTRAINT kb_event_field_redactions_authority_check
@@ -535,10 +540,30 @@ lean on it for another authority. A row mislabelled `erasure` would occupy the k
 resource_erasure_service reads as a concurrent completion and retries, colliding again every
 time.$c$;
 
+-- _edge_is_erased's probe: the edge_erased records by subject. The predicate is the record's own
+-- (admin category, subject_table kb_edges) and keys on the payload's subject_id, the key the
+-- commit check, the verifier and place_closure read, so the probe and they never name different
+-- edges. The GIN index on "references" would serve a `@>` on the record's subject reference, a
+-- second key a record could carry apart from its payload. No other admin kind writes kb_edges as
+-- its subject_table, so the index holds edge_erased rows, and the probe's type join keeps the
+-- answer exact whatever else an appender writes there. Built in the migration's
+-- transaction, not CONCURRENTLY: no migration in this repo uses sqlx's no-transaction escape
+-- (20261117000000_context_change_feed_doors.sql, whose admin index is built the same way), so the
+-- build holds SHARE on kb_events, which queues appends, not reads, for one scan of the table.
+CREATE INDEX idx_kb_events_edge_erased_subject
+    ON kb_events ((payload ->> 'subject_id'))
+    WHERE category = 'admin' AND payload ->> 'subject_table' = 'kb_edges';
+
+COMMENT ON INDEX idx_kb_events_edge_erased_subject IS
+$c$The edge_erased records by payload subject_id: the admin rows whose subject_table is kb_edges.
+Serves _edge_is_erased, whose WHERE repeats the predicate.$c$;
+
 -- The two subject predicates of an edge erasure, each spelled once. _edge_is_erased answers for
 -- an edge's writers and the sweep (20261202000030): whether an erasure record exists. The
 -- verifier, place_closure and the unit instead check the subject of a record being written or
 -- read, folded and homed in the estate it names, and share _edge_homed_in_estate for the home.
+-- The category and subject_table conjuncts are idx_kb_events_edge_erased_subject's predicate,
+-- spelled as it is so the planner proves the partial index applies.
 CREATE FUNCTION _edge_is_erased(p_edge uuid)
 RETURNS boolean
 LANGUAGE sql STABLE
@@ -548,19 +573,21 @@ AS $$
         SELECT 1
           FROM kb_events ev
           JOIN kb_event_types et ON et.id = ev.event_type_id
-         WHERE et.name = 'edge_erased'
+         WHERE ev.category = 'admin'
            AND ev.payload ->> 'subject_table' = 'kb_edges'
-           AND ev.payload ->> 'subject_id' = p_edge::text);
+           AND ev.payload ->> 'subject_id' = p_edge::text
+           AND et.name = 'edge_erased');
 $$;
 
 COMMENT ON FUNCTION _edge_is_erased(uuid) IS
 $c$Whether an edge is erased: some edge_erased record names it, payload subject_table 'kb_edges'
-and subject_id the edge's id as text. Never NULL. It does not also require kb_edges.is_folded:
-edge_erasure_execute appends its record only after the edge is folded, in the same transaction,
-and no write path unfolds an edge, so a record implies a folded edge, and a second conjunct would
-change no answer for any record the unit writes. The one predicate of the edge's writers (_resource_write_guard_owner's kb_edges
-arm, _project_relationship_folded) and of the sweep's erased_place_findings edge arms, so they
-agree on which edges are erased.$c$;
+and subject_id the edge's id as text. Never NULL. Read through idx_kb_events_edge_erased_subject.
+It does not also require kb_edges.is_folded: a record commits only for a folded edge
+(edge_erasure_requires_an_erased_owner) and no write path unfolds one, so a record implies a folded
+edge. Its callers use that: the edge's writers (_resource_write_guard_owner's kb_edges arm,
+_project_relationship_folded) read is_folded under their row lock and ask only for a folded edge,
+so a write of a live edge never reads the ledger. The one predicate of those writers and of the
+sweep's erased_place_findings edge arms, so they agree on which edges are erased.$c$;
 
 CREATE FUNCTION _edge_homed_in_estate(p_edge uuid, p_profile uuid)
 RETURNS boolean
@@ -1297,8 +1324,12 @@ SELECT declare_migration(
     '_edge_is_erased(uuid), _edge_homed_in_estate(uuid, uuid) and '
     '_project_edge_erased_redactions(uuid, jsonb), and the admin event type edge_erased with its '
     'payload_schema. Widens kb_event_field_redactions_authority_check to admit ''edge'' (every '
-    'existing row still passes), under SET LOCAL lock_timeout = 500ms: if its lock is not granted in '
-    'time, the migration rolls back and the serving deployment is untouched. CREATE OR REPLACE, each with its signature, defaults, return type '
+    'existing row still passes), and adds the partial index idx_kb_events_edge_erased_subject on '
+    'kb_events ((payload ->> ''subject_id'')) WHERE category = ''admin'' AND payload ->> '
+    '''subject_table'' = ''kb_edges'', which no existing row matches, built in the transaction '
+    '(SHARE on kb_events for one scan), both under SET LOCAL lock_timeout = 500ms: if a lock is '
+    'not granted in time, the migration rolls back and the serving deployment is untouched. '
+    'CREATE OR REPLACE, each with its signature, defaults, return type '
     'and search_path unchanged: _resource_erasure_payload_redaction (the shared loop over the same '
     'trail with the same numbering, so its rows are unchanged), _resource_erasure_label_numbers '
     '(numbers only the labels no erasure or edge redaction row names, after the highest sentinel '

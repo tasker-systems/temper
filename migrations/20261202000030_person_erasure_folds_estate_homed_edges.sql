@@ -21,6 +21,13 @@
 --      an erased edge (_edge_is_erased), so their digests expire.
 --   5. _project_relationship_folded(uuid, jsonb): takes FOR KEY SHARE on the edge row and refuses
 --      a fold of an erased edge (_edge_is_erased).
+--   6. idx_kb_properties_edge_owner: the kb_edges-owned property rows by owner, live and folded,
+--      for the readers of an edge's folded rows (the body, _edge_projection_erased in
+--      20261202000040, the unit's already-erased test). kb_properties' owner index is partial on
+--      NOT is_folded.
+--
+-- Sections 3 to 5 pin search_path = public, pg_temp; each is plpgsql or, for
+-- erased_place_findings, read whole by its one caller, so no caller loses an inlined body.
 --
 -- A later edit must not break:
 --   * derive before fold: _edge_erasure_payload_redaction runs before the fold event exists and
@@ -242,8 +249,11 @@ Returns {event_id, folded, redacted_fields}.$c$;
 -- 20260929040730's body; only the kb_edges arm changes. After guarding the edge's resource
 -- endpoints it takes FOR KEY SHARE on the kb_edges row, which conflicts with the unit's FOR UPDATE:
 -- a property, facet or relationship writer of the edge commits before the unit derives its trail,
--- or waits for the act to commit. A writer that waited then reads, in a later statement and so a
--- later snapshot, the edge's edge_erased record (_edge_is_erased), and is refused. The endpoints
+-- or waits for the act to commit. The lock returns the row's is_folded, and a wait returns the
+-- version the act committed (the READ COMMITTED re-check), so a writer that waited reads the fold.
+-- Only a folded edge can be erased (a record commits only for one), so only then does the writer
+-- read, in a later statement and so a later snapshot, the edge's edge_erased record
+-- (_edge_is_erased), and is refused; a write of a live edge never reads the ledger. The endpoints
 -- are locked before the edge because the resource act takes its resource FOR UPDATE before the
 -- edges it folds: the reverse order would deadlock a writer against that act.
 --
@@ -255,9 +265,12 @@ Returns {event_id, folded, redacted_fields}.$c$;
 -- race (temper-services backend::write_floor), so its request fails once, and when sent again it
 -- succeeds or, the edge erased, is refused.
 CREATE OR REPLACE FUNCTION _resource_write_guard_owner(p_table text, p_id uuid)
-RETURNS void LANGUAGE plpgsql AS $$
+RETURNS void LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
 DECLARE
     v_resource uuid;
+    v_folded   boolean;
 BEGIN
     -- The owner tables kb_properties admits (kb_properties_owner_table_check) and the edge
     -- endpoint tables (kb_edges_{source,target}_table_check). kb_cogmaps and kb_blobs write
@@ -278,8 +291,8 @@ BEGIN
         -- Replay projects a lawful write whose event sorts after the edge's edge_erased record,
         -- as _resource_write_guard lets one through after a resource_erased.
         IF current_setting('temper.replaying', true) IS DISTINCT FROM 'on' THEN
-            PERFORM 1 FROM kb_edges e WHERE e.id = p_id FOR KEY SHARE;
-            IF _edge_is_erased(p_id) THEN
+            SELECT e.is_folded INTO v_folded FROM kb_edges e WHERE e.id = p_id FOR KEY SHARE;
+            IF v_folded AND _edge_is_erased(p_id) THEN
                 RAISE EXCEPTION 'edge % is erased; writes are refused', p_id;
             END IF;
         END IF;
@@ -295,8 +308,9 @@ COMMENT ON FUNCTION _resource_write_guard_owner(text, uuid) IS
 writes into and guards each — kb_resources itself; kb_edges each endpoint whose table is
 kb_resources; kb_content_blocks the block''s resource_id; kb_cogmaps (and a kb_blobs endpoint)
 nothing. For kb_edges it then takes FOR KEY SHARE on the edge row, which waits out
-edge_erasure_execute''s FOR UPDATE, and RAISEs ''edge % is erased; writes are refused'' when
-_edge_is_erased answers true for the edge. Neither the edge lock nor that refusal runs while
+edge_erasure_execute''s FOR UPDATE, and RAISEs ''edge % is erased; writes are refused'' when the
+row it locked is folded and _edge_is_erased answers true for the edge; a live edge is never looked
+up on the ledger. Neither the edge lock nor that refusal runs while
 temper.replaying is ''on''. A writer of two edges in descending id order can deadlock against an
 act that locks them ascending; the writer has no retry, so that request fails once with a 500.';
 
@@ -308,7 +322,9 @@ act that locks them ascending; the writer has no retry, so that request fails on
 -- edge's endpoints are not erased resources, so the label and property arms that key on an erased
 -- endpoint never hold it.
 CREATE OR REPLACE FUNCTION sensitivity.erased_place_findings() RETURNS TABLE (finding_id uuid)
-LANGUAGE sql STABLE AS $$
+LANGUAGE sql STABLE
+SET search_path = public, pg_temp
+AS $$
     WITH f AS (
         SELECT f.* FROM sensitivity.findings f
          WHERE f.fingerprint_state <> 'expired'
@@ -388,19 +404,36 @@ sensitivity.expire_erased_fingerprints reads it to start each finding''s window.
 -- block history scrub fold only live edges, which no record names; _erasure_member_flag calls
 -- _edge_fold_apply directly; replay runs with temper.replaying on, which skips both. The lock and
 -- the check are two statements, so a fold that waited reads the record in a later snapshot.
+--
+-- 20260929040730 leaves this projector unguarded on purpose: a fold writes no content, and the act
+-- itself folds. An erased edge is the exception to the first half. relationship_folded carries a
+-- caller-written reason and names the edge by edge_id, so it lands on the edge's own trail
+-- (_edge_erasure_trail_scope) after the act rewrote that trail: fresh text on the trail of an edge
+-- whose erasure is recorded as done. The second half still holds: the unit folds before its record
+-- exists, so its own fold is never refused.
+--
+-- One read of the edge row: outside replay it is the locking read, whose is_folded decides
+-- whether the record is looked for (a live edge is never erased, as in
+-- _resource_write_guard_owner); under replay a plain read, for the existence check alone.
 CREATE OR REPLACE FUNCTION _project_relationship_folded(p_event uuid, p_payload jsonb)
-RETURNS uuid LANGUAGE plpgsql AS $$
-DECLARE v_edge uuid := (p_payload->>'edge_id')::uuid;
+RETURNS uuid LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_edge   uuid := (p_payload->>'edge_id')::uuid;
+    v_folded boolean;
 BEGIN
-    PERFORM 1 FROM kb_edges WHERE id = v_edge;
+    IF current_setting('temper.replaying', true) IS DISTINCT FROM 'on' THEN
+        SELECT e.is_folded INTO v_folded FROM kb_edges e WHERE e.id = v_edge FOR KEY SHARE;
+    ELSE
+        SELECT e.is_folded INTO v_folded FROM kb_edges e WHERE e.id = v_edge;
+    END IF;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'relationship_fold: edge % not found', v_edge;
     END IF;
-    IF current_setting('temper.replaying', true) IS DISTINCT FROM 'on' THEN
-        PERFORM 1 FROM kb_edges WHERE id = v_edge FOR KEY SHARE;
-        IF _edge_is_erased(v_edge) THEN
-            RAISE EXCEPTION 'edge % is erased; writes are refused', v_edge;
-        END IF;
+    IF current_setting('temper.replaying', true) IS DISTINCT FROM 'on'
+       AND v_folded AND _edge_is_erased(v_edge) THEN
+        RAISE EXCEPTION 'edge % is erased; writes are refused', v_edge;
     END IF;
     PERFORM _edge_fold_apply(p_event, v_edge);
     RETURN v_edge;
@@ -408,11 +441,34 @@ END;
 $$;
 
 COMMENT ON FUNCTION _project_relationship_folded(uuid, jsonb) IS
-$c$The relationship_folded projection: raises when the edge is missing; outside replay
-(temper.replaying not 'on') takes FOR KEY SHARE on the edge row, which waits out
-edge_erasure_execute's FOR UPDATE, and raises 'edge % is erased; writes are refused' when
-_edge_is_erased answers true for the edge; then folds it through _edge_fold_apply.$c$;
+$c$The relationship_folded projection: reads the edge row once, raising when it is missing; outside
+replay (temper.replaying not 'on') that read takes FOR KEY SHARE, which waits out
+edge_erasure_execute's FOR UPDATE, and raises 'edge % is erased; writes are refused' when the row
+is folded and _edge_is_erased answers true for the edge (a live edge is never looked up on the
+ledger); then folds it through _edge_fold_apply. Guarded, unlike the fold 20260929040730 leaves
+unguarded, because a fold's reason is text on the erased edge's own trail.$c$;
 
+-- ---------------------------------------------------------------------------
+-- Section 6. The folded rows an edge owns, by owner.
+-- ---------------------------------------------------------------------------
+-- idx_kb_properties_owner is WHERE NOT is_folded, so a read of an edge's folded rows by owner
+-- scanned kb_properties. Keyed on owner_id alone under the owner_table predicate, which each
+-- reader spells. Built in the migration's transaction, not CONCURRENTLY: no migration in this
+-- repo uses sqlx's no-transaction escape (20261117000000_context_change_feed_doors.sql). The build
+-- holds SHARE on kb_properties, which queues its writers, not its readers, for one scan, under SET
+-- LOCAL lock_timeout = '500ms', the bound and the reasons of
+-- 20261201000010_erasure_records_schema.sql: when it fires the migration rolls back, the serving
+-- deployment keeps its schema, and the next deploy retries.
+SET LOCAL lock_timeout = '500ms';
+
+CREATE INDEX idx_kb_properties_edge_owner
+    ON kb_properties (owner_id)
+    WHERE owner_table = 'kb_edges';
+
+COMMENT ON INDEX idx_kb_properties_edge_owner IS
+$c$Every kb_properties row an edge owns, live and folded, by owner_id. Serves the readers of an
+edge's folded rows: _edge_erasure_apply_redaction, _edge_projection_erased and
+edge_erasure_execute's already-erased test.$c$;
 
 SELECT declare_migration(
     20261202000030,
@@ -429,6 +485,11 @@ SELECT declare_migration(
     'record exists '
     'before edge_erasure_execute runs, so every existing answer is unchanged, and the added '
     'KEY SHARE conflicts only with a FOR UPDATE, a DELETE or an id change of the edge row (its one '
-    'non-partial unique key is the primary key). No table, column, '
+    'non-partial unique key is the primary key). The three replaced functions now pin '
+    'search_path = public, pg_temp, and every name they read is in public or schema-qualified. '
+    'Adds the partial index idx_kb_properties_edge_owner on kb_properties (owner_id) WHERE '
+    'owner_table = ''kb_edges'', built in the transaction (SHARE on kb_properties for one scan) '
+    'under SET LOCAL lock_timeout = 500ms: if its lock is not granted in time, the migration rolls '
+    'back and the serving deployment is untouched. No table, column, '
     'constraint, event type or grant changes.'
 );
