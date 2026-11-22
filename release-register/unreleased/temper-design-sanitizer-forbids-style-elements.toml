@@ -1,0 +1,13 @@
+title    = "The shared markdown sanitizer forbids <style> elements, HTML and SVG, matching the attribute rule"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+`@tasker-systems/temper-design/sanitize` already forbade the `style` attribute in a rendered body;
+it now forbids the `<style>` element as well, at the top level and inside an `<svg>`, and drops its
+contents with it. The pipeline's own output never contains one, so legitimate output is
+unchanged. Who observes: a consumer rendering a body that carried a `<style>` element, which now
+renders without it. User-visible: only for such a body. Release relevance: behavioral, hardening —
+reaches published consumers with the next tagged release; no shape changes.
+'''

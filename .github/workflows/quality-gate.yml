@@ -320,6 +320,11 @@ jobs:
       - name: Guard test — sqlx-test-template
         run: bash .github/scripts/test-sqlx-test-template.sh
 
+      # Not a guard but the roadmap snapshot tool's own witnesses: pure bash and jq over a fixture,
+      # with a fake temper, so it belongs in this cheap, ungated job.
+      - name: Roadmap snapshot witnesses — tools/roadmap
+        run: bash tools/roadmap/test.sh
+
       # THE GATE ITSELF as well as its harness: pure bash, so it belongs in this cheap, unscoped job.
       # Every published wire type (a ToSchema/IntoParams derive) lives in temper-core, the crate a
       # client builds against (ruling 2026-10-04).

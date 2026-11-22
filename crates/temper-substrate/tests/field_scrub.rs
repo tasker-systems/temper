@@ -446,12 +446,13 @@ async fn property_events(
     resource: ResourceId,
     key: &str,
 ) -> Vec<Uuid> {
-    sqlx::query_scalar(
+    sqlx::query_scalar(&format!(
         "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-          WHERE t.name = $1 AND e.payload#>>'{owner,table}' = 'kb_resources' \
-            AND e.payload#>>'{owner,id}' = $2 AND e.payload->>'property_key' = $3 \
-          ORDER BY e.id",
-    )
+          WHERE t.name = $1 AND e.payload#>>'{{owner,table}}' = 'kb_resources' \
+            AND e.payload#>>'{{owner,id}}' = $2 AND e.payload->>'property_key' = $3 \
+          ORDER BY {}",
+        replay::WALK_ORDER
+    ))
     .bind(event_type)
     .bind(resource.uuid().to_string())
     .bind(key)
@@ -462,10 +463,11 @@ async fn property_events(
 
 /// R's `event_type` events keyed by `resource_id`, in walk order.
 async fn resource_events(pool: &PgPool, event_type: &str, resource: ResourceId) -> Vec<Uuid> {
-    sqlx::query_scalar(
+    sqlx::query_scalar(&format!(
         "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-          WHERE t.name = $1 AND e.payload->>'resource_id' = $2 ORDER BY e.id",
-    )
+          WHERE t.name = $1 AND e.payload->>'resource_id' = $2 ORDER BY {}",
+        replay::WALK_ORDER
+    ))
     .bind(event_type)
     .bind(resource.uuid().to_string())
     .fetch_all(pool)
@@ -1099,11 +1101,12 @@ async fn rows_of(pool: &PgPool, event: Uuid) -> Vec<(String, serde_json::Value, 
 
 /// R's resource-owned `event_type` events of any key, in walk order.
 async fn owned_events(pool: &PgPool, event_type: &str, resource: ResourceId) -> Vec<Uuid> {
-    sqlx::query_scalar(
+    sqlx::query_scalar(&format!(
         "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-          WHERE t.name = $1 AND e.payload#>>'{owner,table}' = 'kb_resources' \
-            AND e.payload#>>'{owner,id}' = $2 ORDER BY e.id",
-    )
+          WHERE t.name = $1 AND e.payload#>>'{{owner,table}}' = 'kb_resources' \
+            AND e.payload#>>'{{owner,id}}' = $2 ORDER BY {}",
+        replay::WALK_ORDER
+    ))
     .bind(event_type)
     .bind(resource.uuid().to_string())
     .fetch_all(pool)
@@ -1923,9 +1926,10 @@ async fn an_edge_owned_event_with_the_same_key_text_is_not_in_the_family(pool: P
 }
 
 /// Spec witness 7, the title guard (S3): a title-carrying event inserted, in one transaction, with
-/// an explicit id lower than the last one's and projected, so the walk's last title is not the
-/// projection's. Keep mode refuses with `projection disagrees`; the same request just before the
-/// inversion is admitted by the plan.
+/// an explicit `seq` (and id) below the last one's and projected, as an append that drew its `seq`
+/// before another's and projected after it can land (the walk order's residual, `replay::replay`).
+/// So the walk's last title is not the projection's. Keep mode refuses with `projection
+/// disagrees`; the same request just before the inversion is admitted by the plan.
 ///
 /// FAILS IF: the act redacts under an inverted order instead of refusing.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -1948,8 +1952,9 @@ async fn keep_mode_refuses_when_the_last_title_disagrees_with_the_projection(poo
     assert!(before["refusal"].is_null(), "{before}");
     sqlx::query(
         "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, producing_anchor_table, \
-                                producing_anchor_id, payload, category) \
-         SELECT $1, et.id, $2, h.anchor_table, h.anchor_id, $3, 'domain' \
+                                producing_anchor_id, payload, category, seq) \
+         SELECT $1, et.id, $2, h.anchor_table, h.anchor_id, $3, 'domain', \
+                (SELECT l.seq - 1 FROM kb_events l WHERE l.id = $5) \
            FROM kb_event_types et, kb_resource_homes h \
           WHERE et.name = 'resource_updated' AND h.resource_id = $4",
     )
@@ -1957,6 +1962,7 @@ async fn keep_mode_refuses_when_the_last_title_disagrees_with_the_projection(poo
     .bind(emitter)
     .bind(&payload)
     .bind(r.uuid())
+    .bind(last)
     .execute(&mut *tx)
     .await
     .unwrap();
@@ -2353,14 +2359,17 @@ async fn replay_refuses_a_resource_scrubbed_naming_another_table(pool: PgPool) {
 // the verifier witnesses: drop the exact-sentinel check from `kb_events_redaction_in_trail` (its
 // second EXISTS in the scrub loop) and the split, merge and facet forgeries are admitted.
 
-/// A `property_asserted` of `key` on `resource` with the explicit id `id`, projected now: an event
-/// whose id was minted before events that committed ahead of it (an inversion across
-/// transactions, erasure D14). Appended as the write path appends it, with the id chosen.
+/// A `property_asserted` of `key` on `resource` with the explicit id `id`, projected now. With
+/// `seq`, it also takes that append position: an event that drew its `seq` before events whose
+/// projections landed ahead of it (the walk order's residual, `replay::replay`). Without, it takes
+/// the next `seq`, so only its id is out of order. Appended as the write path appends it, with the
+/// id (and the position) chosen.
 async fn assert_at(
     pool: &PgPool,
     emitter: EntityId,
     resource: ResourceId,
     id: Uuid,
+    seq: Option<i64>,
     key: &str,
     value: serde_json::Value,
 ) {
@@ -2374,8 +2383,9 @@ async fn assert_at(
     let mut tx = pool.begin().await.unwrap();
     sqlx::query(
         "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, producing_anchor_table, \
-                                producing_anchor_id, payload, category) \
-         SELECT $1, et.id, $2, a.anchor_table, a.anchor_id, $3, 'domain' \
+                                producing_anchor_id, payload, category, seq) \
+         SELECT $1, et.id, $2, a.anchor_table, a.anchor_id, $3, 'domain', \
+                coalesce($5, nextval('kb_events_seq')) \
            FROM kb_event_types et, _property_owner_anchor('kb_resources', $4) a \
           WHERE et.name = 'property_asserted'",
     )
@@ -2383,6 +2393,7 @@ async fn assert_at(
     .bind(emitter)
     .bind(&payload)
     .bind(resource.uuid())
+    .bind(seq)
     .execute(&mut *tx)
     .await
     .expect("the inverted event appends");
@@ -2393,6 +2404,177 @@ async fn assert_at(
         .await
         .expect("the inverted event projects");
     tx.commit().await.unwrap();
+}
+
+/// The append position `seq` of `event`.
+async fn seq_of(pool: &PgPool, event: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT seq FROM kb_events WHERE id = $1")
+        .bind(event)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// `ids` in replay's walk order.
+async fn walk(pool: &PgPool, ids: &[Uuid]) -> Vec<Uuid> {
+    sqlx::query_scalar(&format!(
+        "SELECT e.id FROM kb_events e WHERE e.id = ANY($1) ORDER BY {}",
+        replay::WALK_ORDER
+    ))
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// A `property_asserted` whose id sorts before the family's unset but which was appended after it
+/// (an id PG17 can mint: `uuid_generate_v7()` has no order within a millisecond). Every position
+/// the scrub compares is the walk's, so the assertion is after the latest unset: its key text is
+/// held `after_latest_unset`, unreachable, and its value `current`, kept for its live row. The set
+/// before the unset is scrubbed, and replay stays identical.
+///
+/// FAILS IF: `_field_scrub_unset_boundary` or the key's prior test compares ids
+/// (20261018100040's bodies). The assertion is then at or before the unset, and its key text is
+/// held `current`, by its live row, instead of `after_latest_unset`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_key_appended_after_the_unset_is_after_it_whatever_its_id(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-walk-key", &[]).await;
+    set(&pool, emitter, r, "secretkey", "one").await;
+    let e1 = property_events(&pool, "property_set", r, "secretkey").await[0];
+    unset(&pool, emitter, r, "secretkey").await;
+    let u = property_events(&pool, "property_unset", r, "secretkey").await[0];
+    let low = Uuid::from_u128(u.as_u128() - 1);
+    assert_at(
+        &pool,
+        emitter,
+        r,
+        low,
+        None,
+        "secretkey",
+        serde_json::json!("live-value"),
+    )
+    .await;
+    assert!(
+        e1 < low && low < u,
+        "setup: the assertion's id sorts between the set and the unset"
+    );
+    assert_eq!(
+        walk(&pool, &[u, low, e1]).await,
+        vec![e1, u, low],
+        "setup: the assertion walks after the unset"
+    );
+
+    let p = plan(&pool, r, "property", Some(e1), false).await;
+    assert_eq!(
+        p["kept"],
+        serde_json::json!([held(low, &["value"], "current")]),
+        "{p}"
+    );
+    assert_eq!(
+        p["unreachable"],
+        serde_json::json!([held(low, &["property_key"], "after_latest_unset")]),
+        "{p}"
+    );
+
+    let out = act(&pool, r, "property", Some(e1), false).await;
+    assert_eq!(
+        pairs(&out["redacted_fields"]),
+        vec![
+            pair(e1, &["property_key", "value"]),
+            pair(u, &["property_key"])
+        ]
+    );
+    assert_eq!(payload_of(&pool, low).await["property_key"], "secretkey");
+
+    assert_replay_byte_identical(
+        &pool,
+        "after scrubbing around a key appended after the unset",
+    )
+    .await;
+}
+
+/// A family unset twice, where the second unset was appended last but has the lower id (an id
+/// PG17 can mint within a millisecond). Between the two, a `property_asserted` whose id sorts after
+/// the first unset; the second unset folds its row. In walk order the latest unset is the second,
+/// so the assertion is before it, has no live row, and its key text is prior: the act redacts its
+/// key and value, and every unset's key. Replay stays identical.
+///
+/// FAILS IF: `_field_scrub_unset_boundary` takes the latest unset by id (it is then the first,
+/// and the assertion is after it), or `_field_scrub_event_is_prior` compares the assertion with
+/// the boundary by id (it then sorts after the second unset). Either way the assertion's key text
+/// is held `after_latest_unset` and only its value is redacted.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_latest_unset_is_the_last_appended_whatever_its_id(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-walk-boundary", &[]).await;
+    set(&pool, emitter, r, "secretkey", "one").await;
+    let e1 = property_events(&pool, "property_set", r, "secretkey").await[0];
+    unset(&pool, emitter, r, "secretkey").await;
+    let u1 = property_events(&pool, "property_unset", r, "secretkey").await[0];
+    let between = Uuid::from_u128(u1.as_u128() + 1000);
+    assert_at(
+        &pool,
+        emitter,
+        r,
+        between,
+        None,
+        "secretkey",
+        serde_json::json!("between"),
+    )
+    .await;
+    // The second unset: u1's payload again, appended now with an id just below u1's.
+    let u2 = Uuid::from_u128(u1.as_u128() - 1);
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, producing_anchor_table, \
+                                producing_anchor_id, payload, category) \
+         SELECT $1, e.event_type_id, e.emitter_entity_id, e.producing_anchor_table, \
+                e.producing_anchor_id, e.payload, e.category \
+           FROM kb_events e WHERE e.id = $2",
+    )
+    .bind(u2)
+    .bind(u1)
+    .execute(&mut *tx)
+    .await
+    .expect("the second unset appends");
+    sqlx::query(
+        "SELECT _project_property_unset($1, (SELECT payload FROM kb_events WHERE id = $1))",
+    )
+    .bind(u2)
+    .execute(&mut *tx)
+    .await
+    .expect("the second unset projects");
+    tx.commit().await.unwrap();
+
+    assert!(
+        e1 < u2 && u2 < u1 && u1 < between,
+        "setup: by id, the set, the second unset, the first unset, the assertion"
+    );
+    assert_eq!(
+        walk(&pool, &[u2, between, u1, e1]).await,
+        vec![e1, u1, between, u2],
+        "setup: in walk order, the set, the first unset, the assertion, the second unset"
+    );
+    let rows = rows_of(&pool, between).await;
+    assert!(
+        !rows.is_empty() && rows.iter().all(|row| row.2),
+        "setup: the second unset folded the assertion's row: {rows:?}"
+    );
+
+    let out = act(&pool, r, "property", Some(e1), false).await;
+    let mut got = pairs(&out["redacted_fields"]);
+    got.sort();
+    let mut want = vec![
+        pair(e1, &["property_key", "value"]),
+        pair(u1, &["property_key"]),
+        pair(between, &["property_key", "value"]),
+        pair(u2, &["property_key"]),
+    ];
+    want.sort();
+    assert_eq!(got, want);
+
+    assert_replay_byte_identical(&pool, "after scrubbing a family unset twice").await;
 }
 
 /// A scrub may not split a family across two key sentinels (S7: the sentinel is
@@ -2627,12 +2809,13 @@ async fn a_key_typed_in_anothers_sentinel_shape_is_renamed_by_its_own_scrub(pool
     assert_replay_byte_identical(&pool, "after scrubbing a planted family, then F").await;
 }
 
-/// Verifier review F2 (S6.3): a `property_asserted` whose id sorts between the set and the unset
-/// but whose projection landed after the unset holds a live row under the real key. Its key text is
-/// not prior: the act holds it as `current`, the verifier refuses a rename of it, and its live row
-/// keeps a key text the family listing still names. Renaming the rest of the family keeps replay
-/// identical: the renamed unset folds only the renamed rows, as live did. (Without the scrub, this
-/// inversion diverges on replay by itself, erasure D14: the real-keyed unset would fold the row.)
+/// Verifier review F2 (S6.3): a `property_asserted` that walks between the set and the unset (its
+/// `seq` and its id sort there) but whose projection landed after the unset holds a live row under
+/// the real key. Its key text is not prior: the act holds it as `current`, the verifier refuses a
+/// rename of it, and its live row keeps a key text the family listing still names. Renaming the
+/// rest of the family keeps replay identical: replay walks the assertion before the unset, and the
+/// renamed unset folds only the renamed rows, so the assertion's row stays live, as it is live.
+/// The position is the walk order's residual (`replay::replay`), built here by hand.
 ///
 /// FAILS IF: key text at or before the unset is prior though its event asserts a live row, so the
 /// act renames it (the live row keeps the real key under an event that no longer names it, and
@@ -2647,13 +2830,15 @@ async fn a_key_whose_event_asserts_a_live_row_is_kept_though_it_sorts_before_the
     let e1 = property_events(&pool, "property_set", r, "secretkey").await[0];
     unset(&pool, emitter, r, "secretkey").await;
     let u = property_events(&pool, "property_unset", r, "secretkey").await[0];
-    // Sorts just before the unset, as an id minted before it in a transaction committed after it.
+    // Walks just before the unset, as an append that drew its `seq` before the unset's and
+    // projected after it; its id sorts there too.
     let inverted = Uuid::from_u128(u.as_u128() - 1);
     assert_at(
         &pool,
         emitter,
         r,
         inverted,
+        Some(seq_of(&pool, u).await - 1),
         "secretkey",
         serde_json::json!("live-value"),
     )
@@ -2661,6 +2846,11 @@ async fn a_key_whose_event_asserts_a_live_row_is_kept_though_it_sorts_before_the
     assert!(
         e1 < inverted && inverted < u,
         "the asserted's id sorts between the set and the unset"
+    );
+    assert_eq!(
+        walk(&pool, &[u, inverted, e1]).await,
+        vec![e1, inverted, u],
+        "setup: the assertion walks between the set and the unset"
     );
 
     append_only(
@@ -2818,4 +3008,97 @@ async fn a_clear_that_landed_answers_already_cleared_and_records_nothing(pool: P
     .await
     .unwrap();
     assert_eq!(records, 3, "one record per clear that landed");
+}
+
+/// `_event_walk_key` (20261201000040) is the SQL spelling of replay's walk position, and
+/// `replay::WALK_ORDER` is the Rust one. Over a ledger built to tell them apart, ordering by the key
+/// is the walk. Two rows from before `seq` was recorded carry ids above every recorded row's, so
+/// they walk first only because they are unrecorded, and in id order between themselves. Three
+/// recorded rows carry `seq` against their id order, and span two transactions: the first holds
+/// the lowest and the highest `seq`, the second the one between, so `xact_id` order is not `seq`
+/// order. The rows go in under `temper.replaying`, which is how a restore writes rows without
+/// `seq`.
+///
+/// FAILS IF: `_event_walk_key` stops ranking an event as the walk does, or `WALK_ORDER` changes
+/// alone (to id order, to `(xact_id, seq)` with or without the unrecorded rows first, or with
+/// unrecorded rows last).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_walk_key_orders_events_as_replay_walks_them(pool: PgPool) {
+    let (_owner, emitter, _home) = setup(&pool).await;
+    let legacy_high = Uuid::from_u128(0xffff_ffff_0000_0000_0000_0000_0000_0002);
+    let legacy_low = Uuid::from_u128(0xffff_ffff_0000_0000_0000_0000_0000_0001);
+    let rec_a = Uuid::from_u128(0x0000_0001_0000_0000_0000_0000_0000_0003);
+    let rec_b = Uuid::from_u128(0x0000_0001_0000_0000_0000_0000_0000_0002);
+    let rec_c = Uuid::from_u128(0x0000_0001_0000_0000_0000_0000_0000_0001);
+    // (id, seq) per transaction: seq ascends as id descends among the recorded rows, and the first
+    // transaction (the lower xact_id) holds seq 1 and 3, the second seq 2.
+    let first: [(Uuid, Option<i64>); 4] = [
+        (legacy_high, None),
+        (legacy_low, None),
+        (rec_a, Some(9_000_000_001)),
+        (rec_c, Some(9_000_000_003)),
+    ];
+    let second: [(Uuid, Option<i64>); 1] = [(rec_b, Some(9_000_000_002))];
+    for rows in [&first[..], &second[..]] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        for &(id, seq) in rows {
+            sqlx::query(
+                "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, payload, \
+                                        correlation_id, category, xact_id, seq) \
+                 SELECT $1, t.id, $2, '{}'::jsonb, $1, t.category, \
+                        CASE WHEN $3::bigint IS NULL THEN NULL ELSE pg_current_xact_id() END, $3 \
+                   FROM kb_event_types t WHERE t.name = 'property_set'",
+            )
+            .bind(id)
+            .bind(emitter)
+            .bind(seq)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+    }
+
+    let ids = vec![legacy_high, legacy_low, rec_a, rec_b, rec_c];
+    let xacts_differ: bool = sqlx::query_scalar(
+        "SELECT (SELECT xact_id FROM kb_events WHERE id = $1) \
+              < (SELECT xact_id FROM kb_events WHERE id = $2)",
+    )
+    .bind(rec_c)
+    .bind(rec_b)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        xacts_differ,
+        "setup: the second transaction's xact_id is above the first's"
+    );
+    let walk: Vec<Uuid> = sqlx::query_scalar(&format!(
+        "SELECT e.id FROM kb_events e WHERE e.id = ANY($1) ORDER BY {}",
+        replay::WALK_ORDER
+    ))
+    .bind(&ids)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let by_key: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e WHERE e.id = ANY($1) ORDER BY _event_walk_key(e.id)",
+    )
+    .bind(&ids)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let expected = vec![legacy_low, legacy_high, rec_a, rec_b, rec_c];
+    assert_eq!(
+        walk, expected,
+        "replay walks unrecorded rows first by id, then by seq"
+    );
+    assert_eq!(
+        by_key, walk,
+        "_event_walk_key orders events as replay walks them"
+    );
 }

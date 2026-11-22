@@ -187,6 +187,13 @@ pub enum TemperError {
     #[error("API error: {0}")]
     Api(String),
 
+    /// The server answered `status` (5xx) after the request reached it. Rendered and coded exactly
+    /// as [`Self::Api`] (`api`); typed so a caller can tell a server-side failure, whose write may
+    /// have landed behind a gateway that timed out, from an unclassified error without reading
+    /// the message.
+    #[error("API error: server error ({status}): {message}")]
+    ServerError { status: u16, message: String },
+
     #[error("network error: {0}")]
     Network(String),
 
@@ -318,7 +325,7 @@ impl TemperError {
             Self::Json(_) => "json",
             Self::Toml(_) => "toml",
             Self::Extraction(_) => "extraction",
-            Self::Api(_) => "api",
+            Self::Api(_) | Self::ServerError { .. } => "api",
             Self::Network(_) => "network",
             Self::NotFound(_) => "not-found",
             Self::Gone(_) => "gone",

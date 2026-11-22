@@ -15,4 +15,4 @@
 # FORMAT
 #   format = <n>   the manifest format; a parser refuses any format it was not written for
 
-format = 1
+format = 2

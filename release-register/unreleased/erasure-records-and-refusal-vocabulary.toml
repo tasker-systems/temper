@@ -1,0 +1,28 @@
+title    = "The erasure record tables and the refusal vocabulary land, and the erasure-policy manifest moves to format 2"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["schema", "erasure-policy"]
+status   = "signal-only"
+body = '''
+New tables carry the erasure record (kb_erasures, kb_erasure_members, kb_erasure_estate_snapshots,
+kb_erasure_former_holders) and the closed refusal vocabulary, kb_erasure_refusal_reasons, seeded with
+four codes: charter_resource, defect, batch_fatal and unclassified. Six admin event kinds are
+registered with their projectors (erasure_declared, erasure_member_arrived, erasure_scope_sealed,
+erasure_reopened, erasure_batch_applied, erasure_completed); nothing appends them yet except the
+backfill below. kb_event_types gains write_retired_at; no kind is retired.
+
+Every resource_erased now also records a legacy erasure: a first erasure records one whose member is
+erased, and a completion pass marks the subject's open legacy members erased. The migration runs that
+over the existing ledger, and for each erased resource that still owes a completion pass it appends a
+legacy erasure_declared, under the system actor, whose one member is pending. A resource with
+erased_at and no resource_erased record aborts the migration. No gate reads the new tables.
+
+The erasure-policy manifest gains a [refusal_reasons] section in estate.toml, one code per entry with
+its meaning, and its format moves from 1 to 2: manifest.toml and the parser change together, and a
+parser refuses the format it was not written for. The vocabulary has four copies (the manifest, the
+table, the system.yaml bootseed rows and temper-core's ErasureMemberRefusalReason), held equal by
+crates/temper-services/tests/erasure_refusal_vocabulary_test.rs.
+
+Who observes: an operator embedding a manifest of another format, a reader of the schema, and a
+reader of the admin ledger, which can now list the new kinds. No response shape changes. Release relevance: signal-only.
+'''

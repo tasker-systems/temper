@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT setval('kb_events_seq', coalesce(max(seq), 1), max(seq) IS NOT NULL) AS \"v!\"\n                 FROM kb_events",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "v!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "adbd2c4e8b6c054cf24583e72355510d4f74e8ff3631e3d2f4f07958f6ae8264"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_erasure_refusal_reasons (code, meaning) VALUES ($1, $2) ON CONFLICT (code) DO UPDATE SET meaning = EXCLUDED.meaning",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e92adc8fe102d7183b414ebb8c9f70a562d02936a7aaa3108d44724b1ea4b303"
+}

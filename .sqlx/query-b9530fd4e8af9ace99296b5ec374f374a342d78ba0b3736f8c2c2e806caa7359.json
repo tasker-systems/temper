@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO kb_principal_rate_counters AS c\n               (profile_id, door, window_started_at, call_count)\n        VALUES ($1, $2, now(), 1)\n        ON CONFLICT (profile_id, door) DO UPDATE SET\n            call_count = CASE\n                WHEN c.window_started_at < now() - make_interval(secs => $3)\n                    THEN 1\n                    ELSE c.call_count + 1\n            END,\n            window_started_at = CASE\n                WHEN c.window_started_at < now() - make_interval(secs => $3)\n                    THEN now()\n                    ELSE c.window_started_at\n            END\n        RETURNING call_count,\n                  GREATEST(1, ceil(extract(epoch FROM\n                      (window_started_at + make_interval(secs => $3)) - now())))::bigint\n                      AS \"retry_after_secs!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "call_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "retry_after_secs!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "b9530fd4e8af9ace99296b5ec374f374a342d78ba0b3736f8c2c2e806caa7359"
+}

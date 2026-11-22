@@ -1,0 +1,18 @@
+title = "The skill teaches that a failed pipe after a write is not a failed write: check it landed before retrying"
+pr = "self"
+classes = ["additive"]
+surfaces = ["cli-stdout"]
+status = "signal-only"
+
+body = '''
+The installed reference.md gains "A Failed Pipe Is Not a Failed Write": parse stdout alone, read
+temper's own exit code and code, treat network, api, a timeout or no readable stdout as an
+unknown outcome, and before retrying a create or commit check whether it landed (resource list
+--title-contains, rows' body_hash, or the claim_id in data-artifact list --kind).
+session-lifecycle.md and coordinating-through-records.md cite it; their MCP projections under
+skills/temper-knowledge-base/ carry the inline equivalent, including create_resource's
+idempotency_key.
+
+No server, CLI or MCP surface changes. Observed by anyone who installs the skill or the MCP skill
+bundle. Release relevance: content only.
+'''

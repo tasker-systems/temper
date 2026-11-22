@@ -1,5 +1,8 @@
-//! The two blob doors whose legal request bodies exceed axum's inherited default, and the
-//! body limits sized from the config and the plan numbers.
+//! The blob write doors: the two whose legal request bodies exceed axum's inherited default
+//! (with the body limits sized from the config and the plan numbers), and the three that do
+//! not. All five spend the per-principal blob-write budget
+//! (`temper_services::rate_limit::PrincipalDoor::BlobWrite`), applied at the table mount by
+//! each row's `rate_limit` column.
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -56,4 +59,17 @@ pub(super) fn blob_commit_body_limit(state: &AppState) -> usize {
         .as_ref()
         .map(|b| b.single_request_max_bytes + BLOB_COMMIT_MULTIPART_OVERHEAD_BYTES)
         .unwrap_or(BLOB_SEGMENT_MAX_BODY_BYTES + BLOB_COMMIT_MULTIPART_OVERHEAD_BYTES)
+}
+
+/// `POST /api/blobs/uploads`, `POST /api/blobs/uploads/{id}/finalize` and
+/// `DELETE /api/blobs/{id}` — the blob write doors with bodies of trivial size (JSON, or
+/// none), so the gated tier's inherited ceiling serves them. Their own group so the
+/// blob-write budget binds to them and not to the blob reads that share their paths (`GET
+/// /api/blobs/{id}` stays in `gated_routes`; the routers merge by method).
+pub(super) fn blob_write_routes() -> OpenApiRouter<AppState> {
+    // One `.routes()` per handler: distinct paths in one call mangle the mounted patterns.
+    OpenApiRouter::new()
+        .routes(routes!(handlers::blobs::begin_upload))
+        .routes(routes!(handlers::blobs::finalize_upload))
+        .routes(routes!(handlers::blobs::delete))
 }

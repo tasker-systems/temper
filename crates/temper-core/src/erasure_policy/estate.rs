@@ -69,8 +69,20 @@ fn non_blank_if_present<'de, D: Deserializer<'de>>(
 pub struct Estate {
     /// The rules that put containers in an estate.
     pub scope: Vec<ScopeRule>,
+    /// The closed refusal vocabulary: code → its entry. The same set `kb_erasure_refusal_reasons`,
+    /// the `system.yaml` seeds and `ErasureMemberRefusalReason` carry.
+    pub refusal_reasons: BTreeMap<String, RefusalReason>,
     /// Table name → its grain. One grain per table, since a TOML table key is unique.
     pub tables: BTreeMap<String, TableGrain>,
+}
+
+/// One refusal code's entry: in TOML `<code> = { meaning = "…" }`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RefusalReason {
+    /// What the code says about the item, in plain words. Never blank.
+    #[serde(deserialize_with = "non_blank")]
+    pub meaning: String,
 }
 
 /// One scope rule: a set of containers the estate holds, and what selects it.

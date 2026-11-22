@@ -92,6 +92,11 @@ pub fn client_err_to_temper(e: ClientError) -> TemperError {
         | ClientError::UnauthorizedDetails { .. }
         | ClientError::TokenExpired
         | ClientError::AmbientRefused { .. }) => TemperError::Unauthorized(e.to_string()),
+        // A 5xx is typed, so `reconcile_hint` can tell a server-side failure (whose write a
+        // gateway timeout can hide) from an unclassified one; it renders and codes as `api`.
+        ClientError::Server { status, message } if status >= 500 => {
+            TemperError::ServerError { status, message }
+        }
         e => TemperError::Api(e.to_string()),
     }
 }
@@ -618,10 +623,6 @@ mod tests {
                 message: "server sent PLAN_REFUSED with a payload this client could not parse"
                     .into(),
             },
-            ClientError::Server {
-                status: 500,
-                message: "boom".into(),
-            },
         ] {
             let shown = format!("{client:?}");
             let lifted = client_err_to_temper(client);
@@ -631,6 +632,24 @@ mod tests {
             );
             assert_eq!(payload_code(&lifted), "api", "{shown}");
         }
+    }
+
+    /// FAILS IF a 5xx stops arriving typed (the key-naming hint reads its status), or stops
+    /// rendering and coding as the `api` it always was.
+    #[test]
+    fn a_server_5xx_lifts_typed_and_still_reads_as_api() {
+        let client = ClientError::Server {
+            status: 503,
+            message: "unavailable".into(),
+        };
+        let sentence = format!("API error: {client}");
+        let lifted = client_err_to_temper(client);
+        assert!(
+            matches!(lifted, TemperError::ServerError { status: 503, .. }),
+            "{lifted:?}"
+        );
+        assert_eq!(payload_code(&lifted), "api");
+        assert_eq!(lifted.to_string(), sentence);
     }
 }
 

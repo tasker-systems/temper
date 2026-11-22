@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErasureReopened",
+  "description": "`erasure_reopened` — an item arrived after an erasure completed, so the completion no longer\nholds. Its projector clears `kb_erasures.completed_event_id`, and completion runs again.",
+  "type": "object",
+  "properties": {
+    "arrival_event": {
+      "description": "The `erasure_member_arrived` event that reopened the erasure.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "erasure_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "required": [
+    "erasure_id",
+    "arrival_event"
+  ]
+}
