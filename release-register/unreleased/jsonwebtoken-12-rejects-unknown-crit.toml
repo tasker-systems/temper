@@ -1,0 +1,16 @@
+title    = "Bearer JWTs carrying an unknown critical header, or b64 false, are refused"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp"]
+status   = "signal-only"
+body = '''
+temper-api and temper-mcp verify bearer tokens with jsonwebtoken, which moves from 11 to 12. Under
+12, a token whose JOSE header lists a `crit` extension other than `b64`, an empty `crit`, a
+duplicated `crit` entry, or `b64: false` fails verification. Under 11 the header was accepted.
+12 also refuses a wrong-typed `sub` when an expected subject is set, but temper sets none. The issuer, audience
+and expiry checks are unchanged for temper's `Validation`: `exp`, `iss` and `aud` are required
+claims, so a missing or wrong-typed `iss` or `aud` was already refused. Who observes: a caller whose
+IdP mints tokens with a `crit` extension. No supported IdP is known to do so. Release relevance:
+none beyond the refusal above. The other change is in the test fixtures: the HMAC test keys now
+unwrap, because `from_secret` is fallible and rejects empty keys.
+'''
