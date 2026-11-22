@@ -1893,10 +1893,12 @@ mod tests {
     /// A token whose header names a critical extension temper does not understand is refused,
     /// though its signature, issuer, audience and expiry are all good (RFC 7515 §4.1.11).
     /// The control token differs only in the header, so the refusal is the `crit` member's.
-    #[test]
-    fn a_token_naming_an_unknown_critical_header_is_refused() {
+    ///
+    /// FAILS IF: jsonwebtoken accepts a header whose `crit` names an extension it does not implement.
+    #[tokio::test]
+    async fn a_token_naming_an_unknown_critical_header_is_refused() {
         let (enc, dec) = try_make_keys().expect("the embedded Ed25519 test keypair is valid");
-        let store = JwksKeyStore::with_static_key(dec.clone(), Algorithm::EdDSA);
+        let store = JwksKeyStore::with_static_key(dec, Algorithm::EdDSA);
         let validation = store.validation(
             "https://as.example",
             &["https://api.example"],
@@ -1910,13 +1912,21 @@ mod tests {
         };
 
         let plain = encode(&Header::new(Algorithm::EdDSA), &claims, &enc).expect("encodes");
-        jsonwebtoken::decode::<TestClaims>(&plain, &dec, &validation)
+        let vk = store
+            .get_decoding_key_for_token(&plain)
+            .await
+            .expect("a static key resolves");
+        jsonwebtoken::decode::<TestClaims>(&plain, &vk.key, &validation)
             .expect("the control token, with no crit header, verifies");
 
         let mut header = Header::new(Algorithm::EdDSA);
         header.crit = Some(vec!["urn:example:unknown".into()]);
         let critical = encode(&header, &claims, &enc).expect("encodes");
-        let err = jsonwebtoken::decode::<TestClaims>(&critical, &dec, &validation)
+        let vk = store
+            .get_decoding_key_for_token(&critical)
+            .await
+            .expect("the kid lookup reads the header unchecked, so the key still resolves");
+        let err = jsonwebtoken::decode::<TestClaims>(&critical, &vk.key, &validation)
             .expect_err("an unknown critical extension must be refused");
         assert_eq!(err.kind(), &jsonwebtoken::errors::ErrorKind::InvalidToken);
     }

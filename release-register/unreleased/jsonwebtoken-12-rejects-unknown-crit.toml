@@ -6,11 +6,12 @@ status   = "signal-only"
 body = '''
 temper verifies JWTs with jsonwebtoken, which moves from 11 to 12: bearer tokens on temper-api and
 temper-mcp, the Slack-link callback's access token, and the Vercel Connect inbound attestation.
-Under 12, verification refuses a token whose JOSE header has a `crit` naming anything but `b64`,
-an empty or duplicated `crit`, `crit: ["b64"]` without a `b64` member, or a `b64` that is not
-`true`. Under 11 such a header was accepted. The refusal is `InvalidToken`, which temper already
-reports as a malformed token. Issuer, audience and expiry checks are unchanged for temper's
-`Validation`: `exp`, `iss` and `aud` are required claims, so a missing or wrong-typed `iss` or
-`aud` was already refused. Who observes: a caller whose token issuer sets a `crit` extension; no
-supported IdP is known to. Release relevance: none beyond that refusal.
+Under 12, verification refuses a token whose JOSE header has a `crit` naming anything but `b64`, an
+empty or duplicated `crit`, `crit: ["b64"]` without a `b64` member, or a `b64` that is not `true`.
+Under 11 such a header was accepted. Each site folds the refusal into the one it already gives any
+token that does not verify (temper-mcp records it as `malformed`). Issuer, audience and expiry
+checks are unchanged for temper's `Validation`: `exp`, `iss` and `aud` are required claims, so a
+missing or wrong-typed `iss` or `aud` was already refused. Who observes: a caller whose token issuer
+sets a `crit` extension; no supported IdP, nor Vercel Connect's attestation issuer, is known to.
+Release relevance: none beyond that refusal.
 '''
