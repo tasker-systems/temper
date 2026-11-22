@@ -400,8 +400,8 @@ sensitivity.expire_erased_fingerprints reads it to start each finding''s window.
 -- 20261201000030's body, plus the lock and the refusal after the existence check. The fold does not
 -- go through _resource_write_guard_owner: the resource act folds the edges of a resource it has
 -- already erased, and the guard's endpoint arm would refuse those folds. Its callers and why none is
--- refused wrongly: the unit's own fold runs before its record exists; the resource act and the
--- block history scrub fold only live edges, which no record names; _erasure_member_flag calls
+-- refused wrongly: the unit's own fold runs before its record exists; the resource act folds only
+-- live edges, which no record names (block history scrub folds no edge); _erasure_member_flag calls
 -- _edge_fold_apply directly; replay runs with temper.replaying on, which skips both. The lock and
 -- the check are two statements, so a fold that waited reads the record in a later snapshot.
 --
