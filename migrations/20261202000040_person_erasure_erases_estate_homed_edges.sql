@@ -7,7 +7,8 @@
 --      whether an edge's text is already erased. The unit raises `already erased` on the same
 --      test (edge_erasure_execute, re-issued) and the act's step skips by it.
 --   3. edge_erasure_requires_an_erased_owner(), behind two DEFERRABLE INITIALLY DEFERRED
---      constraint triggers (Section 7): the record's estate_of must be tombstoned at commit.
+--      constraint triggers (Section 7): the record's estate_of must be tombstoned at commit, and
+--      its subject edge folded and homed in that estate (_edge_homed_in_estate).
 --   4-6. _principal_erasure_edges_outcome(integer), the record's prose;
 --      principal_erasure_survey_plan predicts the step as one kb_edges target and counts every
 --      estate-homed edge's trail inside the estate for R8; principal_erasure_execute runs the
@@ -213,6 +214,17 @@ erased.$c$;
 -- type by name. Both stand down under temper.replaying: replay commits each event in its own
 -- transaction, and the tombstone rides in with kb_profiles, an input table, not with the walk.
 -- The triggers themselves are created in Section 7, under the lock bound.
+--
+-- The record's subject must also be, at commit, an edge that is folded and homed in a context of
+-- that estate, as the verifier requires of an `edge` rewrite. A record alone makes _edge_is_erased
+-- refuse every write to the edge it names, so without this a record naming any edge, under any
+-- already tombstoned estate_of, would lock that edge with nothing redacted. The person act commits
+-- no record that fails it: its edge step calls the unit only for an edge it finds homed in the live
+-- estate under the edge's lock, the unit folds the edge, and no write path unfolds one. The home
+-- is read again here, against the estate at commit. Once the act holds its estate contexts' rows
+-- (principal_erasure_execute's context lock), no door moves one out; a context reassigned out of
+-- the estate after the edge step and before that lock fails the act at commit instead, and the act
+-- run again leaves that context's edges, its edge step reading the live estate.
 CREATE FUNCTION edge_erasure_requires_an_erased_owner()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -222,6 +234,7 @@ DECLARE
     v_record    uuid;
     v_is_edge   boolean;
     v_estate_of uuid;
+    v_subject   uuid;
 BEGIN
     IF current_setting('temper.replaying', true) IS NOT DISTINCT FROM 'on' THEN
         RETURN NULL;
@@ -241,15 +254,32 @@ BEGIN
     IF TG_TABLE_NAME = 'kb_events' AND NOT v_is_edge THEN
         RETURN NULL;
     END IF;
-    -- estate_of is read as a uuid only from an edge_erased record, whose payload carries one.
+    -- estate_of and subject_id are read as uuids only from an edge_erased record, whose payload
+    -- carries both.
     IF v_is_edge THEN
-        SELECT (e.payload ->> 'estate_of')::uuid INTO v_estate_of
+        SELECT (e.payload ->> 'estate_of')::uuid,
+               CASE WHEN e.payload ->> 'subject_table' = 'kb_edges'
+                    THEN (e.payload ->> 'subject_id')::uuid END
+          INTO v_estate_of, v_subject
           FROM kb_events e
          WHERE e.id = v_record;
-        IF EXISTS (SELECT 1 FROM kb_profiles p
-                    WHERE p.id = v_estate_of AND p.tombstoned_at IS NOT NULL) THEN
-            RETURN NULL;
+        IF NOT EXISTS (SELECT 1 FROM kb_profiles p
+                        WHERE p.id = v_estate_of AND p.tombstoned_at IS NOT NULL) THEN
+            RAISE EXCEPTION 'edge erasure: the estate''s owner % is not erased', v_estate_of
+                USING ERRCODE = 'check_violation',
+                      CONSTRAINT = 'edge_erasure_requires_an_erased_owner';
         END IF;
+        -- The record's subject as the verifier admits an `edge` rewrite of it: a record alone, with
+        -- no row and no rewrite for the verifier to read, makes _edge_is_erased refuse every write
+        -- to the edge it names.
+        IF NOT EXISTS (SELECT 1 FROM kb_edges s WHERE s.id = v_subject AND s.is_folded)
+           OR NOT _edge_homed_in_estate(v_subject, v_estate_of) THEN
+            RAISE EXCEPTION 'edge erasure: edge % is not a folded edge homed in the estate of %',
+                v_subject, v_estate_of
+                USING ERRCODE = 'check_violation',
+                      CONSTRAINT = 'edge_erasure_requires_an_erased_owner';
+        END IF;
+        RETURN NULL;
     END IF;
     RAISE EXCEPTION 'edge erasure: the estate''s owner % is not erased', v_estate_of
         USING ERRCODE = 'check_violation', CONSTRAINT = 'edge_erasure_requires_an_erased_owner';
@@ -261,10 +291,12 @@ $c$At commit (DEFERRABLE INITIALLY DEFERRED constraint triggers
 trg_edge_erased_requires_an_erased_owner on kb_events and
 trg_edge_redaction_requires_an_erased_owner on kb_event_field_redactions): refuses the transaction
 unless the edge_erased record (the inserted event, or an `edge` row's redacted_by) names in
-estate_of a profile whose tombstoned_at is set. Confirms the type by name before it reads
-estate_of. An `edge` row whose redacted_by is no edge_erased record is refused too; another kind of
-event on kb_events passes. Raises 'edge erasure: the estate''s owner % is not erased'
-(check_violation). Stands down while temper.replaying is 'on'.$c$;
+estate_of a profile whose tombstoned_at is set, and names a kb_edges subject that is folded and
+homed in a context of that estate (_edge_homed_in_estate). Confirms the type by name before it
+reads estate_of. An `edge` row whose redacted_by is no edge_erased record is refused too; another
+kind of event on kb_events passes. Raises 'edge erasure: the estate''s owner % is not erased' or
+'edge erasure: edge % is not a folded edge homed in the estate of %' (check_violation). Stands down
+while temper.replaying is 'on'.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 4. The record's prose for the edges erased.
@@ -1183,7 +1215,8 @@ BEGIN
     --    lock (_edge_homed_in_estate, the unit's own check): an edge whose context has left the
     --    estate since the plan is skipped and counted, as the resource loop skips a resource
     --    moved out. Its records' estate_of is the subject, tombstoned below in this transaction:
-    --    the owner check runs at commit (edge_erasure_requires_an_erased_owner). ──────────────
+    --    the owner check runs at commit (edge_erasure_requires_an_erased_owner), and reads each
+    --    record's edge folded and homed in the estate again then. ──────────────────────────────
     FOR v_eid IN
         SELECT e.id FROM kb_edges e
          WHERE e.home_anchor_table = 'kb_contexts'
@@ -1438,7 +1471,8 @@ SELECT declare_migration(
     '(WHEN category = admin) and on kb_event_field_redactions (WHEN authority = edge), each with a '
     'COMMENT, created under SET LOCAL lock_timeout = 500ms: if a lock is not granted in time, the '
     'migration rolls back and the serving deployment is untouched. At commit an edge_erased record, '
-    'or an edge row''s record, must name a tombstoned estate_of; no edge_erased record or edge row '
+    'or an edge row''s record, must name a tombstoned estate_of and a folded edge homed in a context '
+    'of that estate; no edge_erased record or edge row '
     'exists when this migration runs, and any other admin event passes, so no existing write is '
     'refused. CREATE OR REPLACE, each signature and return type unchanged: '
     'edge_erasure_execute(uuid, uuid, uuid, uuid, uuid), SET clauses unchanged, whose '

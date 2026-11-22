@@ -316,6 +316,13 @@ const CLASSIFIED: &[(&str, Class)] = &[
         ),
     ),
     (
+        "edge_erasure_requires_an_erased_owner/0",
+        Class::NotCallerFacing(
+            "commit-time trigger: reads one edge_erased record's subject edge, folded and homed \
+             in its estate, to admit the transaction; returns no edge",
+        ),
+    ),
+    (
         "_edge_homed_in_estate/2",
         Class::NotCallerFacing(
             "erasure predicate: reads one edge's home for the edge unit and the `edge` \

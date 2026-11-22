@@ -375,8 +375,8 @@ const ROSTER: &[Entry] = &[
     own(
         "edge_erasure_requires_an_erased_owner()",
         &["edge_erased"],
-        "reads one edge_erased record's own estate_of at commit: the inserted record, or an \
-         `edge` row's redacted_by",
+        "reads one edge_erased record's own estate_of and subject edge at commit: the inserted \
+         record, or an `edge` row's redacted_by",
     ),
     own(
         "resource_field_scrub_execute(uuid,text,uuid,boolean,uuid,uuid,uuid)",
