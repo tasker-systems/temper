@@ -71,7 +71,7 @@ execute	[a-z_]*_erasure_execute[[:space:]]*\(
 apply_redaction	[a-z_]*_erasure_apply_redaction[[:space:]]*\(
 projector	_project_[a-z_]*redactions[[:space:]]*\(
 replay_setting	set_config[[:space:]]*\([[:space:]]*'temper\.replaying'|(^|[^a-z_])set[[:space:]]+((local|session)[[:space:]]+)?temper\.replaying
-replay_marker	(insert[[:space:]]+into|update|delete[[:space:]]+from|truncate([[:space:]]+table)?|copy)[[:space:]]+("?public"?\.)?"?kb_replay_target|_replay_target_mark[[:space:]]*\(
+replay_marker	(insert[[:space:]]+into|merge[[:space:]]+into|update|delete[[:space:]]+from|truncate([[:space:]]+table)?|copy)[[:space:]]+(only[[:space:]]+)?("?public"?\.)?"?kb_replay_target|_replay_target_mark[[:space:]]*\(
 EOF
 
 # shellcheck source=out-of-line-test-modules.sh

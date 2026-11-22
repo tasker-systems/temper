@@ -101,8 +101,8 @@ $$;
 
 COMMENT ON FUNCTION replay_posture() IS
 $c$The reasons this database is unsafe to serve, empty when it is safe: the kb_replay_target
-marker, a default naming temper.replaying for this database or for any role here (whichever role
-the caller runs as), or the calling session carrying it
+marker, a default naming temper.replaying for this database, for any role in it, or for a role
+cluster-wide (whichever role the caller runs as), or the calling session carrying it
 'on' (called on a fresh connection outside a transaction, that is a session-level setting).
 temper-migrate refuses a deploy on any; the API logs them at startup.$c$;
 

@@ -517,7 +517,7 @@ jobs:
       - name: Guard test — audit-raw-standing-writers
         run: bash .github/scripts/test-audit-raw-standing-writers.sh
 
-      # Twenty-two probes: every caller class reds (a new file, a second call in a baselined file,
+      # Twenty-three probes: every caller class reds (a new file, a second call in a baselined file,
       # a moved caller, api/*.rs, an SQL template, and the spellings SQL treats alike), the empty
       # scan and an unreadable file red as a broken scan, and the field of view stays green (a
       # test module, a comment or bare name, tests/, migrations).

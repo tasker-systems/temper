@@ -152,6 +152,8 @@ d_case "a marker-writer call" replay_marker \
 # Spellings SQL treats alike: case, a schema qualifier, COPY, and SET in place of set_config.
 d_case "a lowercase, schema-qualified marker write" replay_marker \
     'sqlx::query("insert into public.kb_replay_target (id) values (true)");'
+d_case "a MERGE into the marker" replay_marker \
+    'sqlx::query("MERGE INTO kb_replay_target t USING (SELECT true) s ON true WHEN NOT MATCHED THEN INSERT DEFAULT VALUES");'
 d_case "a COPY into the marker" replay_marker \
     'sqlx::query("COPY kb_replay_target FROM STDIN");'
 d_case "SET LOCAL of the replay setting" replay_setting \
