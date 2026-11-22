@@ -14,9 +14,10 @@ import {
 /**
  * ═══ ENABLED 2026-07-29, after all four gates below closed and the grain fix shipped. ═══
  *
- * eve registers exactly one Vercel Cron Job per file under `agent/schedules/`
- * (`node_modules/eve/docs/schedules.mdx`: *"Each one is a single file under `agent/schedules/`
- * carrying a cron expression"*), so this file's LOCATION is the on/off switch. It lived outside
+ * eve registers exactly one schedule per file under `agent/schedules/` (the "On Vercel" section of
+ * `node_modules/eve/docs/schedules.mdx`), so this file's LOCATION is the on/off switch. On Vercel it
+ * deploys as the Vercel Schedule `eve.auditor` (beta): a failed invocation is not retried, and a run
+ * starts within a jitter window after 03:30 UTC. It lived outside
  * the agent root from 2026-07-25 until now for exactly that reason.
  *
  * **Withdrawing the CAPABILITY still means moving the file back out.** That is a repo-wide decision
@@ -203,7 +204,7 @@ export default defineSchedule({
     }
 
     // The auditor is OPTIONAL; the steward is not. This file ships in the repo, and eve registers
-    // one Vercel Cron Job per file here — so every fork and self-hosted deploy of this agent gets
+    // one schedule per file here — so every fork and self-hosted deploy of this agent gets
     // this cron whether or not it runs an auditor. Without this guard each of those deployments
     // fails on every tick, forever, on a credential they never intended to set. That is not a
     // signal, it is noise that teaches people to ignore a red cron. (Stated per-tick rather than

@@ -2,8 +2,9 @@
  * Whether an OPTIONAL agent should run on this tick — the axes that are not about credentials.
  *
  * `schedules/auditor.ts` is the whole reason this exists. That file ships in the repo and eve
- * registers one Vercel Cron Job per file under `agent/schedules/`, so every fork and self-hosted
- * deploy inherits the cron whether or not it wants an auditor. Separate questions decide whether a
+ * registers one schedule per file under `agent/schedules/` (on Vercel, a Vercel Schedule named
+ * `eve.auditor`), so every fork and self-hosted deploy inherits it whether or not it wants an
+ * auditor. Separate questions decide whether a
  * given tick does any work, and they are deliberately different questions with deliberately
  * different defaults:
  *
