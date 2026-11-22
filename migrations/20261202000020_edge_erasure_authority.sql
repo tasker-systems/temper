@@ -7,7 +7,8 @@
 -- guard admits the rewrite under.
 --
 --   1. _erasure_trail_payload_redaction(uuid[], jsonb) is the per-event loop of
---      _resource_erasure_payload_redaction (20261010100000), whose output is unchanged. The loop
+--      _resource_erasure_payload_redaction (20261010100000), whose output for a resource is
+--      unchanged but for one case (Section 1 names it). The loop
 --      leaves every event correlated with a resource_erased or edge_erased other than itself, and
 --      every path of an event that an `erasure` or `edge` row already names: that rewrite is
 --      final. _resource_erasure_label_numbers (20261009100000) numbers only the labels no such row
@@ -57,7 +58,21 @@
 -- erased-label-<n> those locations carry, so a fresh number never lands on a written sentinel of
 -- another label. With no written label on the pair the numbering is 20261009100000's; a resource
 -- act rewrites each of its pairs whole, and its erased endpoint takes no later edge write
--- (_resource_write_guard), so every answer a resource act alone produced is unchanged.
+-- (_resource_write_guard), so an answer a resource act alone produced is unchanged, but for one
+-- case: a label whose text is already its own sentinel (a writer typed erased-label-<n> and it
+-- numbered to n) is not listed, so no row names it, and a later act on the pair numbers it after
+-- the written sentinels and can rewrite it once, where 20261009100000's numbering left it at a
+-- fixed point. A read-only check of the production ledger found no such label.
+--
+-- The numbering is injective within the pair for acts that run one after another: each numbers
+-- after every sentinel written before it. Two acts on one pair whose derivations read the pair in
+-- different states (for instance, another act's rewrite of the pair committing between them) can
+-- number two distinct labels to one sentinel. That ledger text then reads two labels alike;
+-- replay's ON CONFLICT (uq_kb_edges_assertion) joins the two assertions only if their edges also
+-- share a kind and a home and the earlier edge is still live when the later assertion replays. A standalone resource
+-- erasure that derived before an edge act's rewrite committed rewrites that act's paths once more,
+-- to its own numbering of the whole pair, which is injective: every location it writes takes the
+-- one derivation's number, and every location it passes over was written before it derived.
 CREATE OR REPLACE FUNCTION _resource_erasure_label_numbers(p_source_table text, p_source_id uuid,
                                                            p_target_table text, p_target_id uuid)
 RETURNS TABLE(label text, n integer)
@@ -96,9 +111,13 @@ location no `erasure` or `edge` kb_event_field_redactions row names, with the n 
 erased-label-<n>, in ledger order of its first such assertion (occurred_at, then event id; never the
 text), numbered after the highest erased-label-<n> the named locations carry (0 when there are
 none). A named location is a final rewrite, which _erasure_trail_payload_redaction passes over, so
-it takes no number and its sentinel is never renumbered; a fresh number is above every written one,
-so the numbering stays injective within the pair across acts. Read only by
-_erasure_trail_payload_redaction.$c$;
+it takes no number and a derivation that reads its row never renumbers it; a fresh number is above
+every written one, so the numbering is injective within the pair across acts that run one after
+another. Two acts on one pair whose derivations read the pair in different states can number two
+distinct labels to one sentinel, and a standalone resource erasure that derived before an edge
+act's rewrite committed rewrites those paths once more, to its own injective numbering of the pair.
+A label whose text is already its own sentinel has no row, and a later act on the pair numbers it
+again. Read only by _erasure_trail_payload_redaction.$c$;
 
 -- Each event of p_trail whose allowlisted paths hold something other than their class sentinel,
 -- with its payload and metadata rewritten to the sentinels and the paths it changed, in the dotted
@@ -157,8 +176,11 @@ BEGIN
             v_class := _erasure_path_class(v_ev.type, v_path, v_ev.payload);
             CONTINUE WHEN v_class IS NULL OR v_class = 'keep';
             -- A path an `erasure` or `edge` row already names on this event holds the sentinel its
-            -- act wrote, and that rewrite is final: deriving it again could only renumber it, and
-            -- a second row for it collides on kb_event_field_redactions_pkey. The redaction row
+            -- act wrote, and that rewrite is final for every derivation that reads the row:
+            -- deriving it again could only renumber it, and a second row for it collides on
+            -- kb_event_field_redactions_pkey. A derivation that ran before the row committed (a
+            -- standalone resource erasure concurrent with an edge act) does not see it, and
+            -- rewrites the path once more under its own authority (Section 1). The redaction row
             -- decides, never the value's shape, which a writer's own text can take. A `scrub` row
             -- is not final for an erasure, whose sentinels differ.
             CONTINUE WHEN EXISTS (
@@ -1339,8 +1361,12 @@ SELECT declare_migration(
     'trail with the same numbering, so its rows are unchanged), _resource_erasure_label_numbers '
     '(numbers only the labels no erasure or edge redaction row names, after the highest sentinel '
     'those rows'' events carry on the pair: with no edge row, every pair a resource act wrote '
-    'holds only written labels and a live pair none, so its answers are unchanged; the shared loop '
-    'also passes over a path such a row names, which a resource act already never changed), '
+    'holds only written labels and a live pair none, so its answers are unchanged, but for a label '
+    'whose text is already its own sentinel, which no row names and a later act now renumbers once '
+    '(a read-only check of the production ledger found none); the numbering is injective within a '
+    'pair for acts that run one after another, and two acts whose derivations read the pair in '
+    'different states can give two labels one sentinel; the shared loop also passes over a '
+    'path such a row names, which a resource act already never changed), '
     '_project_field_redactions, '
     '_erasure_sentinel_admits, kb_events_append_only, kb_events_redaction_in_trail, '
     '_event_is_admin_act, _profile_change_events and sensitivity.place_closure. Each gains an arm '
