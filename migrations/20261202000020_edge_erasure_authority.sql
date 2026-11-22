@@ -35,11 +35,12 @@
 --     exists;
 --   * every reader of an authority maps all of them: the guard, the trail trigger, place_closure.
 --
--- From Section 3's ALTER on, the migration runs under SET LOCAL lock_timeout = '500ms', the bound
--- and the reasons of 20261201000010_erasure_records_schema.sql: the ALTER takes ACCESS EXCLUSIVE
--- on kb_event_field_redactions and validates every row, and the CREATE INDEX takes SHARE on
--- kb_events, which every append needs; unbounded, either would queue that table's writers (and
--- the ALTER its readers) behind the longest open transaction. When the bound fires the migration
+-- From Section 3's CREATE INDEX on, the migration runs under SET LOCAL lock_timeout = '500ms', the
+-- bound and the reasons of 20261201000010_erasure_records_schema.sql: the CREATE INDEX takes SHARE
+-- on kb_events, which every append needs, and the ALTER after it takes ACCESS EXCLUSIVE on
+-- kb_event_field_redactions and validates every row; each is held to commit, and unbounded, either
+-- would queue that table's writers (and the ALTER its readers) behind the longest open
+-- transaction. The index is built first, so the ACCESS EXCLUSIVE is not held across its scan. When the bound fires the migration
 -- rolls back, the serving deployment keeps its schema, and the next deploy retries.
 
 -- ---------------------------------------------------------------------------
@@ -520,6 +521,26 @@ $JS$::jsonb, 1, 'admin');
 
 SET LOCAL lock_timeout = '500ms';
 
+-- _edge_is_erased's probe: the edge_erased records by subject. The predicate is the record's own
+-- (admin category, subject_table kb_edges) and keys on the payload's subject_id, the key the
+-- commit check, the verifier and place_closure read, so the probe and they never name different
+-- edges. The GIN index on "references" would serve a `@>` on the record's subject reference, a
+-- second key a record could carry apart from its payload. No other admin kind writes kb_edges as
+-- its subject_table, so the index holds edge_erased rows, and the probe's type join keeps the
+-- answer exact whatever else an appender writes there. Built in the migration's
+-- transaction, not CONCURRENTLY: no migration in this repo uses sqlx's no-transaction escape
+-- (20261117000000_context_change_feed_doors.sql, whose admin index is built the same way), so the
+-- build holds SHARE on kb_events, which queues appends, not reads, for one scan of the table.
+-- It runs before the ALTER below, so the ACCESS EXCLUSIVE that ALTER takes on
+-- kb_event_field_redactions is not held across the scan.
+CREATE INDEX idx_kb_events_edge_erased_subject
+    ON kb_events ((payload ->> 'subject_id'))
+    WHERE category = 'admin' AND payload ->> 'subject_table' = 'kb_edges';
+
+COMMENT ON INDEX idx_kb_events_edge_erased_subject IS
+$c$The edge_erased records by payload subject_id: the admin rows whose subject_table is kb_edges.
+Serves _edge_is_erased, whose WHERE repeats the predicate.$c$;
+
 -- One validating ADD under the lock: the DROP takes ACCESS EXCLUSIVE, held to the migration's
 -- commit, so a NOT VALID / VALIDATE split buys nothing inside one transaction (the reason
 -- 20261127000010_block_content_hash_follows_redaction.sql gives for its CHECK).
@@ -539,24 +560,6 @@ lean on it for another authority. A row mislabelled `erasure` would occupy the k
 'erasure'): a later erasure of that path would collide on kb_event_field_redactions_pkey, which
 resource_erasure_service reads as a concurrent completion and retries, colliding again every
 time.$c$;
-
--- _edge_is_erased's probe: the edge_erased records by subject. The predicate is the record's own
--- (admin category, subject_table kb_edges) and keys on the payload's subject_id, the key the
--- commit check, the verifier and place_closure read, so the probe and they never name different
--- edges. The GIN index on "references" would serve a `@>` on the record's subject reference, a
--- second key a record could carry apart from its payload. No other admin kind writes kb_edges as
--- its subject_table, so the index holds edge_erased rows, and the probe's type join keeps the
--- answer exact whatever else an appender writes there. Built in the migration's
--- transaction, not CONCURRENTLY: no migration in this repo uses sqlx's no-transaction escape
--- (20261117000000_context_change_feed_doors.sql, whose admin index is built the same way), so the
--- build holds SHARE on kb_events, which queues appends, not reads, for one scan of the table.
-CREATE INDEX idx_kb_events_edge_erased_subject
-    ON kb_events ((payload ->> 'subject_id'))
-    WHERE category = 'admin' AND payload ->> 'subject_table' = 'kb_edges';
-
-COMMENT ON INDEX idx_kb_events_edge_erased_subject IS
-$c$The edge_erased records by payload subject_id: the admin rows whose subject_table is kb_edges.
-Serves _edge_is_erased, whose WHERE repeats the predicate.$c$;
 
 -- The two subject predicates of an edge erasure, each spelled once. _edge_is_erased answers for
 -- an edge's writers and the sweep (20261202000030): whether an erasure record exists. The
@@ -1327,7 +1330,9 @@ SELECT declare_migration(
     'existing row still passes), and adds the partial index idx_kb_events_edge_erased_subject on '
     'kb_events ((payload ->> ''subject_id'')) WHERE category = ''admin'' AND payload ->> '
     '''subject_table'' = ''kb_edges'', which no existing row matches, built in the transaction '
-    '(SHARE on kb_events for one scan), both under SET LOCAL lock_timeout = 500ms: if a lock is '
+    '(SHARE on kb_events for one scan) before the CHECK swap, so the swap''s ACCESS EXCLUSIVE on '
+    'kb_event_field_redactions is not held across the build, both under SET LOCAL lock_timeout = '
+    '500ms: if a lock is '
     'not granted in time, the migration rolls back and the serving deployment is untouched. '
     'CREATE OR REPLACE, each with its signature, defaults, return type '
     'and search_path unchanged: _resource_erasure_payload_redaction (the shared loop over the same '
