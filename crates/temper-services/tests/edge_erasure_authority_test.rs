@@ -681,3 +681,175 @@ async fn a_forged_record_for_a_tombstoned_owner_needs_a_folded_edge_of_its_estat
         assert!(!erased, "{what} is not erased");
     }
 }
+
+/// A set tombstone never changes (`kb_profiles_tombstone_is_irreversible`): an UPDATE to NULL and
+/// one to another time are each refused, and the person act's own form, `COALESCE(tombstoned_at,
+/// …)`, re-run on the tombstoned profile, passes and keeps the value. Without the trigger a
+/// transaction could tombstone the owner, run the owner check early (`SET CONSTRAINTS ALL
+/// IMMEDIATE`), clear the tombstone and commit an edge erasure of a live owner.
+///
+/// FAILS IF a set tombstoned_at can be cleared or moved.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_profiles_tombstone_is_irreversible(pool: PgPool) {
+    let w = world(&pool).await;
+    let mut conn = pool.acquire().await.unwrap();
+    tombstone(&mut conn, w.profile).await.expect("tombstone");
+    drop(conn);
+    let at = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+            "SELECT tombstoned_at FROM kb_profiles WHERE id = $1",
+        )
+        .bind(w.profile)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    let set = at(pool.clone()).await;
+    assert!(set.is_some(), "setup: the profile is tombstoned");
+
+    for (what, sql) in [
+        (
+            "clearing the tombstone",
+            "UPDATE kb_profiles SET tombstoned_at = NULL WHERE id = $1",
+        ),
+        (
+            "moving the tombstone",
+            "UPDATE kb_profiles SET tombstoned_at = tombstoned_at + interval '1 second' WHERE id = $1",
+        ),
+    ] {
+        let err = sqlx::query(sql)
+            .bind(w.profile)
+            .execute(&pool)
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{what} was admitted"))
+            .to_string();
+        assert!(
+            err.contains(&format!(
+                "profile {} is tombstoned; its tombstone is irreversible",
+                w.profile
+            )),
+            "{what}: refused by the trigger's own message; got {err}"
+        );
+    }
+    sqlx::query(
+        "UPDATE kb_profiles SET tombstoned_at = COALESCE(tombstoned_at, now()) WHERE id = $1",
+    )
+    .bind(w.profile)
+    .execute(&pool)
+    .await
+    .expect("the person act's own form re-runs on a tombstoned profile");
+    assert_eq!(at(pool.clone()).await, set, "the tombstone is unchanged");
+}
+
+/// Call `_edge_erasure_apply_redaction(e, event)` on `conn`: the refusal's text, `None` when it ran.
+async fn apply_redaction(
+    conn: &mut sqlx::PgConnection,
+    e: EdgeId,
+    event: Option<Uuid>,
+) -> Option<String> {
+    sqlx::query("SELECT _edge_erasure_apply_redaction($1, $2)")
+        .bind(e.uuid())
+        .bind(event)
+        .execute(conn)
+        .await
+        .err()
+        .map(|err| err.to_string())
+}
+
+/// Append an `edge_erased` record naming `e` on `conn`, its estate the world's.
+async fn edge_record(conn: &mut sqlx::PgConnection, w: &World, e: EdgeId) -> Uuid {
+    sqlx::query_scalar("SELECT _event_append('edge_erased', $1, NULL, NULL, $2)")
+        .bind(w.emitter)
+        .bind(json!({
+            "subject_table": "kb_edges",
+            "subject_id": e.uuid(),
+            "estate_of": w.profile,
+            "folded": false,
+            "redacted_fields": [],
+        }))
+        .fetch_one(conn)
+        .await
+        .expect("append the record")
+}
+
+/// The edge erasure body runs outside replay only under an `edge_erased` record of its own edge
+/// appended in the same transaction. It is refused with no record (NULL), with another edge's record
+/// of this transaction, and with its own edge's record from an earlier transaction (committed under
+/// `temper.replaying`, as the owner check stands down there); the twin, its own edge's record of
+/// this transaction, runs and nulls the label. Each probe rolls back.
+///
+/// FAILS IF the body erases an edge's projection without that record: each refusal isolates one
+/// conjunct (a record, naming this edge, of this transaction).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_edge_erasure_body_runs_only_under_its_records_transaction(pool: PgPool) {
+    let x = edges(&pool).await;
+    let w = &x.w;
+    let other = {
+        let b = resource(&pool, w, "delta").await;
+        let c = resource(&pool, w, "epsilon").await;
+        edge(&pool, w, b, c, "a third label", EventContext::default()).await
+    };
+    let earlier = {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let id = edge_record(&mut tx, w, x.e).await;
+        tx.commit()
+            .await
+            .expect("a replaying transaction commits the record");
+        id
+    };
+    let refused = |what: &str, err: Option<String>| {
+        let err = err.unwrap_or_else(|| panic!("{what} ran"));
+        assert!(
+            err.contains(&format!(
+                "_edge_erasure_apply_redaction: edge {} has no edge_erased record of this transaction",
+                x.e.uuid()
+            )),
+            "{what}: refused by the body's own message; got {err}"
+        );
+    };
+
+    let mut tx = pool.begin().await.unwrap();
+    refused("no record", apply_redaction(&mut tx, x.e, None).await);
+    tx.rollback().await.unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    let theirs = edge_record(&mut tx, w, other).await;
+    refused(
+        "another edge's record of this transaction",
+        apply_redaction(&mut tx, x.e, Some(theirs)).await,
+    );
+    tx.rollback().await.unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    refused(
+        "its own edge's record from an earlier transaction",
+        apply_redaction(&mut tx, x.e, Some(earlier)).await,
+    );
+    tx.rollback().await.unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    let own = edge_record(&mut tx, w, x.e).await;
+    assert_eq!(
+        apply_redaction(&mut tx, x.e, Some(own)).await,
+        None,
+        "the twin: its own edge's record of this transaction"
+    );
+    let label: Option<String> = sqlx::query_scalar("SELECT label FROM kb_edges WHERE id = $1")
+        .bind(x.e.uuid())
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(label, None, "the body ran: the label is NULL");
+    tx.rollback().await.unwrap();
+    let label: Option<String> = sqlx::query_scalar("SELECT label FROM kb_edges WHERE id = $1")
+        .bind(x.e.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(label.as_deref(), Some(LABEL), "every probe rolled back");
+}
