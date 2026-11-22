@@ -19,11 +19,18 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::error::TemperError;
+use temper_core::types::authorship::ActContext;
+use temper_core::types::graph::{EdgeKind as DoorEdgeKind, Polarity};
+use temper_core::types::ids::ProfileId;
 use temper_core::types::property_owner::PropertyOwner;
+use temper_services::backend::DbBackend;
+use temper_services::commands::{FoldRelationship, RetypeRelationship, SetFacet};
 use temper_substrate::affinity::EdgeKind;
 use temper_substrate::events::{fire, EdgeHome, SeedAction};
 use temper_substrate::ids::{EdgeId, EntityId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
+use temper_workflow::operations::Surface;
 
 use edge_erasure::{
     asserting_event, authored, edge, erase_edge, facet, fold, resource, tombstone, world, World,
@@ -597,6 +604,246 @@ async fn a_property_write_racing_the_unit_waits_and_then_is_refused(pool: PgPool
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_fold_racing_the_unit_waits_and_then_is_refused(pool: PgPool) {
     race(&pool, Write::Fold).await;
+}
+
+/// A write of the edge through the door every surface reaches (`DbBackend`), by the edge's owner.
+#[derive(Debug, Clone, Copy)]
+enum DoorWrite {
+    Retype,
+    Fold,
+    Facet,
+}
+
+impl DoorWrite {
+    async fn run(self, backend: &DbBackend, e: EdgeId) -> Result<(), TemperError> {
+        match self {
+            DoorWrite::Retype => backend
+                .retype_relationship(RetypeRelationship {
+                    edge_handle: e,
+                    edge_kind: DoorEdgeKind::Near,
+                    polarity: Polarity::Inverse,
+                    act: ActContext::default(),
+                    origin: Surface::ApiHttp,
+                })
+                .await
+                .map(|_| ()),
+            DoorWrite::Fold => backend
+                .fold_relationship(FoldRelationship {
+                    edge_handle: e,
+                    reason: Some(LATE.to_string()),
+                    act: ActContext::default(),
+                    origin: Surface::ApiHttp,
+                })
+                .await
+                .map(|_| ()),
+            DoorWrite::Facet => backend
+                .set_facet(SetFacet {
+                    owner: PropertyOwner::Edge { id: e },
+                    property_key: None,
+                    values: json!({ "witness": LATE }),
+                    weight: 1.0,
+                    act: ActContext::default(),
+                    origin: Surface::ApiHttp,
+                })
+                .await
+                .map(|_| ()),
+        }
+    }
+}
+
+/// The door's answer for a folded edge (`check_edge_mutable`), which an erased edge is.
+fn is_folded_edge_answer(err: &TemperError, e: EdgeId) -> bool {
+    matches!(err, TemperError::NotFound(m) if *m == format!("edge {} not found", e.uuid()))
+}
+
+/// The unit runs in a transaction left open; `write` goes through the door, passes its edge gate
+/// while the edge is live, and is seen blocked on the unit's row lock in the SQL guard. When the
+/// act commits it resumes and is refused there. The door must answer that refusal as it answers
+/// the same write sent after the act, whose gate finds the edge folded: `NotFound`, word for word.
+async fn door_race(pool: &PgPool, write: DoorWrite) {
+    let x = estate(pool).await;
+
+    let mut act = pool.begin().await.expect("begin the unit's transaction");
+    let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *act)
+        .await
+        .unwrap();
+    sqlx::query("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
+        .bind(x.e.uuid())
+        .bind(x.w.profile)
+        .bind(x.op.profile)
+        .bind(x.op.emitter)
+        .bind(Uuid::now_v7())
+        .execute(&mut *act)
+        .await
+        .expect("the unit runs, its transaction held open");
+    tombstone(&mut act, x.w.profile)
+        .await
+        .expect("the person act's tombstone, after its edge step");
+
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(x.w.profile));
+    let e = x.e;
+    let writer = tokio::spawn(async move { write.run(&backend, e).await });
+    await_blocked(pool, holder, "%", &writer).await;
+
+    act.commit().await.expect("the act commits");
+    let err = writer
+        .await
+        .expect("the writer's task")
+        .expect_err("the write that waited is refused when it resumes");
+    assert!(
+        is_folded_edge_answer(&err, x.e),
+        "{write:?} that waited: the door's folded-edge answer; got {err:?}"
+    );
+
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(x.w.profile));
+    let err = write
+        .run(&backend, x.e)
+        .await
+        .expect_err("a write after the act is refused");
+    assert!(
+        is_folded_edge_answer(&err, x.e),
+        "{write:?} after the act: the door's folded-edge answer; got {err:?}"
+    );
+
+    let hits: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM kb_events WHERE strpos(payload::text, $1) > 0) \
+              + (SELECT count(*) FROM kb_properties WHERE strpos(property_value::text, $1) > 0)",
+    )
+    .bind(LATE)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(hits, 0, "the refused writes left nothing");
+    assert_sentinelled(pool, x.e).await;
+}
+
+/// FAILS IF a door write of an edge that waited on the unit and was refused by the SQL guard
+/// answers anything but the door's own answer for a folded edge: before the mapping it was the
+/// generic `500` (`TemperError::Api`) carrying the guard's message. Retype, fold and an
+/// edge-owned facet, the three doors the guard and the fold projection refuse.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_door_write_racing_the_unit_is_refused_as_a_folded_edge(pool: PgPool) {
+    for write in [DoorWrite::Retype, DoorWrite::Fold, DoorWrite::Facet] {
+        door_race(&pool, write).await;
+    }
+}
+
+/// The calls of the function `name` in the current transaction, which must have set
+/// `track_functions`.
+async fn calls_in_xact(conn: &mut sqlx::PgConnection, name: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT coalesce(sum(calls), 0)::bigint FROM pg_stat_xact_user_functions \
+          WHERE funcname::text = $1",
+    )
+    .bind(name)
+    .fetch_one(conn)
+    .await
+    .unwrap()
+}
+
+/// In one transaction counting function calls, a facet write and a fold of a live edge, then a
+/// second fold of the now-folded edge, which `_project_relationship_folded` admits for an edge no
+/// record names.
+///
+/// FAILS IF a write of a live edge asks `_edge_is_erased` (the guard or the fold projection probes
+/// the ledger before reading `is_folded`), or if a write of a folded edge does not ask it (the
+/// probe is skipped where an erased edge could be).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn only_a_write_of_a_folded_edge_asks_whether_it_is_erased(pool: PgPool) {
+    let x = estate(&pool).await;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL track_functions = 'all'")
+        .execute(&mut *tx)
+        .await
+        .expect("count function calls in this transaction");
+
+    Write::Facet
+        .run(&mut tx, x.w.emitter, x.other)
+        .await
+        .expect("a facet write of the live edge");
+    Write::Fold
+        .run(&mut tx, x.w.emitter, x.other)
+        .await
+        .expect("a fold of the live edge");
+    assert_eq!(
+        calls_in_xact(&mut tx, "_edge_is_erased").await,
+        0,
+        "a write of a live edge never reads the ledger"
+    );
+
+    Write::Fold
+        .run(&mut tx, x.w.emitter, x.other)
+        .await
+        .expect("a second fold of the folded edge, which no record names");
+    assert_eq!(
+        calls_in_xact(&mut tx, "_edge_is_erased").await,
+        1,
+        "a write of a folded edge asks whether it is erased"
+    );
+    tx.rollback().await.unwrap();
+}
+
+/// The plan of the public SQL function `function`'s body, `param` bound to `arg`, with sequential
+/// scans disabled: an index the body's WHERE can use is in the plan, and a body that cannot use it
+/// keeps the scan the setting only penalises.
+async fn body_plan(pool: &PgPool, function: &str, param: &str, arg: Uuid) -> String {
+    let body: String = sqlx::query_scalar(
+        "SELECT prosrc FROM pg_proc \
+          WHERE proname = $1 AND pronamespace = 'public'::regnamespace",
+    )
+    .bind(function)
+    .fetch_one(pool)
+    .await
+    .expect("the function's body");
+    let explain = format!(
+        "EXPLAIN {}",
+        body.trim().trim_end_matches(';').replace(param, "$1::uuid")
+    );
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL enable_seqscan = off")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let plan: Vec<String> = sqlx::query_scalar(&explain)
+        .bind(arg)
+        .fetch_all(&mut *tx)
+        .await
+        .expect("explain the body");
+    tx.rollback().await.unwrap();
+    plan.join("\n")
+}
+
+/// FAILS IF `_edge_is_erased`'s WHERE stops implying `idx_kb_events_edge_erased_subject`'s
+/// predicate (its category or subject_table conjunct dropped or respelled), or the index is gone:
+/// the probe then scans kb_events.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_erased_edge_probe_reads_its_partial_index(pool: PgPool) {
+    let x = estate(&pool).await;
+    unit(&pool, &x, x.w.profile, Uuid::now_v7())
+        .await
+        .expect("the unit erases the edge");
+    let plan = body_plan(&pool, "_edge_is_erased", "p_edge", x.e.uuid()).await;
+    assert!(
+        plan.contains("idx_kb_events_edge_erased_subject"),
+        "the probe reads the partial index:\n{plan}"
+    );
+}
+
+/// FAILS IF no index serves an edge's folded property rows by owner (`idx_kb_properties_edge_owner`
+/// gone, or its predicate no longer implied by `_edge_projection_erased`'s read): the read of an
+/// erased edge's rows then scans kb_properties, since the owner index holds live rows only.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_edges_folded_rows_are_read_by_owner_through_an_index(pool: PgPool) {
+    let x = estate(&pool).await;
+    unit(&pool, &x, x.w.profile, Uuid::now_v7())
+        .await
+        .expect("the unit erases the edge");
+    let plan = body_plan(&pool, "_edge_projection_erased", "p_edge", x.e.uuid()).await;
+    assert!(
+        plan.contains("idx_kb_properties_edge_owner"),
+        "the folded rows are read by owner through the index:\n{plan}"
+    );
 }
 
 /// The unit runs in a transaction left open; an assertion of the erased edge's identity (its
