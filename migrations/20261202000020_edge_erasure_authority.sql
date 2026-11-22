@@ -175,12 +175,16 @@ BEGIN
         LOOP
             v_class := _erasure_path_class(v_ev.type, v_path, v_ev.payload);
             CONTINUE WHEN v_class IS NULL OR v_class = 'keep';
-            -- A path an `erasure` or `edge` row already names on this event holds the sentinel its
-            -- act wrote, and that rewrite is final for every derivation that reads the row:
-            -- deriving it again could only renumber it, and a second row for it collides on
-            -- kb_event_field_redactions_pkey. The redaction row decides, never the value's
-            -- shape, which a writer's own text can take. A `scrub` row
-            -- is not final for an erasure, whose sentinels differ.
+            -- A path an `erasure` or `edge` row already names on this event holds an erasure
+            -- sentinel, and that rewrite is final for every derivation that reads the row:
+            -- deriving it again could only renumber it, and a second row of the same authority
+            -- collides on kb_event_field_redactions_pkey. The redaction row decides, never the
+            -- value's shape, which a writer's own text can take. A `scrub` row is not final for
+            -- an erasure, whose sentinels differ. A derivation that did not see the row is the
+            -- exception: a standalone resource erasure that derived before an edge act committed,
+            -- over an edge already folded, rewrites that act's paths once more to its own
+            -- injective numbering of the pair; over a live edge it raises the retried 'missing or
+            -- already folded'.
             CONTINUE WHEN EXISTS (
                 SELECT 1 FROM kb_event_field_redactions fr
                  WHERE fr.event_id = v_ev.id AND fr.path = v_path
