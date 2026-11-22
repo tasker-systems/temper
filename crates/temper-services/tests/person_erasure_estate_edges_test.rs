@@ -959,3 +959,161 @@ async fn a_context_leaving_the_estate_mid_act_is_decided_by_the_plan_and_the_liv
 /// W10's rename target: text the ledger keeps for a context that left the estate mid-act.
 const DEPARTED_NAME: &str = "Departed Journal";
 const DEPARTED_SLUG: &str = "departed-journal";
+
+/// The label every assertion of an endpoint pair carries, in assertion order: the payload label of
+/// each `relationship_asserted` from `src` to `tgt`.
+async fn pair_labels(pool: &PgPool, src: ResourceId, tgt: ResourceId) -> Vec<Option<String>> {
+    sqlx::query_scalar(
+        "SELECT ev.payload ->> 'label' FROM kb_events ev \
+           JOIN kb_event_types et ON et.id = ev.event_type_id \
+          WHERE et.name = 'relationship_asserted' \
+            AND ev.payload #>> '{source,id}' = $1::text AND ev.payload #>> '{target,id}' = $2::text \
+          ORDER BY ev.id",
+    )
+    .bind(src.uuid())
+    .bind(tgt.uuid())
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// `_edge_erasure_complete(e)`.
+async fn edge_complete(pool: &PgPool, e: EdgeId) -> bool {
+    sqlx::query_scalar("SELECT _edge_erasure_complete($1)")
+        .bind(e.uuid())
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// W11. A team-homed edge asserts a label from S to T first; the subject's estate-homed edge then
+/// asserts the same label on the same pair. The act erases the estate edge alone, its label to
+/// `erased-label-1`, and that rewrite is final: right after the act the edge is complete, the survey
+/// predicts no edge, and a second person act on the tombstoned subject runs clean.
+///
+/// FAILS IF the shared loop derives a path an `edge` row already names, or the label numbering
+/// counts the pair's written sentinels as labels. The team edge's earlier label then ranks 1 and
+/// the written `erased-label-1` ranks 2, so the derivation right after the act rewrites the erased
+/// edge's label again: `_edge_erasure_complete` is false, the survey keeps predicting the edge, and
+/// the second act re-projects (asserting event, `label`, `edge`), which collides on
+/// kb_event_field_redactions_pkey and fails the act.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_label_shared_with_an_edge_homed_outside_the_estate_keeps_its_sentinel_stable(
+    pool: PgPool,
+) {
+    let w = world(&pool).await;
+    let member = world(&pool).await;
+    let team = team_context(&pool).await;
+    let s = resource_in(&pool, &w, team, "alpha").await;
+    let t = resource_in(&pool, &w, team, "beta").await;
+    let outside = edge_in(&pool, &member, team, s, t, SHARED, EventContext::default()).await;
+    let homed = edge_in(&pool, &w, w.home, s, t, SHARED, EventContext::default()).await;
+
+    erase(&pool, w.profile).await;
+
+    assert_eq!(
+        pair_labels(&pool, s, t).await,
+        vec![Some(SHARED.to_owned()), Some("erased-label-1".to_owned())],
+        "the team edge keeps its label; the estate edge's is at its sentinel"
+    );
+    assert!(
+        edge_complete(&pool, homed).await,
+        "the erased edge is complete right after the act"
+    );
+    let admin = operator(&pool).await;
+    let survey = survey_erasure(&pool, &admin, ProfileId::from(w.profile), None)
+        .await
+        .expect("survey");
+    assert!(
+        edge_outcomes(&survey.targets).is_empty(),
+        "the survey predicts no edge: {:?}",
+        survey.targets
+    );
+
+    erase(&pool, w.profile).await;
+
+    assert_eq!(
+        records_of(&pool, homed).await.len(),
+        1,
+        "the second act erases nothing again"
+    );
+    assert_eq!(
+        edge_state(&pool, outside).await,
+        (false, Some(SHARED.to_owned()))
+    );
+}
+
+/// W11's label, asserted from S to T by an edge outside the estate and by one inside it.
+const SHARED: &str = "depends on";
+
+/// W12. Four edges on one pair, in assertion order: A (the first subject's estate) and B (a team)
+/// with one label, C (the team) with another, and D (a second subject's estate) with a third. The
+/// second subject is erased first, then the first, then the pair's target by a standalone resource
+/// erasure. Each act numbers the labels no earlier act wrote after the highest sentinel already on
+/// the pair, so the four sentinels are distinct: D 3, A 4, B 5, C 6.
+///
+/// FAILS IF the label numbering ranks the written sentinels among the labels instead: D's
+/// `erased-label-3` then sits after C's label, A's act numbers A 1, and the resource act ranks B 2
+/// and C 3, writing C onto D's `erased-label-3`, two labels of one pair on one sentinel.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_fresh_label_numbers_after_every_sentinel_written_on_its_pair(pool: PgPool) {
+    let w = world(&pool).await;
+    let second = world(&pool).await;
+    let member = world(&pool).await;
+    let team = team_context(&pool).await;
+    let s = resource_in(&pool, &member, team, "alpha").await;
+    let t = resource_in(&pool, &member, team, "beta").await;
+    edge_in(&pool, &w, w.home, s, t, SHARED, EventContext::default()).await;
+    edge_in(&pool, &member, team, s, t, SHARED, EventContext::default()).await;
+    edge_in(
+        &pool,
+        &member,
+        team,
+        s,
+        t,
+        "a team label",
+        EventContext::default(),
+    )
+    .await;
+    edge_in(
+        &pool,
+        &second,
+        second.home,
+        s,
+        t,
+        "a second estate's label",
+        EventContext::default(),
+    )
+    .await;
+
+    erase(&pool, second.profile).await;
+    erase(&pool, w.profile).await;
+    let admin = operator(&pool).await;
+    let outcome = execute_resource_erasure(
+        &pool,
+        None,
+        &admin,
+        ResourceErasureRequest {
+            resource: t,
+            also_strike_blobs: &[],
+            surface: Surface::ApiHttp,
+        },
+    )
+    .await
+    .expect("the resource act runs");
+    assert!(matches!(outcome, ResourceErasureOutcome::Completed(_)));
+
+    let labels = pair_labels(&pool, s, t).await;
+    assert_eq!(
+        labels,
+        [
+            "erased-label-4",
+            "erased-label-5",
+            "erased-label-6",
+            "erased-label-3"
+        ]
+        .map(|l| Some(l.to_owned()))
+        .to_vec(),
+        "each act numbers after the pair's written sentinels"
+    );
+}
