@@ -19,6 +19,7 @@ use uuid::Uuid;
 use temper_core::types::erasure::EstateDisposition;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::property_owner::PropertyOwner;
+use temper_services::error::ApiError;
 use temper_services::services::erasure_service::{
     execute_erasure, survey_erasure, ErasureCompletion,
 };
@@ -1234,15 +1235,18 @@ async fn await_waiting<T>(
 /// team resources, so only the edge step reaches it. A side transaction holds the lower context
 /// `FOR SHARE`, so the act, having erased the edge, waits at its estate-context lock, which takes
 /// the lower context first. Meanwhile the subject reassigns the edge's context to a team it owns,
-/// through `context_reassign`, the door a context leaves the estate by.
+/// through `context_reassign`, the door a context leaves the estate by. The edge step does not hold
+/// the edge's home context (ruling 12 of decision 01a1f6e8-81bd-758c-be87-a6824b66352a), so the
+/// reassign commits while the act waits, and the commit check
+/// (`edge_erasure_requires_an_erased_owner`) refuses the record, whose edge is no longer homed in
+/// the estate: the act fails as a whole and the service answers 500. Nothing it did persists, and
+/// the act run again completes, leaving the reassigned context's edge live.
 ///
-/// FAILS IF the edge step does not hold the edge's home context from its home check on: the
-/// reassign then commits while the act waits, the context leaves the estate after its edge was
-/// erased, and the commit check (`edge_erasure_requires_an_erased_owner`) fails the whole act. With
-/// the lock the reassign waits for the act, the act completes with the edge erased, and the
-/// reassign is then refused, the context staying in the erased estate.
+/// FAILS IF the reassign waits on the act (a lock on the edge's home context taken before the
+/// act's context lock), or if the act commits a record for an edge homed outside the estate, or
+/// if any of the failed act's writes persist, or if the re-run does not complete.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn a_reassign_during_the_act_waits_for_it_rather_than_failing_it(pool: PgPool) {
+async fn a_reassign_during_the_act_fails_it_and_a_rerun_completes(pool: PgPool) {
     let w = world(&pool).await;
     let second = test_support::context::insert_personal(&pool, w.profile, "second", "second").await;
     let (low, high) = if w.home.uuid() < second {
@@ -1268,6 +1272,11 @@ async fn a_reassign_during_the_act_waits_for_it_rather_than_failing_it(pool: PgP
     )
     .await;
     let admin = operator(&pool).await;
+    let quoted = ledger_quoting(&pool, LABEL).await;
+    assert!(
+        quoted > 0,
+        "the edge's label is on the ledger before the act"
+    );
 
     let mut held = pool.begin().await.unwrap();
     let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
@@ -1301,43 +1310,77 @@ async fn a_reassign_during_the_act_waits_for_it_rather_than_failing_it(pool: PgP
     )
     .await;
 
-    let pool3 = pool.clone();
-    let emitter = w.emitter;
-    let reassign = tokio::spawn(async move {
-        sqlx::query_scalar::<_, Uuid>("SELECT context_reassign($1, $2)")
-            .bind(json!({
-                "context_id": high,
-                "to_owner_table": "kb_teams",
-                "to_owner_id": target,
-            }))
-            .bind(emitter)
-            .fetch_one(&pool3)
-            .await
-    });
-    await_waiting(
-        &pool,
-        None,
-        "%context_reassign%",
-        &reassign,
-        "the reassign of the erased edge's context",
-    )
-    .await;
+    sqlx::query_scalar::<_, Uuid>("SELECT context_reassign($1, $2)")
+        .bind(json!({
+            "context_id": high,
+            "to_owner_table": "kb_teams",
+            "to_owner_id": target,
+        }))
+        .bind(w.emitter)
+        .fetch_one(&pool)
+        .await
+        .expect("the reassign commits while the act waits at its context lock");
+    assert!(
+        !act.is_finished(),
+        "the act is still waiting at its context lock"
+    );
 
     held.rollback().await.unwrap();
-    let completion = act.await.unwrap().expect("the person act completes");
-    assert_eq!(
-        edge_outcomes(&completion.targets),
-        vec![ONE_EDGE.to_owned()],
-        "the edge is erased, none skipped: {:?}",
-        completion.targets
-    );
-    assert_eq!(records_of(&pool, e).await.len(), 1, "one edge_erased");
-    assert_eq!(edge_state(&pool, e).await, (true, None));
-
-    reassign
+    let err = act
         .await
         .unwrap()
-        .expect_err("the reassign that waited is refused once the act has erased the context");
+        .expect_err("the commit check refuses a record whose edge left the estate");
+    assert!(
+        matches!(err, ApiError::Internal(ref m) if m == "principal erasure act failed"),
+        "the service answers the incumbent 500: {err:?}"
+    );
+
+    assert!(
+        records_of(&pool, e).await.is_empty(),
+        "no edge_erased persists"
+    );
+    assert_eq!(
+        edge_state(&pool, e).await,
+        (false, Some(LABEL.to_owned())),
+        "the edge is live and labelled, as before the act"
+    );
+    assert_eq!(
+        ledger_quoting(&pool, LABEL).await,
+        quoted,
+        "no ledger rewrite persists"
+    );
+    let tombstoned: bool =
+        sqlx::query_scalar("SELECT tombstoned_at IS NOT NULL FROM kb_profiles WHERE id = $1")
+            .bind(w.profile)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!tombstoned, "the subject is not tombstoned");
+    let recorded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id \
+          WHERE et.name = 'principal_erased' AND ev.payload ->> 'subject_id' = $1::text",
+    )
+    .bind(w.profile)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(recorded, 0, "no principal_erased persists");
+
+    let completion = erase(&pool, w.profile).await;
+    assert!(
+        edge_outcomes(&completion.targets).is_empty(),
+        "the re-run reaches no edge, the context having left the estate: {:?}",
+        completion.targets
+    );
+    assert!(
+        records_of(&pool, e).await.is_empty(),
+        "the re-run erases no edge"
+    );
+    assert_eq!(
+        edge_state(&pool, e).await,
+        (false, Some(LABEL.to_owned())),
+        "the reassigned context's edge stays live"
+    );
     let owner: (String, Uuid) =
         sqlx::query_as("SELECT owner_table, owner_id FROM kb_contexts WHERE id = $1")
             .bind(high)
@@ -1346,7 +1389,7 @@ async fn a_reassign_during_the_act_waits_for_it_rather_than_failing_it(pool: PgP
             .unwrap();
     assert_eq!(
         owner,
-        ("kb_profiles".to_owned(), w.profile),
-        "the context stays in the erased estate"
+        ("kb_teams".to_owned(), target),
+        "the context stays with the team"
     );
 }
