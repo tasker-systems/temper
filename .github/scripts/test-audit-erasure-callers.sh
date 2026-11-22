@@ -12,7 +12,9 @@
 #   (c) RED   a moved caller: the act called from another file than the baselined one
 #   (d) RED   each other class, one witness each: a redaction apply, a projector, the replay
 #             setting, a marker write, a marker-writer call; and the spellings SQL treats alike
-#             (lowercase and schema-qualified, COPY, SET LOCAL, an uppercase call)
+#             (lowercase and schema-qualified, COPY, MERGE, SET LOCAL, an uppercase call, quoted
+#             identifiers, DDL on the marker table, an E'' or spaced setting name, a connection
+#             option)
 #   (e) RED   a caller in api/*.rs, naming the file
 #   (f) RED   a caller in an operator-run SQL template, naming the file
 #   (g) RED   an empty scan fails as broken, it does not pass
@@ -43,6 +45,7 @@ FIXTURE_FILES=(
     crates/temper-services/src/services/resource_erasure_service.rs
     crates/temper-substrate/src/replay.rs
     crates/temper-substrate/src/test_schema.rs
+    crates/temper-migrate/src/main.rs
 )
 
 make_fixture() {
@@ -161,6 +164,24 @@ d_case "SET LOCAL of the replay setting" replay_setting \
 # shellcheck disable=SC2016
 d_case "an uppercase act call" execute \
     'sqlx::query("SELECT RESOURCE_ERASURE_EXECUTE($1, $2, $3, $4, $5)");'
+
+# Quoted identifiers, and the other ways a session sets the setting.
+d_case "a quoted marker-writer call" replay_marker \
+    'sqlx::query("SELECT \"_replay_target_mark\"()");'
+d_case "a quoted act call" execute \
+    'sqlx::query("SELECT \"resource_erasure_execute\"(NULL, NULL, NULL, NULL, NULL)");'
+d_case "DDL on the marker table" replay_marker \
+    'sqlx::query("ALTER TABLE kb_replay_target DISABLE TRIGGER ALL");'
+d_case "DDL on the marker table, IF EXISTS" replay_marker \
+    'sqlx::query("ALTER TABLE IF EXISTS kb_replay_target DISABLE TRIGGER ALL");'
+d_case "a quoted SET of the setting" replay_setting \
+    'sqlx::query("SET \"temper.replaying\" = on");'
+d_case "whitespace inside the setting name" replay_setting \
+    "sqlx::query(\"SELECT set_config('temper .replaying', 'on', true)\");"
+d_case "an E'' spelling of the setting" replay_setting \
+    "sqlx::query(\"SELECT set_config(E'temper.replaying', 'on', true)\");"
+d_case "a connection option naming the setting" replay_setting \
+    'let o = PgConnectOptions::new().options([("temper.replaying", "on")]);'
 
 # ── (e) api/*.rs ───────────────────────────────────────────────────────────────────────────────
 FE="$WORK/fe"; make_fixture "$FE"

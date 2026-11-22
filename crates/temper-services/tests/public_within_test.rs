@@ -628,7 +628,7 @@ async fn the_trigger_and_the_checks_refuse_the_barred_shapes(pool: PgPool) {
         );
         sp.rollback().await.unwrap();
     }
-    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     sqlx::query(
         "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) VALUES ($1, $2, NULL)",
     )
@@ -3456,7 +3456,7 @@ async fn a_hard_delete_under_the_setting_alone_is_still_recorded(pool: PgPool) {
         .execute(&mut *tx)
         .await
         .unwrap();
-    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     sqlx::query("DELETE FROM kb_teams WHERE id = $1")
         .bind(marked)
         .execute(&mut *tx)

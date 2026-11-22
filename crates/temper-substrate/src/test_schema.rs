@@ -106,13 +106,30 @@ pub async fn truncate_kb_tables(pool: &PgPool) {
 }
 
 /// Mark this test database a replay target: the `kb_replay_target` row that `_replay_mode()`
-/// (20261203000010) requires beside `temper.replaying`. The replay walk marks its own target
-/// through `_replay_target_mark()`, which refuses a populated ledger; a fixture that sets the flag
-/// over rows it seeded marks the database here instead. Panics on failure, as a test fixture
+/// (20261203000010) requires beside `temper.replaying`.
+///
+/// **This bypasses the empty-ledger trigger by DDL, on purpose.** The trigger
+/// (`kb_replay_target_requires_an_empty_ledger`) refuses the row while `kb_events` holds anything,
+/// which is every migrated test database. The paired witnesses need the same seeded database
+/// unmarked first (a guard refuses under the setting alone) and marked next (it stands down), so
+/// this disables the trigger, inserts the row, and enables the trigger again, all in one
+/// transaction, a savepoint when the caller is already in one. A failed insert rolls the disable
+/// back with it, so the trigger is never left disabled. Inside a caller's transaction the ALTER
+/// holds an exclusive lock on kb_replay_target until that transaction ends. The replay walk never comes here: it marks
+/// its own empty target through `_replay_target_mark()`. Panics on failure, as a test fixture
 /// should.
-pub async fn mark_replay_target<'e, E: Executor<'e, Database = sqlx::Postgres>>(executor: E) {
-    executor
-        .execute("INSERT INTO kb_replay_target (id) VALUES (true) ON CONFLICT (id) DO NOTHING")
-        .await
-        .expect("mark the database a replay target");
+pub async fn mark_replay_target(conn: &mut sqlx::PgConnection) {
+    use sqlx::Connection;
+    let mut tx = conn.begin().await.expect("open the marking transaction");
+    for sql in [
+        "ALTER TABLE kb_replay_target DISABLE TRIGGER kb_replay_target_requires_an_empty_ledger",
+        "INSERT INTO kb_replay_target (id) VALUES (true) ON CONFLICT (id) DO NOTHING",
+        "ALTER TABLE kb_replay_target ENABLE TRIGGER kb_replay_target_requires_an_empty_ledger",
+    ] {
+        (&mut *tx)
+            .execute(sql)
+            .await
+            .unwrap_or_else(|e| panic!("mark the database a replay target ({sql}): {e}"));
+    }
+    tx.commit().await.expect("commit the marking transaction");
 }

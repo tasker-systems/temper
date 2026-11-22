@@ -27,25 +27,59 @@ const GUARDS: &[&str] = &[
     "kb_teams_public_within_hard_delete_transitions",
 ];
 
+/// The functions, outside the helper and the posture check, that may read or set the setting: a
+/// body naming the word `replaying` in any case (so `CURRENT_SETTING('TEMPER.REPLAYING')` and
+/// `E'temper.replaying'`), a body reading `pg_settings` at all (whatever name it builds), or a
+/// declaration carrying the setting (`SET temper.replaying = …`, in `proconfig`). A name built from
+/// fragments and read through `current_setting` is not seen.
+const INLINE_READERS: &str = "SELECT p.oid::regprocedure::text FROM pg_proc p \
+       JOIN pg_namespace n ON n.oid = p.pronamespace \
+      WHERE n.nspname IN ('public', 'sensitivity') \
+        AND (p.prosrc ~* '(replaying|pg_settings)' \
+             OR array_to_string(p.proconfig, ' ') ~* 'replaying') \
+        AND p.proname NOT IN ('_replay_mode', 'replay_posture') \
+      ORDER BY 1";
+
 /// FAILS IF: any function reads `temper.replaying` itself (a guard re-issued from a body that
-/// predates `_replay_mode`, or a new one written inline), or a listed guard stops asking
-/// `_replay_mode()`.
+/// predates `_replay_mode`, or a new one written inline), in any spelling, or a listed guard stops
+/// asking `_replay_mode()`.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn only_replay_mode_reads_the_replay_setting(pool: PgPool) {
-    let inline: Vec<String> = sqlx::query_scalar(
-        "SELECT p.oid::regprocedure::text FROM pg_proc p \
-           JOIN pg_namespace n ON n.oid = p.pronamespace \
-          WHERE n.nspname IN ('public', 'sensitivity') \
-            AND p.prosrc ~ 'current_setting\\s*\\(\\s*''temper\\.replaying''' \
-            AND p.proname NOT IN ('_replay_mode', 'replay_posture') \
-          ORDER BY 1",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let inline: Vec<String> = sqlx::query_scalar(INLINE_READERS)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
     assert!(
         inline.is_empty(),
         "these read temper.replaying instead of asking _replay_mode(): {inline:?}"
+    );
+
+    // The catalogue's own bite: a reader spelled in capitals, one through pg_settings, and a
+    // function declared with the setting, are seen.
+    let mut tx = pool.begin().await.unwrap();
+    for ddl in [
+        "CREATE FUNCTION public.replay_probe_upper() RETURNS boolean LANGUAGE sql AS \
+           $$ SELECT CURRENT_SETTING('TEMPER.REPLAYING', true) = 'on' $$",
+        "CREATE FUNCTION public.replay_probe_settings() RETURNS boolean LANGUAGE sql AS \
+           $$ SELECT setting = 'on' FROM pg_settings WHERE name = E'temper.' || 'repl' || 'aying' $$",
+        "CREATE FUNCTION public.replay_probe_declared() RETURNS boolean LANGUAGE sql \
+           SET temper.replaying = 'on' AS $$ SELECT true $$",
+    ] {
+        sqlx::query(ddl).execute(&mut *tx).await.unwrap();
+    }
+    let seen: Vec<String> = sqlx::query_scalar(INLINE_READERS)
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(
+        seen,
+        [
+            "replay_probe_declared()",
+            "replay_probe_settings()",
+            "replay_probe_upper()"
+        ],
+        "the catalogue sees a capitalised read, a pg_settings read and a declared setting"
     );
 
     for guard in GUARDS {
@@ -90,7 +124,7 @@ async fn replay_mode_needs_the_setting_and_the_marker(pool: PgPool) {
         .await
         .unwrap();
     assert!(!mode(&mut tx).await, "the setting alone");
-    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     assert!(mode(&mut tx).await, "the setting in a marked database");
     sqlx::query("SELECT set_config('temper.replaying', 'off', true)")
         .execute(&mut *tx)
@@ -100,8 +134,9 @@ async fn replay_mode_needs_the_setting_and_the_marker(pool: PgPool) {
     tx.rollback().await.unwrap();
 }
 
-/// FAILS IF: the replay walk's marker writer marks a database whose ledger holds events, or
-/// refuses an empty one.
+/// FAILS IF: the marker can be written, by `_replay_target_mark()` or by a plain INSERT, in a
+/// database whose ledger holds events, or cannot be in an empty one; or the fixture's DDL bypass
+/// leaves the trigger disabled.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_marker_writer_marks_only_an_empty_ledger(pool: PgPool) {
     let events: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
@@ -121,11 +156,40 @@ async fn the_marker_writer_marks_only_an_empty_ledger(pool: PgPool) {
         Some("23514"),
         "{err}"
     );
+    let err = sqlx::query("INSERT INTO kb_replay_target (id) VALUES (true)")
+        .execute(&pool)
+        .await
+        .expect_err("a plain INSERT is held to the same rule: the trigger binds every writer");
+    assert_eq!(
+        err.as_database_error().and_then(|e| e.code()).as_deref(),
+        Some("23514"),
+        "{err}"
+    );
     let marked: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_replay_target")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(marked, 0, "the refusal wrote no marker");
+    assert_eq!(marked, 0, "the refusals wrote no marker");
+
+    // The fixture's bypass is DDL inside one transaction, and leaves the trigger as it found it.
+    let mut conn = pool.acquire().await.unwrap();
+    temper_substrate::test_schema::mark_replay_target(&mut conn).await;
+    let enabled: String = sqlx::query_scalar(
+        "SELECT tgenabled::text FROM pg_trigger \
+          WHERE tgname = 'kb_replay_target_requires_an_empty_ledger'",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(
+        enabled, "O",
+        "the trigger is enabled again after the fixture"
+    );
+    sqlx::query("DELETE FROM kb_replay_target")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
 
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("TRUNCATE kb_events CASCADE")
@@ -196,7 +260,7 @@ async fn replay_posture_names_each_unsafe_state(pool: PgPool) {
     );
 
     // The marker.
-    temper_substrate::test_schema::mark_replay_target(&mut *conn).await;
+    temper_substrate::test_schema::mark_replay_target(&mut conn).await;
     assert_eq!(
         posture(&mut conn).await,
         ["kb_replay_target carries the replay-target marker"]
@@ -230,7 +294,7 @@ async fn the_gating_snapshot_is_taken_under_the_setting_alone(pool: PgPool) {
     ] {
         sqlx::query(ddl).execute(&mut *tx).await.unwrap();
     }
-    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'replay-probe-marked'")
         .execute(&mut *tx)
         .await
@@ -281,7 +345,7 @@ async fn the_trail_check_holds_under_the_setting_alone(pool: PgPool) {
         unmarked.contains("not in its subject's trail"),
         "unmarked, the setting alone keeps the trail check: {unmarked}"
     );
-    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     let marked = sqlx::query(PROJECT)
         .execute(&mut *tx)
         .await

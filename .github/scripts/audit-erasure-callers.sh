@@ -12,6 +12,10 @@
 # `kb_replay_target`, a call of `_replay_target_mark`) are what let the guards stand down for
 # replay (`_replay_mode()`, 20261203000010); only the replay walk should do either.
 #
+# It pins LITERAL SQL sites only: the line where the SQL names the function, the setting or the
+# table. A Rust wrapper that reaches one of them (`replay::replay`, which marks its target;
+# `test_schema::mark_replay_target`) is out of its view, and so is every caller of that wrapper.
+#
 # This does NOT forbid a caller. It PINS the reviewed set, so a new caller, or one that moves,
 # fails CI until a reviewer answers: what admits this caller, and is it the act's own door?
 #
@@ -52,26 +56,33 @@ cd "${REPO_ROOT_OVERRIDE:-$(git rev-parse --show-toplevel)}"
 #   erasure_service.rs           the person act's door; the admin route holds &SystemAdmin.
 #   resource_erasure_service.rs  the resource act's door; the admin route holds &SystemAdmin.
 #   replay.rs                    the replay walk: re-projects recorded erasures at their ledger
-#                                positions, sets the setting transaction-local, marks its target.
-#   test_schema.rs               test-support only (feature-gated): marks a test database.
+#                                positions, sets the setting transaction-local, marks its empty
+#                                target first and clears the marker once the walk succeeds.
+#   test_schema.rs               test-support only (feature-gated): marks a seeded test database,
+#                                bypassing the empty-ledger trigger by DDL (disable, insert, enable).
+#   temper-migrate main.rs       prose: the exit-5 message names the setting.
 read -r -d '' BASELINE <<'EOF' || true
+1 replay_setting crates/temper-migrate/src/main.rs
 1 execute crates/temper-services/src/services/erasure_service.rs
 1 execute crates/temper-services/src/services/resource_erasure_service.rs
 2 apply_redaction crates/temper-substrate/src/replay.rs
 3 projector crates/temper-substrate/src/replay.rs
-1 replay_marker crates/temper-substrate/src/replay.rs
+2 replay_marker crates/temper-substrate/src/replay.rs
 2 replay_setting crates/temper-substrate/src/replay.rs
-1 replay_marker crates/temper-substrate/src/test_schema.rs
+3 replay_marker crates/temper-substrate/src/test_schema.rs
 EOF
 
 # class<TAB>pattern (POSIX ERE, lowercase: each line is matched lowercased, as SQL is
-# case-insensitive).
+# case-insensitive). `(\\?")?` admits a quoted identifier, escaped or not, inside a Rust string.
+#   replay_setting  any line naming the setting: set_config, SET, a quoted or E'' spelling, a
+#                   connection option. A read or a message naming it is pinned too: in
+#                   production code, naming the setting at all is the reviewed act.
 read -r -d '' PATTERNS <<'EOF' || true
-execute	[a-z_]*_erasure_execute[[:space:]]*\(
-apply_redaction	[a-z_]*_erasure_apply_redaction[[:space:]]*\(
-projector	_project_[a-z_]*redactions[[:space:]]*\(
-replay_setting	set_config[[:space:]]*\([[:space:]]*'temper\.replaying'|(^|[^a-z_])set[[:space:]]+((local|session)[[:space:]]+)?temper\.replaying
-replay_marker	(insert[[:space:]]+into|merge[[:space:]]+into|update|delete[[:space:]]+from|truncate([[:space:]]+table)?|copy)[[:space:]]+(only[[:space:]]+)?("?public"?\.)?"?kb_replay_target|_replay_target_mark[[:space:]]*\(
+execute	[a-z_]*_erasure_execute(\\?")?[[:space:]]*\(
+apply_redaction	[a-z_]*_erasure_apply_redaction(\\?")?[[:space:]]*\(
+projector	_project_[a-z_]*redactions(\\?")?[[:space:]]*\(
+replay_setting	temper[[:space:]]*\.[[:space:]]*replaying
+replay_marker	(insert[[:space:]]+into|merge[[:space:]]+into|update|delete[[:space:]]+from|truncate([[:space:]]+table)?|copy|alter[[:space:]]+table([[:space:]]+if[[:space:]]+exists)?)[[:space:]]+(only[[:space:]]+)?((\\?")?public(\\?")?\.)?(\\?")?kb_replay_target|_replay_target_mark(\\?")?[[:space:]]*\(
 EOF
 
 # shellcheck source=out-of-line-test-modules.sh

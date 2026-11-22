@@ -530,7 +530,7 @@ async fn rows_without_a_truthful_order_are_refused_or_never_served(pool: PgPool)
         );
         sp.rollback().await.unwrap();
     }
-    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     insert(None, None)
         .execute(&mut *tx)
         .await

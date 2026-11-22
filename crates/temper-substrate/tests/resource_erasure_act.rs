@@ -4994,7 +4994,7 @@ async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgP
         );
         sp.rollback().await.unwrap();
     }
-    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     writes::set_property_in_tx(
         &mut tx,
         resource,
@@ -5282,7 +5282,7 @@ async fn the_facet_regrain_cannot_reinflate_an_erased_resource(pool: sqlx::PgPoo
         .execute(&mut *tx)
         .await
         .unwrap();
-    temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     sqlx::query("SELECT * FROM _facet_regrain_from_events($1)")
         .bind(r.uuid())
         .execute(&mut *tx)

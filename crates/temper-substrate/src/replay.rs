@@ -714,9 +714,10 @@ pub const WALK_ORDER: &str = walk_order!();
 ///
 /// **The target is marked first.** The guards stand down only under `_replay_mode()`
 /// (20261203000010): `temper.replaying` on AND the database carrying the `kb_replay_target` row.
-/// `_replay_target_mark()` writes that row and refuses (`check_violation`) a database whose
-/// `kb_events` holds any row, so a replay pointed at a live ledger fails here, before it restores
-/// anything or lowers any guard.
+/// `_replay_target_mark()` writes that row, and the table's trigger refuses it (`check_violation`)
+/// in a database whose `kb_events` holds any row, so a replay pointed at a live ledger fails here,
+/// before it restores anything or lowers any guard. A walk that succeeds deletes the row as its
+/// last step; one that fails leaves it, for `replay_posture()` to report.
 pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
     sqlx::query_scalar!(r#"SELECT true AS "marked!" FROM (SELECT _replay_target_mark()) m"#)
         .fetch_one(pool)
@@ -1468,6 +1469,12 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
         .execute(pool)
         .await?;
     restored?;
+    // The walk is done, so the target stops being one: a database rebuilt by replay (and then
+    // dumped, or branched) carries no marker onward. A replay that failed above returned before
+    // this, and leaves the marker for replay_posture() to report.
+    sqlx::query!("DELETE FROM kb_replay_target")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

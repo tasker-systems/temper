@@ -3045,7 +3045,7 @@ async fn the_walk_key_orders_events_as_replay_walks_them(pool: PgPool) {
             .execute(&mut *tx)
             .await
             .unwrap();
-        temper_substrate::test_schema::mark_replay_target(&mut *tx).await;
+        temper_substrate::test_schema::mark_replay_target(&mut tx).await;
         for &(id, seq) in rows {
             sqlx::query(
                 "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, payload, \

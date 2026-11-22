@@ -2,20 +2,25 @@
 -- `temper.replaying` themselves, so the setting alone, in a database without the kb_replay_target
 -- marker, lowers none of them.
 --
--- Each function below is re-issued from its latest definition with exactly one change: its read of
--- the setting becomes a call to _replay_mode(). Every other line is that definition's, byte for
--- byte. A later edit must keep both halves: the body as it was, and no inline read of the setting
+-- Each function below is re-issued from its latest definition with two changes and no others: its
+-- CREATE becomes CREATE OR REPLACE, and its read of the setting becomes a call to
+-- public._replay_mode(), schema-qualified because two of them (_resource_write_guard,
+-- kb_events_order_recorded) pin no search_path and must not resolve the helper through a caller's.
+-- Every other line is that definition's, byte for byte. A later edit must keep both halves: the
+-- body as it was, and no inline read of the setting
 -- (replay_mode_guard_test holds pg_proc to the second).
 --
 -- Latest definitions re-issued:
 --   _resource_write_guard                          20260929040730_resource_erasure_act
 --   kb_events_order_recorded                       20261116000010_kb_events_record_order
 --   _project_field_redactions                      20261022100000_person_erasure_evented_retirement
---   kb_system_settings_gating_before               20261124000010_gating_slug_writes_record_their_transitions
+--   kb_system_settings_gating_before
+--     20261124000010_gating_slug_writes_record_their_transitions
 --   kb_team_public_within_shape_guard              20261120000000_public_within_policy_and_helpers
 --   kb_teams_public_within_cascade,
 --   kb_teams_public_within_hard_delete_begin,
---   kb_teams_public_within_hard_delete_transitions 20261124000000_public_within_hard_delete_transitions
+--   kb_teams_public_within_hard_delete_transitions
+--     20261124000000_public_within_hard_delete_transitions
 --
 -- The COMMENTs that named the setting as the stand-down condition are re-issued to name
 -- _replay_mode, among them two projectors that reach the trail check through
@@ -27,7 +32,7 @@ RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     v_erased timestamptz;
 BEGIN
-    IF _replay_mode() THEN
+    IF public._replay_mode() THEN
         RETURN;
     END IF;
     -- One statement, so a wait on the act's FOR UPDATE re-reads the row version the act
@@ -43,7 +48,7 @@ $$;
 -- kb_events_order_recorded
 CREATE OR REPLACE FUNCTION kb_events_order_recorded() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF _replay_mode() THEN
+    IF public._replay_mode() THEN
         RETURN NEW;
     END IF;
     IF NEW.xact_id IS NULL OR NEW.seq IS NULL THEN
@@ -109,7 +114,7 @@ BEGIN
         -- abort the whole replay. Live, kb_events_redaction_in_trail checks it again at the
         -- rewrite, so this check is the earlier of two.
         IF NOT v_trail ? (v_entry ->> 'event')
-           AND NOT _replay_mode() THEN
+           AND NOT public._replay_mode() THEN
             RAISE EXCEPTION '%: event % names event %, which is not in its subject''s trail',
                 v_name, p_event, v_entry ->> 'event';
         END IF;
@@ -145,7 +150,7 @@ BEGIN
     PERFORM set_config('temper.public_within_gating_slug', '', true);
     IF NEW.gating_team_slug IS NOT DISTINCT FROM OLD.gating_team_slug
        OR current_setting('temper.gating_slug_recorded', true) = pg_current_xact_id()::text
-       OR _replay_mode() THEN
+       OR public._replay_mode() THEN
         RETURN NEW;
     END IF;
     PERFORM set_config(
@@ -165,7 +170,7 @@ LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-    IF _replay_mode() THEN
+    IF public._replay_mode() THEN
         RETURN NEW;
     END IF;
     IF TG_OP = 'INSERT' AND NEW.opened_by IS NULL THEN
@@ -201,7 +206,7 @@ DECLARE
     v_correlation uuid;
     v_before      jsonb;
 BEGIN
-    IF _replay_mode() THEN
+    IF public._replay_mode() THEN
         RETURN OLD;
     END IF;
     PERFORM _public_within_effects_lock();
@@ -259,7 +264,7 @@ LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-    IF _replay_mode() THEN
+    IF public._replay_mode() THEN
         RETURN NULL;
     END IF;
     PERFORM set_config(
@@ -282,7 +287,7 @@ DECLARE
     v_stack jsonb;
     v_frame jsonb;
 BEGIN
-    IF _replay_mode() THEN
+    IF public._replay_mode() THEN
         RETURN NULL;
     END IF;
     v_stack := nullif(current_setting('temper.public_within_hard_delete', true), '')::jsonb;

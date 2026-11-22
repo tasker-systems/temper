@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM kb_replay_target",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "4821a3983917a58b1ec9a2b736f483ec69d86d79b2cd182152dc675e8ac7a45f"
+}
