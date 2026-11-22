@@ -8,7 +8,10 @@
 --
 --   1. _erasure_trail_payload_redaction(uuid[], jsonb) is the per-event loop of
 --      _resource_erasure_payload_redaction (20261010100000), whose output is unchanged. The loop
---      leaves every event correlated with a resource_erased or edge_erased other than itself.
+--      leaves every event correlated with a resource_erased or edge_erased other than itself, and
+--      every path of an event that an `erasure` or `edge` row already names: that rewrite is
+--      final. _resource_erasure_label_numbers (20261009100000) numbers only the labels no such row
+--      names, after the highest sentinel those rows' events carry on the pair.
 --   2. _edge_erasure_trail_scope(uuid) is an edge's own events, domain only, and
 --      _edge_erasure_payload_redaction(uuid) the shared loop over it.
 --   3. edge_erased, admin and NULL-anchored, and the redaction authority `edge`; the predicates
@@ -22,6 +25,10 @@
 --
 -- A later edit must not break:
 --   * one loop: a sentinel rule changed in _erasure_trail_payload_redaction changes both acts;
+--   * a rewritten path is final: the edge act rewrites one edge of an endpoint pair, so a label
+--     numbering that counted the pair's written sentinels as labels would renumber them on the
+--     next derivation, and the loop would rewrite a path its record already named, which the
+--     edge act's second run meets as a kb_event_field_redactions_pkey collision;
 --   * the shared loop filters nothing by category or type: the trail scopes do;
 --   * the phantom arm reads the edge's row, so the edge trail is read while the kb_edges row
 --     exists;
@@ -36,6 +43,60 @@
 -- ---------------------------------------------------------------------------
 -- Section 1. One derivation loop over a trail.
 -- ---------------------------------------------------------------------------
+-- The edge-label numbering, 20261009100000's with its written labels set aside. A resource act
+-- rewrites every label of a pair at once, so its sentinels are a fixed point of the numbering
+-- that counts them; an edge act rewrites one edge's, and a pair can hold other edges' labels,
+-- homed outside the estate. Counted as labels, its sentinels then rank after a live label they
+-- were numbered before, and a numbering that names them anew renumbers a final rewrite. So a
+-- label at a location an `erasure` or `edge` row names (the authorities whose sentinels the
+-- shared loop writes; a `scrub` row is no erasure's and leaves its location to number) is not
+-- numbered: the loop passes over it. The labels left are numbered after the highest
+-- erased-label-<n> those locations carry, so a fresh number never lands on a written sentinel of
+-- another label. With no written label on the pair the numbering is 20261009100000's; a resource
+-- act rewrites each of its pairs whole, and its erased endpoint takes no later edge write
+-- (_resource_write_guard), so every answer a resource act alone produced is unchanged.
+CREATE OR REPLACE FUNCTION _resource_erasure_label_numbers(p_source_table text, p_source_id uuid,
+                                                           p_target_table text, p_target_id uuid)
+RETURNS TABLE(label text, n integer)
+LANGUAGE sql STABLE AS $$
+    WITH asserted AS (
+        SELECT ev.id, ev.occurred_at, ev.payload ->> 'label' AS label,
+               EXISTS (SELECT 1 FROM kb_event_field_redactions fr
+                        WHERE fr.event_id = ev.id AND fr.path = 'label'
+                          AND fr.authority IN ('erasure', 'edge')) AS written
+          FROM kb_events ev
+          JOIN kb_event_types et ON et.id = ev.event_type_id
+         WHERE (ev.payload -> 'source') ->> 'id' = p_source_id::text
+           AND (ev.payload -> 'source') ->> 'table' = p_source_table
+           AND (ev.payload -> 'target') ->> 'id' = p_target_id::text
+           AND (ev.payload -> 'target') ->> 'table' = p_target_table
+           AND et.name = 'relationship_asserted'
+           AND NOT _erasure_label_is_kept(ev.payload -> 'label')
+    ), firsts AS (
+        SELECT DISTINCT ON (a.label) a.label, a.occurred_at, a.id
+          FROM asserted a
+         WHERE NOT a.written
+         ORDER BY a.label, a.occurred_at, a.id
+    ), base AS (
+        SELECT coalesce(max(substring(a.label FROM '^erased-label-([1-9][0-9]*)$')::integer), 0) AS n
+          FROM asserted a
+         WHERE a.written
+    )
+    SELECT f.label, (b.n + row_number() OVER (ORDER BY f.occurred_at, f.id))::integer
+      FROM firsts f CROSS JOIN base b;
+$$;
+
+COMMENT ON FUNCTION _resource_erasure_label_numbers(text, uuid, text, uuid) IS
+$c$The edge-label numbering of one ordered endpoint pair (ruled 2026-10-08): each distinct non-kept
+label (_erasure_label_is_kept) a relationship_asserted from p_source to p_target carries at a
+location no `erasure` or `edge` kb_event_field_redactions row names, with the n of
+erased-label-<n>, in ledger order of its first such assertion (occurred_at, then event id; never the
+text), numbered after the highest erased-label-<n> the named locations carry (0 when there are
+none). A named location is a final rewrite, which _erasure_trail_payload_redaction passes over, so
+it takes no number and its sentinel is never renumbered; a fresh number is above every written one,
+so the numbering stays injective within the pair across acts. Read only by
+_erasure_trail_payload_redaction.$c$;
+
 -- Each event of p_trail whose allowlisted paths hold something other than their class sentinel,
 -- with its payload and metadata rewritten to the sentinels and the paths it changed, in the dotted
 -- form redacted_fields records. A path already at its sentinel is not listed, so an event with
@@ -92,6 +153,15 @@ BEGIN
         LOOP
             v_class := _erasure_path_class(v_ev.type, v_path, v_ev.payload);
             CONTINUE WHEN v_class IS NULL OR v_class = 'keep';
+            -- A path an `erasure` or `edge` row already names on this event holds the sentinel its
+            -- act wrote, and that rewrite is final: deriving it again could only renumber it, and
+            -- a second row for it collides on kb_event_field_redactions_pkey. The redaction row
+            -- decides, never the value's shape, which a writer's own text can take. A `scrub` row
+            -- is not final for an erasure, whose sentinels differ.
+            CONTINUE WHEN EXISTS (
+                SELECT 1 FROM kb_event_field_redactions fr
+                 WHERE fr.event_id = v_ev.id AND fr.path = v_path
+                   AND fr.authority IN ('erasure', 'edge'));
             v_meta := v_path LIKE 'metadata.%';
             FOR v_loc IN
                 SELECT x.at, x.val
@@ -202,7 +272,8 @@ COMMENT ON FUNCTION _erasure_trail_payload_redaction(uuid[], jsonb) IS
 $c$The ledger derivation of one erasure trail: for each event of p_trail (each id once, in event id
 order), except an event correlated with a resource_erased or edge_erased other than itself, the
 payload and metadata with every allowlisted path (_erasure_redact_paths) at its class sentinel, and
-the paths that changed; an event with nothing to rewrite is not returned. Remote sources are
+the paths that changed; an event with nothing to rewrite is not returned. A path that an `erasure`
+or `edge` kb_event_field_redactions row names on the event is final and passed over. Remote sources are
 numbered from p_remote ('<block id>|<normalized URI>' → n), property keys from
 _resource_erasure_ledger_key_numbers, facet marks from _resource_erasure_facet_numbers, edge labels
 from _resource_erasure_label_numbers (per endpoint pair). Raises when a location has no sentinel
@@ -1229,7 +1300,12 @@ SELECT declare_migration(
     'existing row still passes), under SET LOCAL lock_timeout = 500ms: if its lock is not granted in '
     'time, the migration rolls back and the serving deployment is untouched. CREATE OR REPLACE, each with its signature, defaults, return type '
     'and search_path unchanged: _resource_erasure_payload_redaction (the shared loop over the same '
-    'trail with the same numbering, so its rows are unchanged), _project_field_redactions, '
+    'trail with the same numbering, so its rows are unchanged), _resource_erasure_label_numbers '
+    '(numbers only the labels no erasure or edge redaction row names, after the highest sentinel '
+    'those rows'' events carry on the pair: with no edge row, every pair a resource act wrote '
+    'holds only written labels and a live pair none, so its answers are unchanged; the shared loop '
+    'also passes over a path such a row names, which a resource act already never changed), '
+    '_project_field_redactions, '
     '_erasure_sentinel_admits, kb_events_append_only, kb_events_redaction_in_trail, '
     '_event_is_admin_act, _profile_change_events and sensitivity.place_closure. Each gains an arm '
     'for edge_erased or the `edge` authority; no edge_erased record exists when this migration '
