@@ -66,7 +66,7 @@ fn valid_token() -> String {
             exp: i64::MAX / 2,
             iat: 0,
         },
-        &EncodingKey::from_secret(b"witness"),
+        &EncodingKey::from_secret(b"witness").expect("non-empty HMAC key"),
     )
     .expect("token signs")
 }

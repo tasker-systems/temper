@@ -154,7 +154,7 @@ fn hs256_token(aud: &str) -> String {
     encode(
         &Header::new(Algorithm::HS256),
         &claims,
-        &EncodingKey::from_secret(b"witness"),
+        &EncodingKey::from_secret(b"witness").expect("non-empty HMAC key"),
     )
     .expect("token signs")
 }

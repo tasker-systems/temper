@@ -48,8 +48,10 @@ fn closed_blob_door() -> BlobDoor {
 /// gate. A static key makes the refusal a real validation verdict.
 pub fn state_with_static_jwt_key() -> Edge {
     let mut edge = state_with_cors_origins(vec![]);
-    edge.jwks_store =
-        JwksKeyStore::with_static_key(DecodingKey::from_secret(b"witness"), Algorithm::HS256);
+    edge.jwks_store = JwksKeyStore::with_static_key(
+        DecodingKey::from_secret(b"witness").expect("non-empty HMAC key"),
+        Algorithm::HS256,
+    );
     edge
 }
 
@@ -91,7 +93,7 @@ pub fn state_with_distinct_audiences() -> Edge {
             relay: unconfigured_relay(),
         },
         jwks_store: JwksKeyStore::with_static_key(
-            DecodingKey::from_secret(b"witness"),
+            DecodingKey::from_secret(b"witness").expect("non-empty HMAC key"),
             Algorithm::HS256,
         ),
     }
