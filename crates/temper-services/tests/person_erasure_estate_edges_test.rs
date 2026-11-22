@@ -1117,3 +1117,236 @@ async fn a_fresh_label_numbers_after_every_sentinel_written_on_its_pair(pool: Pg
         "each act numbers after the pair's written sentinels"
     );
 }
+
+/// The calls of the function `name` in the current transaction, which must have set
+/// `track_functions`.
+async fn calls_in_xact(conn: &mut sqlx::PgConnection, name: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT coalesce(sum(calls), 0)::bigint FROM pg_stat_xact_user_functions \
+          WHERE funcname::text = $1",
+    )
+    .bind(name)
+    .fetch_one(conn)
+    .await
+    .unwrap()
+}
+
+/// W13. Two estate-homed edges: one between two estate resources, which the act's resource
+/// erasures fold and erase, and one between team resources, which only the edge step reaches. The
+/// act is run by SQL in a transaction counting function calls, after a survey on the same state, so
+/// the act's own survey makes the same calls and the rest are the edge step's.
+///
+/// FAILS IF the edge step derives the completeness of an edge touching a resource this act erased
+/// (a second `_edge_erasure_complete` call, a whole trail derived under the edge locks for an edge
+/// that is complete by construction), or stops deciding the team edge by it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_edge_step_passes_over_an_edge_this_acts_resource_erasures_reached(pool: PgPool) {
+    let w = world(&pool).await;
+    let op = world(&pool).await;
+    let team = team_context(&pool).await;
+    let r1 = resource(&pool, &w, "estate alpha").await;
+    let r2 = resource(&pool, &w, "estate beta").await;
+    let reached = edge(&pool, &w, r1, r2, LABEL, authored(REASONING)).await;
+    let a = resource_in(&pool, &w, team, "team alpha").await;
+    let b = resource_in(&pool, &w, team, "team beta").await;
+    let stepped = edge(
+        &pool,
+        &w,
+        a,
+        b,
+        "the team pair's label",
+        authored("its reasoning"),
+    )
+    .await;
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL track_functions = 'all'")
+        .execute(&mut *tx)
+        .await
+        .expect("count function calls in this transaction");
+    sqlx::query("SELECT principal_erasure_survey_plan($1)")
+        .bind(w.profile)
+        .execute(&mut *tx)
+        .await
+        .expect("the survey");
+    let survey = calls_in_xact(&mut tx, "_edge_erasure_complete").await;
+    sqlx::query("SELECT principal_erasure_execute($1, $2, $3, $4)")
+        .bind(w.profile)
+        .bind(op.profile)
+        .bind(op.emitter)
+        .bind(Uuid::now_v7())
+        .execute(&mut *tx)
+        .await
+        .expect("the act");
+    let step = calls_in_xact(&mut tx, "_edge_erasure_complete").await - 2 * survey;
+    let recorded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id \
+          WHERE et.name = 'edge_erased' AND ev.payload ->> 'subject_id' = ANY($1)",
+    )
+    .bind(vec![reached.uuid().to_string(), stepped.uuid().to_string()])
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+
+    assert_eq!(
+        step, 1,
+        "the edge step tests the team edge alone ({survey} survey calls)"
+    );
+    assert_eq!(recorded, 1, "the edge step erases the team edge alone");
+}
+
+/// Wait until a backend running `statement` is blocked on a lock, by `blocker` when one is named.
+/// Panics if none is within ten seconds, or if `task` finished first, which means it never waited.
+async fn await_waiting<T>(
+    pool: &PgPool,
+    blocker: Option<i32>,
+    statement: &str,
+    task: &tokio::task::JoinHandle<T>,
+    what: &str,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                             WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                               AND ($1::int IS NULL OR $1 = ANY (pg_blocking_pids(pid))) \
+                               AND query ILIKE $2)",
+        )
+        .bind(blocker)
+        .bind(statement)
+        .fetch_one(pool)
+        .await
+        .expect("lock waiters");
+        if waiting {
+            return;
+        }
+        assert!(!task.is_finished(), "{what}: it finished without waiting");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what}: it never waited"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// W14. The subject has two `@me` contexts; the edge lives in the one with the higher id, between
+/// team resources, so only the edge step reaches it. A side transaction holds the lower context
+/// `FOR SHARE`, so the act, having erased the edge, waits at its estate-context lock, which takes
+/// the lower context first. Meanwhile the subject reassigns the edge's context to a team it owns,
+/// through `context_reassign`, the door a context leaves the estate by.
+///
+/// FAILS IF the edge step does not hold the edge's home context from its home check on: the
+/// reassign then commits while the act waits, the context leaves the estate after its edge was
+/// erased, and the commit check (`edge_erasure_requires_an_erased_owner`) fails the whole act. With
+/// the lock the reassign waits for the act, the act completes with the edge erased, and the
+/// reassign is then refused, the context staying in the erased estate.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_reassign_during_the_act_waits_for_it_rather_than_failing_it(pool: PgPool) {
+    let w = world(&pool).await;
+    let second = test_support::context::insert_personal(&pool, w.profile, "second", "second").await;
+    let (low, high) = if w.home.uuid() < second {
+        (w.home.uuid(), second)
+    } else {
+        (second, w.home.uuid())
+    };
+    let target = test_support::team::insert(&pool, &format!("team-{}", Uuid::now_v7())).await;
+    test_support::team::add_member(&pool, target, w.profile, "owner").await;
+    let team = ContextId::from(
+        test_support::context::insert_team(&pool, target, "shared", "shared").await,
+    );
+    let a = resource_in(&pool, &w, team, "alpha").await;
+    let b = resource_in(&pool, &w, team, "beta").await;
+    let e = edge_in(
+        &pool,
+        &w,
+        ContextId::from(high),
+        a,
+        b,
+        LABEL,
+        authored(REASONING),
+    )
+    .await;
+    let admin = operator(&pool).await;
+
+    let mut held = pool.begin().await.unwrap();
+    let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *held)
+        .await
+        .unwrap();
+    sqlx::query("SELECT 1 FROM kb_contexts WHERE id = $1 FOR SHARE")
+        .bind(low)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    let pool2 = pool.clone();
+    let subject = w.profile;
+    let act = tokio::spawn(async move {
+        execute_erasure(
+            &pool2,
+            &admin,
+            ProfileId::from(subject),
+            Uuid::now_v7(),
+            Surface::ApiHttp,
+            &Default::default(),
+        )
+        .await
+    });
+    await_waiting(
+        &pool,
+        Some(holder),
+        "%principal_erasure_execute%",
+        &act,
+        "the act at its estate-context lock",
+    )
+    .await;
+
+    let pool3 = pool.clone();
+    let emitter = w.emitter;
+    let reassign = tokio::spawn(async move {
+        sqlx::query_scalar::<_, Uuid>("SELECT context_reassign($1, $2)")
+            .bind(json!({
+                "context_id": high,
+                "to_owner_table": "kb_teams",
+                "to_owner_id": target,
+            }))
+            .bind(emitter)
+            .fetch_one(&pool3)
+            .await
+    });
+    await_waiting(
+        &pool,
+        None,
+        "%context_reassign%",
+        &reassign,
+        "the reassign of the erased edge's context",
+    )
+    .await;
+
+    held.rollback().await.unwrap();
+    let completion = act.await.unwrap().expect("the person act completes");
+    assert_eq!(
+        edge_outcomes(&completion.targets),
+        vec![ONE_EDGE.to_owned()],
+        "the edge is erased, none skipped: {:?}",
+        completion.targets
+    );
+    assert_eq!(records_of(&pool, e).await.len(), 1, "one edge_erased");
+    assert_eq!(edge_state(&pool, e).await, (true, None));
+
+    reassign
+        .await
+        .unwrap()
+        .expect_err("the reassign that waited is refused once the act has erased the context");
+    let owner: (String, Uuid) =
+        sqlx::query_as("SELECT owner_table, owner_id FROM kb_contexts WHERE id = $1")
+            .bind(high)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        owner,
+        ("kb_profiles".to_owned(), w.profile),
+        "the context stays in the erased estate"
+    );
+}
