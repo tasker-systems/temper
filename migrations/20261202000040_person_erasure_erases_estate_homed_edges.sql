@@ -13,7 +13,9 @@
 --      principal_erasure_survey_plan predicts the step as one kb_edges target and counts every
 --      estate-homed edge's trail inside the estate for R8; principal_erasure_execute runs the
 --      step, references each edge_erased, and pins lock_timeout = 0.
---   7. The two triggers, and the authority column's COMMENT, which names the owner check.
+--   7. The two triggers, the authority column's COMMENT, which names the owner check, and
+--      kb_profiles_tombstone_is_irreversible: a set tombstoned_at never changes, so the owner check
+--      cannot be met by a tombstone cleared before commit.
 --
 -- A later edit must not break:
 --   * the owner check runs at commit, never in the unit: the person act tombstones its subject
@@ -30,8 +32,8 @@
 --     01a1f6e8-81bd-758c-be87-a6824b66352a: the write doors do not re-check the home).
 --
 -- Section 7 runs under SET LOCAL lock_timeout = '500ms', the bound and the reasons of
--- 20261201000010_erasure_records_schema.sql: each CREATE CONSTRAINT TRIGGER takes SHARE ROW
--- EXCLUSIVE on its table to commit, and kb_events takes every append. When the bound fires the
+-- 20261201000010_erasure_records_schema.sql: each CREATE TRIGGER and CREATE CONSTRAINT TRIGGER
+-- takes SHARE ROW EXCLUSIVE on its table to commit, and kb_events takes every append. When the bound fires the
 -- migration rolls back, the serving deployment keeps its schema, and the next deploy retries.
 
 -- ---------------------------------------------------------------------------
@@ -1421,7 +1423,7 @@ estate context after the act is a fresh live row that this act does not erase. D
 legality: the caller's system-admin gate is resolved before any mutation.$c$;
 
 -- ---------------------------------------------------------------------------
--- Section 7. The two constraint triggers, under the lock bound.
+-- Section 7. The triggers, under the lock bound.
 -- ---------------------------------------------------------------------------
 SET LOCAL lock_timeout = '500ms';
 
@@ -1461,6 +1463,41 @@ COMMENT ON TRIGGER trg_edge_redaction_requires_an_erased_owner ON kb_event_field
 $c$At commit, an `edge` row's redacted_by must be an edge_erased record whose estate_of names a
 tombstoned profile (edge_erasure_requires_an_erased_owner).$c$;
 
+-- A tombstone is irreversible. The owner check holds the `edge` authority to a tombstoned estate
+-- owner at the moment it runs, and SET CONSTRAINTS ALL IMMEDIATE runs it mid-transaction: a
+-- transaction could set tombstoned_at, call the unit, run the check, clear tombstoned_at and
+-- commit, an edge erasure of a live owner. So an UPDATE that changes a set tombstoned_at, to NULL
+-- or to another time, is refused. The person act's identity arm writes
+-- COALESCE(tombstoned_at, its occurred_at), which keeps a set value, and that is the only write of
+-- the column; replay restores kb_profiles by INSERT and re-runs that arm over the restored value.
+CREATE FUNCTION kb_profiles_tombstone_is_irreversible()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    RAISE EXCEPTION 'profile % is tombstoned; its tombstone is irreversible', OLD.id
+        USING ERRCODE = 'check_violation';
+END;
+$$;
+
+COMMENT ON FUNCTION kb_profiles_tombstone_is_irreversible() IS
+$c$Raises 'profile % is tombstoned; its tombstone is irreversible' (check_violation). Behind
+kb_profiles_tombstone_is_irreversible, which fires it for an UPDATE that changes a kb_profiles
+row's set tombstoned_at.$c$;
+
+CREATE TRIGGER kb_profiles_tombstone_is_irreversible
+    BEFORE UPDATE OF tombstoned_at ON kb_profiles
+    FOR EACH ROW
+    WHEN (OLD.tombstoned_at IS NOT NULL AND NEW.tombstoned_at IS DISTINCT FROM OLD.tombstoned_at)
+    EXECUTE FUNCTION kb_profiles_tombstone_is_irreversible();
+
+COMMENT ON TRIGGER kb_profiles_tombstone_is_irreversible ON kb_profiles IS
+$c$Refuses an UPDATE that clears or changes a set tombstoned_at: a tombstone, once written, is
+final, so the edge authority's owner check (edge_erasure_requires_an_erased_owner) cannot be met by
+a tombstone set and then cleared in one transaction. Writing the same value, as the person act's
+COALESCE(tombstoned_at, …) does on a tombstoned subject, passes.$c$;
+
 SELECT declare_migration(
     20261202000040,
     'additive',
@@ -1469,7 +1506,10 @@ SELECT declare_migration(
     'edge_erasure_requires_an_erased_owner() with a '
     'COMMENT and two DEFERRABLE INITIALLY DEFERRED constraint triggers behind it, on kb_events '
     '(WHEN category = admin) and on kb_event_field_redactions (WHEN authority = edge), each with a '
-    'COMMENT, created under SET LOCAL lock_timeout = 500ms: if a lock is not granted in time, the '
+    'COMMENT, and the trigger kb_profiles_tombstone_is_irreversible with its function, each with a '
+    'COMMENT, which refuses an UPDATE that changes a set kb_profiles.tombstoned_at (the one write '
+    'of the column, the person act''s COALESCE(tombstoned_at, occurred_at), never does), all '
+    'created under SET LOCAL lock_timeout = 500ms: if a lock is not granted in time, the '
     'migration rolls back and the serving deployment is untouched. At commit an edge_erased record, '
     'or an edge row''s record, must name a tombstoned estate_of and a folded edge homed in a context '
     'of that estate; no edge_erased record or edge row '

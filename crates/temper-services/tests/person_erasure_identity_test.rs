@@ -830,11 +830,13 @@ async fn the_principal_authority_reaches_only_the_subjects_own_admin_events(pool
     .unwrap();
 
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("UPDATE kb_profiles SET tombstoned_at = now() WHERE id = $1")
-        .bind(p.profile)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE kb_profiles SET tombstoned_at = COALESCE(tombstoned_at, now()) WHERE id = $1",
+    )
+    .bind(p.profile)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
     let record = serde_json::json!({
         "subject_table": "kb_profiles",
         "subject_id": p.profile,

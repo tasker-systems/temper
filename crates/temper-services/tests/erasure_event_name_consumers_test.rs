@@ -367,6 +367,12 @@ const ROSTER: &[Entry] = &[
         "the edge erasure act, appending its own kind",
     ),
     own(
+        "_edge_erasure_apply_redaction(uuid,uuid)",
+        &["edge_erased"],
+        "the edge erasure body, run outside replay only under its own edge's edge_erased record \
+         from the same transaction",
+    ),
+    own(
         "_edge_is_erased(uuid)",
         &["edge_erased"],
         "whether an edge_erased record names the edge: the one predicate of the edge's writers \

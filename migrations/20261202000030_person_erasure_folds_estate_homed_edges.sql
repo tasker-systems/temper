@@ -9,7 +9,8 @@
 --   1. _edge_erasure_apply_redaction(uuid, uuid): the projection body for one edge. Its label is
 --      set to NULL and every property row it owns, live and folded, to erased-key-<n> / "erased"
 --      and folded: step (9d) of _resource_erasure_apply_redaction
---      (20261127000010_block_content_hash_follows_redaction.sql) for this one edge.
+--      (20261127000010_block_content_hash_follows_redaction.sql) for this one edge. Outside
+--      replay it runs only under an edge_erased record of that edge from its own transaction.
 --   2. edge_erasure_execute(uuid, uuid, uuid, uuid, uuid): the unit. It locks the edge, refuses an
 --      edge not homed in the estate (_edge_homed_in_estate), derives the ledger redaction, folds
 --      the edge when it is live, appends one edge_erased record, projects its rows, runs the body,
@@ -26,7 +27,8 @@
 --     before the body rewrites the projection, as resource_erasure_execute's derivation does;
 --   * the record follows the fold, and the trail UPDATE follows the body: the verifier admits an
 --     `edge` rewrite only of a folded edge, homed in the estate the record names;
---   * the body reads no payload, so replay can call it at the record's position;
+--   * the body reads no payload but, outside replay, its record's subject, so replay can call it
+--     at the record's position;
 --   * a refusal raises before anything is appended;
 --   * each write verb of an edge takes FOR KEY SHARE on the edge row before it writes, so it
 --     commits before the unit's derivation or waits for the act and is then refused: the property
@@ -55,12 +57,32 @@
 -- _resource_erasure_apply_redaction gives: two live rows of one key would map to one
 -- (erased-key-<n>, "erased") pair. Keys are numbered within the edge by
 -- _resource_erasure_key_numbers, in ledger order of first appearance.
+--
+-- The body erases an edge's projection whatever the edge, so it runs only for the record that
+-- authorises it: an edge_erased naming p_edge, appended in this transaction (created = now(), the
+-- tie kb_events_append_only reads), whose commit edge_erasure_requires_an_erased_owner
+-- (20261202000040) then holds to a folded edge of a tombstoned estate. Replay applies a committed
+-- record at its span's end, with temper.replaying on.
 CREATE FUNCTION _edge_erasure_apply_redaction(p_edge uuid, p_event uuid)
 RETURNS void
 LANGUAGE plpgsql
 SET search_path TO 'public', 'pg_temp'
 AS $function$
 BEGIN
+    IF current_setting('temper.replaying', true) IS DISTINCT FROM 'on'
+       AND NOT EXISTS (
+           SELECT 1
+             FROM kb_events e
+             JOIN kb_event_types t ON t.id = e.event_type_id
+            WHERE e.id = p_event
+              AND t.name = 'edge_erased'
+              AND e.payload ->> 'subject_table' = 'kb_edges'
+              AND e.payload ->> 'subject_id' = p_edge::text
+              AND e.created = now()) THEN
+        RAISE EXCEPTION '_edge_erasure_apply_redaction: edge % has no edge_erased record of this transaction',
+            p_edge;
+    END IF;
+
     UPDATE kb_edges SET label = NULL WHERE id = p_edge;
 
     UPDATE kb_properties p
@@ -80,8 +102,10 @@ COMMENT ON FUNCTION _edge_erasure_apply_redaction(uuid, uuid) IS
 $c$The projection side of erasing one edge: its label set to NULL, and every kb_properties row it
 owns, live and folded, set to erased-key-<n> (numbered within the edge by
 _resource_erasure_key_numbers), value "erased", folded, last_event_id p_event. Step (9d) of
-_resource_erasure_apply_redaction for one edge. Reads no payload, so edge_erasure_execute and replay
-run the same body at the edge_erased record's position.$c$;
+_resource_erasure_apply_redaction for one edge. Outside replay (temper.replaying not 'on') raises
+unless p_event is an edge_erased record naming p_edge (subject_table kb_edges, subject_id) appended
+in this transaction. Reads no other payload, so edge_erasure_execute and replay run the same body
+at the edge_erased record's position.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 2. The unit.
@@ -393,7 +417,8 @@ _edge_is_erased answers true for the edge; then folds it through _edge_fold_appl
 SELECT declare_migration(
     20261202000030,
     'additive',
-    'Adds the functions _edge_erasure_apply_redaction(uuid, uuid) and '
+    'Adds the functions _edge_erasure_apply_redaction(uuid, uuid), which outside replay runs only '
+    'for an edge_erased record of its edge appended in the same transaction, and '
     'edge_erasure_execute(uuid, uuid, uuid, uuid, uuid), each with a COMMENT; nothing existing '
     'calls them. CREATE OR REPLACEs, at unchanged signatures, _resource_write_guard_owner(text, '
     'uuid), whose kb_edges arm also takes FOR KEY SHARE on the edge row and refuses a write to an '

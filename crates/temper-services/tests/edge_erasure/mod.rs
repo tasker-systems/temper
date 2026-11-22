@@ -253,11 +253,13 @@ pub async fn asserting_event(pool: &PgPool, e: EdgeId) -> Uuid {
 /// (`edge_erasure_requires_an_erased_owner`), so every lawful witness tombstones the owner before
 /// it commits.
 pub async fn tombstone(conn: &mut sqlx::PgConnection, profile: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE kb_profiles SET tombstoned_at = now() WHERE id = $1")
-        .bind(profile)
-        .execute(conn)
-        .await
-        .map(|_| ())
+    sqlx::query(
+        "UPDATE kb_profiles SET tombstoned_at = COALESCE(tombstoned_at, now()) WHERE id = $1",
+    )
+    .bind(profile)
+    .execute(conn)
+    .await
+    .map(|_| ())
 }
 
 /// `edge_erasure_execute` in one transaction: the unit, then `estate_of`'s tombstone when

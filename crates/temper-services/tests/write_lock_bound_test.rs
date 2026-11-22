@@ -310,7 +310,7 @@ async fn the_edge_unit_completes_under_a_session_lock_timeout(pool: PgPool) {
             .await;
         match out {
             Ok(_) => {
-                sqlx::query("UPDATE kb_profiles SET tombstoned_at = now() WHERE id = $1")
+                sqlx::query("UPDATE kb_profiles SET tombstoned_at = COALESCE(tombstoned_at, now()) WHERE id = $1")
                     .bind(profile)
                     .execute(&mut *tx)
                     .await
