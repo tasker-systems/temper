@@ -1890,6 +1890,37 @@ mod tests {
         assert_eq!(data.claims.sub, "u1");
     }
 
+    /// A token whose header names a critical extension temper does not understand is refused,
+    /// though its signature, issuer, audience and expiry are all good (RFC 7515 §4.1.11).
+    /// The control token differs only in the header, so the refusal is the `crit` member's.
+    #[test]
+    fn a_token_naming_an_unknown_critical_header_is_refused() {
+        let (enc, dec) = try_make_keys().expect("the embedded Ed25519 test keypair is valid");
+        let store = JwksKeyStore::with_static_key(dec.clone(), Algorithm::EdDSA);
+        let validation = store.validation(
+            "https://as.example",
+            &["https://api.example"],
+            Algorithm::EdDSA,
+        );
+        let claims = TestClaims {
+            sub: "u1".into(),
+            iss: "https://as.example".into(),
+            aud: Some("https://api.example".into()),
+            exp: 9_999_999_999,
+        };
+
+        let plain = encode(&Header::new(Algorithm::EdDSA), &claims, &enc).expect("encodes");
+        jsonwebtoken::decode::<TestClaims>(&plain, &dec, &validation)
+            .expect("the control token, with no crit header, verifies");
+
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.crit = Some(vec!["urn:example:unknown".into()]);
+        let critical = encode(&header, &claims, &enc).expect("encodes");
+        let err = jsonwebtoken::decode::<TestClaims>(&critical, &dec, &validation)
+            .expect_err("an unknown critical extension must be refused");
+        assert_eq!(err.kind(), &jsonwebtoken::errors::ErrorKind::InvalidToken);
+    }
+
     #[test]
     fn is_supported_key_rejects_wrong_curve() {
         use jsonwebtoken::jwk::{
