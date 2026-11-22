@@ -24,6 +24,10 @@ resource erasure of the same act already erased is skipped, and an edge whose co
 is skipped and counted. The act still locks its estate contexts after its resource erasures, so a
 context reassigned out of the estate before the act holds its row keeps the edges its resource
 erasures did not reach and its earlier names and slugs on the ledger, while its resources are erased and it is closed by context_erased.
+One reassigned out after the edge step found an edge to erase homed in it, and before the act
+holds its row, makes the act fail: the edge erasure's home check, or the commit-time check that the
+record's edge is homed in the estate, refuses it, the service answers 500, nothing the act did
+persists, and running the act again completes.
 The person act's record gains one kb_edges target naming how many edges it
 erased, and one `erasure` reference per edge_erased; its payload keys are unchanged. The survey
 (POST /api/admin/erasure/survey, temper admin erasure principal) predicts the same kb_edges target,

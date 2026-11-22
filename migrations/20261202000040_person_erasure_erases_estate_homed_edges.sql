@@ -23,16 +23,22 @@
 --   * the person act's edge step runs after every resource erasure, passes over an edge touching
 --     a resource the act erased, selects by _edge_erasure_complete under each edge's lock, locks
 --     in id order, and skips and counts an edge whose home has left the estate since the plan;
---   * the edge step locks an edge's home context before it reads that home, so the unit and the
---     commit check read the same estate: a context leaving the estate mid-act is a counted skip,
---     never a failed act;
---   * the person act locks its estate contexts after its resource erasures, never at its start:
---     a standalone resource erasure takes its resource's act queue before its home context's row,
---     and the reverse order deadlocks the two (the act's context lock comment says how);
+--   * the person act locks its estate contexts after its resource erasures and its edge step,
+--     never at its start: a standalone resource erasure takes its resource's act queue before its
+--     home context's row, and the reverse order deadlocks the two (the act's context lock comment
+--     says how);
 --   * an assertion of an edge's identity racing the step mints a new live edge at the same home
 --     (20261202000030's header says how): a fresh write, lawful as it stands, which the act that
 --     erased the first edge does not erase (ruling 9 of decision
 --     01a1f6e8-81bd-758c-be87-a6824b66352a: the write doors do not re-check the home).
+--
+-- One residual is kept (ruling 12 of that decision): the edge step does not hold an edge's home
+-- context. A context_reassign that moves the context out of the estate after the step found an
+-- edge to erase homed there, and commits before the act's context lock, makes the act abort: the
+-- unit raises `edge % is not homed in the estate of %` when the reassign lands between the step's
+-- check and the unit's, and otherwise the commit check refuses the record, its edge no longer
+-- homed in the estate. Neither is retried, so the service answers 500; nothing the act did persists, and the
+-- act run again completes, its edge step reading the live estate and leaving that context's edges.
 --
 -- Section 7 runs under SET LOCAL lock_timeout = '500ms', the bound and the reasons of
 -- 20261201000010_erasure_records_schema.sql: each CREATE TRIGGER and CREATE CONSTRAINT TRIGGER
@@ -226,9 +232,11 @@ erased.$c$;
 -- already tombstoned estate_of, would lock that edge with nothing redacted. The person act commits
 -- no record that fails it: its edge step calls the unit only for an edge it finds homed in the live
 -- estate under the edge's lock, the unit folds the edge, and no write path unfolds one. The home
--- is read again here, against the estate at commit. The edge step locks an edge's home context
--- before it reads that home, and holds it to commit, so no door moves the context out between the
--- step's read and this one, and the two agree.
+-- is read again here, against the estate at commit. Once the act holds its estate contexts' rows
+-- (principal_erasure_execute's context lock), no door moves one out; a context reassigned out of
+-- the estate after the edge step and before that lock fails the act at commit instead, and the act
+-- run again leaves that context's edges, its edge step reading the live estate (the residual this
+-- migration's header names).
 CREATE FUNCTION edge_erasure_requires_an_erased_owner()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1134,7 +1142,6 @@ DECLARE
     v_edge_erasures jsonb := '[]'::jsonb;
     v_n        integer;
     v_edges_raced integer := 0;
-    v_ehome    uuid;
     v_reached  uuid[];
 BEGIN
     -- The request reference is the correlation id of every event the act appends: the resource
@@ -1163,8 +1170,9 @@ BEGIN
     --    whole act; the service retries it.
     --
     --    The plan was read before any of these locks, so each resource is decided again under its
-    --    own: the act queue, then the row, the order resource_erasure_execute itself takes them
-    --    (both are re-entrant in this transaction). A resource another act erased completely
+    --    own: the act queue, then the row, the order resource_erasure_execute itself takes them,
+    --    as resource_field_scrub_execute and block_history_scrub_execute do (both locks are
+    --    re-entrant in this transaction). A resource another act erased completely
     --    since the plan, or one moved out of the estate since, is skipped and counted; the kind
     --    recorded is the state found here, not the plan's prediction. ─────────────────────────
     v_estate := ARRAY(SELECT jsonb_array_elements_text(v_plan->'estate_contexts')::uuid);
@@ -1232,21 +1240,17 @@ BEGIN
     --    the owner check runs at commit (edge_erasure_requires_an_erased_owner), and reads each
     --    record's edge folded and homed in the estate again then.
     --
-    --    So the edge's home context is locked, FOR NO KEY UPDATE, before that check, and held to
-    --    commit. context_reassign takes the same lock before it reads the row, so once the check
-    --    has read the context in the estate no door moves it out (the estate is read from the
-    --    context's row and its team's personal_of, which no door clears): the unit's own home check and
-    --    the commit check read the estate this check read, and an edge is erased, or skipped and
-    --    counted, never failed. Without the lock, a reassign committing between the check and the
-    --    act's context lock below failed the whole act at commit. Only the homes of edges the step
-    --    erases are locked here; the rest are locked below, where the order is argued. One wait
-    --    this adds, broken by 40P01 and retried by both services: a standalone resource erasure of
-    --    a resource homed in such a context since the plan, holding an estate edge the step has not
-    --    reached and waiting in its step (7) or (7b) on that context's row. ─────────────────────
+    --    The step does not lock the edge's home context, so the three reads can disagree: a
+    --    context_reassign moving the context out of the estate after this check and committing
+    --    before the act's context lock below aborts the act, in the unit (`not homed in the
+    --    estate`) or at commit (the owner check). Neither is retried: the service answers 500,
+    --    nothing the act did persists, and the act run again leaves that context's edges, this
+    --    check reading the live estate (ruling 12 of decision 01a1f6e8-81bd-758c-be87-a6824b66352a).
+    --    ────────────────────────────────────────────────────────────────────────────────────────
     v_reached := ARRAY(SELECT (x ->> 'resource')::uuid FROM jsonb_array_elements(v_erasures) x
                         WHERE x ->> 'kind' = 'erasure');
-    FOR v_eid, v_ehome IN
-        SELECT e.id, e.home_anchor_id FROM kb_edges e
+    FOR v_eid IN
+        SELECT e.id FROM kb_edges e
          WHERE e.home_anchor_table = 'kb_contexts'
            AND e.home_anchor_id = ANY(v_estate)
            AND NOT (e.source_table = 'kb_resources' AND e.source_id = ANY(v_reached))
@@ -1257,7 +1261,6 @@ BEGIN
         -- A complete edge (one another act already erased, or one touching a resource this act
         -- completed) is passed over before the home check, so it is never counted as skipped.
         CONTINUE WHEN _edge_erasure_complete(v_eid);
-        PERFORM 1 FROM kb_contexts c WHERE c.id = v_ehome FOR NO KEY UPDATE;
         IF NOT _edge_homed_in_estate(v_eid, p_subject) THEN
             v_edges_raced := v_edges_raced + 1;
             CONTINUE;
@@ -1313,9 +1316,7 @@ BEGIN
     END LOOP;
 
     -- ── The estate contexts are locked here, FOR NO KEY UPDATE, after the resource erasures, the
-    --    edge step and the strikes, and before anything reads them for the record (R7). The homes
-    --    of the edges the step erased are already held from the step, which needs them earlier
-    --    (its lock comment says why); this takes the rest.
+    --    edge step and the strikes, and before anything reads them for the record (R7).
     --    context_rename, context_retire, context_restore and context_reassign take the same row
     --    lock before they read the row, so one that arrives once the act holds it waits for the act
     --    and then finds the context erased; without it, a rename could land a real name back on an
@@ -1329,16 +1330,15 @@ BEGIN
     --    from its start and queued on the same resource closes a cycle: the act waits on the
     --    queue the standalone act holds, which waits on the context row the act holds. Taken here,
     --    after every resource and edge lock the act takes, the lock is behind them, as the
-    --    standalone act's own context write is; the edge step's early lock of an erased edge's
-    --    home is behind every resource lock, and its one added wait is in its comment. The
-    --    resource erasures above can still meet a
+    --    standalone act's own context write is. The resource erasures above can still meet a
     --    standalone one on the pair: one whose step (7) or (7b) wrote a context's row holds it while
     --    the act queues on the next resource homed there. Postgres breaks that with 40P01 and the
-    --    services retry both acts.
+    --    services retry both acts. A field scrub and a block history scrub take their resource's
+    --    act queue and row in the same order, and neither writes a context row
+    --    (_block_history_scrub_apply returns before step (7)), so neither closes that cycle.
     --
     --    So the estate can change between the plan and this lock: context_reassign moves a context
-    --    out until the act first holds its row, here or at the edge step. For such a context the
-    --    act's halves follow
+    --    out until the act first holds its row. For such a context the act's halves follow
     --    different estates (ruling 11 of decision 01a1f6e8-81bd-758c-be87-a6824b66352a, (a)):
     --      * the ledger rewrites follow the live estate: the edge step skips the edges its
     --        resource erasures did not reach (_edge_homed_in_estate), and _principal_erasure_redacted_fields leaves its earlier
@@ -1449,13 +1449,15 @@ live blob homed in the estate; the one principal_erased record, which references
 edge erasure; the identity arms (_erasure_apply_redaction), which tombstone the subject; and one
 context_erased per estate context, with the ledger rewrite of their names and slugs. Runs with
 lock_timeout = 0 and search_path = public, pg_temp whatever the session, role or database sets.
-The edge step locks each erased edge's home context before it reads that home, and the act every
-other estate context after the strikes. A context reassigned out of the estate before the act
-holds its row keeps the edges its resource erasures did not reach and its earlier names and slugs
-on the ledger, while its resources are erased
-and it is closed by context_erased. Content committed into a retired
-estate context after the act is a fresh live row that this act does not erase. Does not decide
-legality: the caller's system-admin gate is resolved before any mutation.$c$;
+The estate contexts are locked after the strikes. A context reassigned out of the estate before
+the act holds its row, and before the edge step finds an edge to erase homed in it, keeps the
+edges its resource erasures did not reach and its earlier names and slugs on the ledger, while its
+resources are erased and it is closed by context_erased. One reassigned out after the edge step
+found such an edge aborts the act (in edge_erasure_execute's home check, or at commit in
+edge_erasure_requires_an_erased_owner); nothing persists, and the act run again completes. Content
+committed into a retired estate context after the act is a fresh live row that this act does not
+erase. Does not decide legality: the caller's system-admin gate is resolved before any
+mutation.$c$;
 
 -- ---------------------------------------------------------------------------
 -- Section 7. The triggers, under the lock bound.
@@ -1483,9 +1485,10 @@ CREATE CONSTRAINT TRIGGER trg_edge_erased_requires_an_erased_owner
     EXECUTE FUNCTION edge_erasure_requires_an_erased_owner();
 
 COMMENT ON TRIGGER trg_edge_erased_requires_an_erased_owner ON kb_events IS
-$c$At commit, an edge_erased record's estate_of must name a tombstoned profile
+$c$At commit, an edge_erased record's estate_of must name a tombstoned profile, and its kb_edges
+subject must be folded and homed in a context of that estate (_edge_homed_in_estate)
 (edge_erasure_requires_an_erased_owner). Fires for every admin event; the function confirms the
-type.$c$;
+type. Stands down while temper.replaying is 'on'.$c$;
 
 CREATE CONSTRAINT TRIGGER trg_edge_redaction_requires_an_erased_owner
     AFTER INSERT ON kb_event_field_redactions
@@ -1496,7 +1499,9 @@ CREATE CONSTRAINT TRIGGER trg_edge_redaction_requires_an_erased_owner
 
 COMMENT ON TRIGGER trg_edge_redaction_requires_an_erased_owner ON kb_event_field_redactions IS
 $c$At commit, an `edge` row's redacted_by must be an edge_erased record whose estate_of names a
-tombstoned profile (edge_erasure_requires_an_erased_owner).$c$;
+tombstoned profile and whose kb_edges subject is folded and homed in a context of that estate
+(_edge_homed_in_estate) (edge_erasure_requires_an_erased_owner). Stands down while
+temper.replaying is 'on'.$c$;
 
 -- A tombstone is irreversible. The owner check holds the `edge` authority to a tombstoned estate
 -- owner at the moment it runs, and SET CONSTRAINTS ALL IMMEDIATE runs it mid-transaction: a
@@ -1558,13 +1563,16 @@ SELECT declare_migration(
     'principal_erasure_execute(uuid, uuid, uuid, uuid), whose COMMENT is rewritten, which gains '
     'SET lock_timeout = 0, as the other erasure acts carry, and which runs edge_erasure_execute '
     'for every edge homed in the estate whose text is not yet erased, after its resource erasures '
-    'and before its record, passing over an edge touching a resource it erased and locking each '
-    'erased edge''s home context (FOR NO KEY UPDATE) before reading that home, skipping and '
+    'and before its record, passing over an edge touching a resource it erased, skipping and '
     'counting one whose context has left the estate since the plan: a person erasure now erases '
     'those edges, and its record gains a kb_edges target and one erasure reference per edge. Its '
-    'other estate contexts are still locked after its resource erasures, so a context reassigned '
-    'out of the estate before the act holds its row keeps its edges and its earlier names and '
-    'slugs on the ledger, while its resources are erased and it is closed by context_erased. '
+    'estate contexts are still locked after its resource erasures and its edge step, so a context '
+    'reassigned out of the estate before the act holds its row, and before the edge step finds an '
+    'edge to erase homed in it, keeps its edges and its earlier names and slugs on the ledger, '
+    'while its resources are erased and it is closed by context_erased; one reassigned out after '
+    'the edge step found such an edge aborts the act (the unit''s home check or the commit-time '
+    'owner check), which the service answers with a 500, nothing persisting, and the act run again '
+    'completes. '
     'principal_erasure_execute, principal_erasure_survey_plan and _principal_erasure_edges_outcome '
     'pin search_path = public, pg_temp; every name they read is in public or schema-qualified. '
     'The record''s payload keys are unchanged. An older binary '
