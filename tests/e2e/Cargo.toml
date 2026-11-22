@@ -25,7 +25,6 @@ axum = "0.8"
 base64 = "0.23"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
-filetime = "0.2"
 hex = "0.4"
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }

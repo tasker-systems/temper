@@ -17,9 +17,16 @@ mod common;
 
 use std::time::{Duration, SystemTime};
 
-use filetime::{set_file_mtime, FileTime};
 use temper_cli::actions::show_cache::{self, FreshnessTier, ShowCacheParams};
 use temper_core::types::ingest::{pack_chunks, IngestPayload};
+
+/// Set a file's modification time.
+fn set_mtime(path: &std::path::Path, when: std::time::SystemTime) -> std::io::Result<()> {
+    std::fs::File::options()
+        .write(true)
+        .open(path)?
+        .set_modified(when)
+}
 
 /// Tier-3 healing path: when the local file has no parseable frontmatter
 /// (the corruption mode reported in the bug ticket), `attempt_remote` must
@@ -82,8 +89,8 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
     // Stage a CORRUPTED local file at the path tier-3 will write back to.
     let local_path = app.vault_dir.path().join("heal-me.md");
     std::fs::write(&local_path, "# Heal Me## Section\n\nbody text\n").expect("write corrupted");
-    let stale = FileTime::from_system_time(SystemTime::now() - Duration::from_secs(120));
-    set_file_mtime(&local_path, stale).expect("set stale mtime");
+    let stale = SystemTime::now() - Duration::from_secs(120);
+    set_mtime(&local_path, stale).expect("set stale mtime");
 
     let result = show_cache::fetch(ShowCacheParams {
         client: &app.client,
@@ -187,8 +194,8 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         temper-title: Mismatch\n\
         ---\n\n# Mismatch\n\nbody\n";
     std::fs::write(&local_path, local_body).expect("write local");
-    let stale = FileTime::from_system_time(SystemTime::now() - Duration::from_secs(120));
-    set_file_mtime(&local_path, stale).expect("set stale mtime");
+    let stale = SystemTime::now() - Duration::from_secs(120);
+    set_mtime(&local_path, stale).expect("set stale mtime");
 
     let result = show_cache::fetch(ShowCacheParams {
         client: &app.client,

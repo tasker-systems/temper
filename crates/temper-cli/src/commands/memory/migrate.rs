@@ -810,7 +810,12 @@ Never ship code with \"for now\".
         std::fs::write(&file, MINIMAL).unwrap();
         // 2026-05-14T00:00:00Z, chosen so a today-shaped bug is visibly wrong.
         let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_778_716_800);
-        filetime::set_file_mtime(&file, filetime::FileTime::from_system_time(when)).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
 
         let found = scan_memory_dir(&index);
 
