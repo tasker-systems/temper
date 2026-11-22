@@ -805,6 +805,14 @@ async fn body_plan(pool: &PgPool, function: &str, param: &str, arg: Uuid) -> Str
         .execute(&mut *tx)
         .await
         .unwrap();
+    // On a test-sized ledger every admin-event index is one page, so the planner may read the
+    // change feed's `idx_kb_events_admin_act_correlation` instead. Set it aside inside this
+    // rolled-back transaction, so the plan shows whether the body's WHERE implies the index the
+    // test names.
+    sqlx::query("DROP INDEX IF EXISTS idx_kb_events_admin_act_correlation")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     let plan: Vec<String> = sqlx::query_scalar(&explain)
         .bind(arg)
         .fetch_all(&mut *tx)
