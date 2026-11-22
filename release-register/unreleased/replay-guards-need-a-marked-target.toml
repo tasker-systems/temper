@@ -1,0 +1,22 @@
+title    = "The guards that stand down for replay need a marked replay target, and the deploy refuses a marked database"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["schema", "internal"]
+status   = "signal-only"
+body = '''
+The guards that stand down while the replay walk projects (the resource write guard, the ledger
+order guard, the redaction projector's trail check, the gating-slug snapshot and the
+public_within shape and hard-delete triggers) now ask _replay_mode(): temper.replaying on AND a
+kb_replay_target row. The setting alone, in any database without that row, lowers none of them.
+Only the replay walk marks its own target, through _replay_target_mark(), which refuses a
+database whose ledger holds events.
+
+Shape: a new table, kb_replay_target, and three functions (_replay_mode, _replay_target_mark,
+replay_posture) in 20261203000010; 20261203000020 re-issues eight guard functions with
+signatures unchanged. Outside replay every guard behaves exactly as before. temper-migrate gains
+exit 5 when replay_posture() names a reason (the marker, a database or role default for the
+setting, or its own session carrying it), and vercel-build.sh reports it as such; the API logs
+the same reasons at startup and serves on. Who observes: no deployment today, since none carries
+either. Witnesses in crates/temper-services/tests/replay_mode_guard_test.rs. Release relevance:
+signal-only.
+'''
