@@ -59,7 +59,7 @@ async fn refuse_unsafe_replay_posture(conn: &mut sqlx::PgConnection) -> Result<(
         "The guards that keep erasure and the ledger honest stand down only for a replay walk's\n\
          scratch database: temper.replaying on AND a kb_replay_target row. A deployed database\n\
          carries no marker and no default for the setting. Find what marked it or set the\n\
-         default before serving from it; the schema above was applied."
+         default before serving from it; the migrations this run applied stay applied."
     );
     std::process::exit(UNSAFE_REPLAY_POSTURE);
 }

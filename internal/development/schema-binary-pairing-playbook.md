@@ -323,13 +323,14 @@ never carried the number this failure is about.
 
 ## 4e. The deploy failed: "this database is marked as a replay target" (exit 5)
 
-The runner exited **5**. The migrations applied, and then `replay_posture()` named a reason this
+The runner exited **5**. What it applied stays applied, and then `replay_posture()` named a reason this
 database is unsafe to serve: a `kb_replay_target` row, a database or role default for
 `temper.replaying`, or the runner's own session carrying it. The guards that keep erasure and the
 ledger honest stand down only under `_replay_mode()`, which needs the marker; only a replay walk's
 scratch database carries one.
 
-**Do not go to the ledger**: every apply succeeded. Read the runner's output for the reasons, then:
+**Do not go to the ledger**: every apply this run made succeeded. An additive run that also
+halted reports the posture first and exits 5; take the halt (§4c) once the posture is clear. Read the runner's output for the reasons, then:
 
 ```sql
 SELECT * FROM kb_replay_target;                                   -- the marker, and when

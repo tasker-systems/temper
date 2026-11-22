@@ -14,8 +14,8 @@
 --     calls first, and which refuses unless kb_events is empty: a replay target is always a reset,
 --     empty namespace, so a replay pointed at a database holding a ledger fails before it marks it.
 --     (Test fixtures that set the flag on a populated database insert the row through
---     temper_substrate::test_schema::mark_replay_target; .github/scripts/audit-erasure-callers.sh
---     pins every writer.)
+--     temper_substrate::test_schema::mark_replay_target. .github/scripts/audit-erasure-callers.sh
+--     pins the production writers it can see; its header names what it cannot.)
 --   * _replay_mode() reads the setting first and the table only when it is 'on', so the live path
 --     of a guard that fires on every append pays no table read.
 --   * Guards call _replay_mode(); none reads `temper.replaying` itself. A test holds pg_proc to
@@ -50,8 +50,8 @@ END;
 $$;
 
 COMMENT ON FUNCTION _replay_mode() IS
-$c$True only while the replay walk projects: temper.replaying is 'on' in this transaction AND the
-database carries the kb_replay_target row. Every guard that stands down for replay asks this, never
+$c$True only while the replay walk projects: temper.replaying is 'on' for this session or
+transaction AND the database carries the kb_replay_target row. Every guard that stands down for replay asks this, never
 the setting. Reads the table only when the setting is 'on'.$c$;
 
 CREATE FUNCTION _replay_target_mark()
@@ -91,7 +91,6 @@ AS $$
               FROM pg_db_role_setting s
              WHERE s.setdatabase IN (0, (SELECT oid FROM pg_database
                                           WHERE datname = current_database()))
-               AND s.setrole IN (0, (SELECT oid FROM pg_roles WHERE rolname = current_user))
                AND EXISTS (SELECT 1 FROM unnest(s.setconfig) c
                             WHERE c LIKE 'temper.replaying=%'))
         UNION ALL
@@ -102,7 +101,8 @@ $$;
 
 COMMENT ON FUNCTION replay_posture() IS
 $c$The reasons this database is unsafe to serve, empty when it is safe: the kb_replay_target
-marker, a database or role default naming temper.replaying, or the calling session carrying it
+marker, a default naming temper.replaying for this database or for any role here (whichever role
+the caller runs as), or the calling session carrying it
 'on' (called on a fresh connection outside a transaction, that is a session-level setting).
 temper-migrate refuses a deploy on any; the API logs them at startup.$c$;
 

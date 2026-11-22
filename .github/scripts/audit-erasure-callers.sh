@@ -8,9 +8,9 @@
 # `_project_*_redactions`) are SQL functions that do what they are handed: the authority to call
 # them is decided in Rust, at the door (`&SystemAdmin` on the admin routes). A new service path
 # that reaches one of them without that check, mounted on an ordinary route, passes every other
-# audit. Likewise `set_config('temper.replaying', …)` and the replay-target marker
-# (a write to `kb_replay_target`, a call of `_replay_target_mark`) are what let the guards stand down for replay
-# (`_replay_mode()`, 20261203000010); only the replay walk should write them.
+# audit. Likewise setting `temper.replaying` and writing the replay-target marker (a write to
+# `kb_replay_target`, a call of `_replay_target_mark`) are what let the guards stand down for
+# replay (`_replay_mode()`, 20261203000010); only the replay walk should do either.
 #
 # This does NOT forbid a caller. It PINS the reviewed set, so a new caller, or one that moves,
 # fails CI until a reviewer answers: what admits this caller, and is it the act's own door?
@@ -32,8 +32,12 @@
 #   * Integration tests (crates/*/tests) and in-file test modules: test code, not a door.
 #   * Whether a baselined caller is itself gated. The baseline records that a reviewer read it;
 #     the route-auth audits and the act's own tests hold the gate.
-#   * A call spelled through a runtime-built string (`format!("SELECT {name}(…)")`). The patterns
-#     match a literal name followed by `(`.
+#   * A call spelled through a runtime-built string (`format!("SELECT {name}(…)")`), or a
+#     setting named through a bind (`set_config($1, …)`). The patterns match literal names.
+#   * A statement split across lines between its verb and its table (`INSERT INTO` on one line,
+#     `kb_replay_target` on the next). Each line is matched alone.
+#   * Production code below an in-file test module: the scan of a file stops at its first
+#     test-gated `mod`, as audit-raw-standing-writers.sh's does.
 #
 # USAGE
 #   .github/scripts/audit-erasure-callers.sh          # verify (CI mode)
@@ -60,13 +64,14 @@ read -r -d '' BASELINE <<'EOF' || true
 1 replay_marker crates/temper-substrate/src/test_schema.rs
 EOF
 
-# class<TAB>pattern (POSIX ERE).
+# class<TAB>pattern (POSIX ERE, lowercase: each line is matched lowercased, as SQL is
+# case-insensitive).
 read -r -d '' PATTERNS <<'EOF' || true
 execute	[a-z_]*_erasure_execute[[:space:]]*\(
 apply_redaction	[a-z_]*_erasure_apply_redaction[[:space:]]*\(
 projector	_project_[a-z_]*redactions[[:space:]]*\(
-replay_setting	set_config[[:space:]]*\([[:space:]]*'temper\.replaying'
-replay_marker	(INSERT[[:space:]]+INTO|UPDATE|DELETE[[:space:]]+FROM|TRUNCATE)[[:space:]]+kb_replay_target|_replay_target_mark[[:space:]]*\(
+replay_setting	set_config[[:space:]]*\([[:space:]]*'temper\.replaying'|(^|[^a-z_])set[[:space:]]+((local|session)[[:space:]]+)?temper\.replaying
+replay_marker	(insert[[:space:]]+into|update|delete[[:space:]]+from|truncate([[:space:]]+table)?|copy)[[:space:]]+("?public"?\.)?"?kb_replay_target|_replay_target_mark[[:space:]]*\(
 EOF
 
 # shellcheck source=out-of-line-test-modules.sh
@@ -99,7 +104,7 @@ current() {
           { pending = 0 }
           /^[[:space:]]*#\[cfg\((all\()?test/ { pending = 1; next }
           /^[[:space:]]*\/\// { next }
-          { for (i = 1; i <= k; i++) if ($0 ~ pat[i]) print cls[i], f }
+          { l = tolower($0); for (i = 1; i <= k; i++) if (l ~ pat[i]) print cls[i], f }
         ' "$f" || echo "SCAN-ERROR $f"
       done
     if [ -d migrations/templates ]; then
@@ -116,7 +121,7 @@ current() {
               }
             }
             /^[[:space:]]*--/ { next }
-            { for (i = 1; i <= k; i++) if ($0 ~ pat[i]) print cls[i], f }
+            { l = tolower($0); for (i = 1; i <= k; i++) if (l ~ pat[i]) print cls[i], f }
           ' "$f" || echo "SCAN-ERROR $f"
         done
     fi

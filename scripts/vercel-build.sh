@@ -182,11 +182,11 @@ elif [ "$rc" -eq 4 ]; then
   echo "The runner's output above names the version and the likely cause." >&2
 elif [ "$rc" -eq 5 ]; then
   # Exit 5 is the runner refusing a database that carries a replay-target marker or a
-  # temper.replaying default (replay_posture(), 20261203000010). The schema applied; the
-  # database itself is what is wrong, so the ledger has nothing to say.
+  # temper.replaying default (replay_posture(), 20261203000010). The runner applied what it
+  # could; the database itself is what is wrong, so the ledger has nothing to say.
   echo "BUILD FAILED: this database is marked as a replay target or defaults temper.replaying." >&2
   echo "" >&2
-  echo "The migrations applied. The runner's output above names each reason; a deployed" >&2
+  echo "What this run applied stays applied. The runner's output above names each reason; a deployed" >&2
   echo "database must carry neither, so find what set it before deploying again." >&2
 else
   echo "BUILD FAILED: the migration runner exited ${rc}." >&2

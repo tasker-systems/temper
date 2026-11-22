@@ -11,7 +11,8 @@
 #   (b) RED   a second call in an already-baselined file (the count is pinned, not the path)
 #   (c) RED   a moved caller: the act called from another file than the baselined one
 #   (d) RED   each other class, one witness each: a redaction apply, a projector, the replay
-#             setting, a marker write, a marker-writer call
+#             setting, a marker write, a marker-writer call; and the spellings SQL treats alike
+#             (lowercase and schema-qualified, COPY, SET LOCAL, an uppercase call)
 #   (e) RED   a caller in api/*.rs, naming the file
 #   (f) RED   a caller in an operator-run SQL template, naming the file
 #   (g) RED   an empty scan fails as broken, it does not pass
@@ -127,9 +128,10 @@ run_case "(c) a caller that moved files reds, naming both" \
     "> 1 execute $SVC/resource_service.rs"
 
 # ── (d) every other class, one witness each ────────────────────────────────────────────────────
+D_N=0
 d_case() {
     local label="$1" class="$2" line="$3" dir
-    dir="$WORK/fd-$class"; make_fixture "$dir"
+    D_N=$((D_N + 1)); dir="$WORK/fd-$D_N"; make_fixture "$dir"
     printf 'pub async fn f(c: &mut PgConnection) {\n    %s\n}\n' "$line" > "$dir/$SVC/d_service.rs"
     run_case "(d) $label reds" "$dir" 1 "$CHANGED" "> 1 $class $SVC/d_service.rs"
 }
@@ -146,6 +148,17 @@ d_case "a marker write" replay_marker \
     'sqlx::query("INSERT INTO kb_replay_target (id) VALUES (true)");'
 d_case "a marker-writer call" replay_marker \
     'sqlx::query("SELECT _replay_target_mark()");'
+
+# Spellings SQL treats alike: case, a schema qualifier, COPY, and SET in place of set_config.
+d_case "a lowercase, schema-qualified marker write" replay_marker \
+    'sqlx::query("insert into public.kb_replay_target (id) values (true)");'
+d_case "a COPY into the marker" replay_marker \
+    'sqlx::query("COPY kb_replay_target FROM STDIN");'
+d_case "SET LOCAL of the replay setting" replay_setting \
+    "sqlx::query(\"SET LOCAL temper.replaying = 'on'\");"
+# shellcheck disable=SC2016
+d_case "an uppercase act call" execute \
+    'sqlx::query("SELECT RESOURCE_ERASURE_EXECUTE($1, $2, $3, $4, $5)");'
 
 # ── (e) api/*.rs ───────────────────────────────────────────────────────────────────────────────
 FE="$WORK/fe"; make_fixture "$FE"
