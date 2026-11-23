@@ -324,6 +324,14 @@ jobs:
       - name: Guard test — guard-step-timer (the shell these steps run under)
         run: bash .github/scripts/test-guard-step-timer.sh
 
+      # THE CHECK ITSELF as well as its harness: every guard test under .github/scripts is run by a
+      # step of this workflow. Pure bash over this file. `cargo make tripwires` runs it too.
+      - name: Check every guard test is run by this workflow
+        run: bash .github/scripts/check-guard-tests-invoked.sh
+
+      - name: Guard test — check-guard-tests-invoked
+        run: bash .github/scripts/test-check-guard-tests-invoked.sh
+
       - name: Guard test — detect-ci-scope
         run: bash .github/scripts/test-detect-ci-scope.sh
 
