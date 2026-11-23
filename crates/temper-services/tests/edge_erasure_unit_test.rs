@@ -606,6 +606,65 @@ async fn a_fold_racing_the_unit_waits_and_then_is_refused(pool: PgPool) {
     race(&pool, Write::Fold).await;
 }
 
+/// The erased-edge write refusals stand down only for a real replay: under `temper.replaying`
+/// alone, in a database without the replay-target marker, a facet write
+/// (`_resource_write_guard_owner`) and a fold (`_project_relationship_folded`) of an erased edge are
+/// still refused as erased; once the database is marked, that refusal stands down. Every probe
+/// rolls back.
+///
+/// FAILS IF: either guard reads the setting instead of `_replay_mode()`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_erased_edge_write_is_refused_under_the_setting_alone(pool: PgPool) {
+    let x = estate(&pool).await;
+    let mut act = pool.begin().await.unwrap();
+    sqlx::query("SELECT edge_erasure_execute($1, $2, $3, $4, $5)")
+        .bind(x.e.uuid())
+        .bind(x.w.profile)
+        .bind(x.op.profile)
+        .bind(x.op.emitter)
+        .bind(Uuid::now_v7())
+        .execute(&mut *act)
+        .await
+        .expect("the unit runs");
+    tombstone(&mut act, x.w.profile)
+        .await
+        .expect("the person act's tombstone, after its edge step");
+    act.commit().await.expect("the act commits");
+    let refused = format!("edge {} is erased; writes are refused", x.e.uuid());
+
+    for write in [Write::Facet, Write::Fold] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let err = write
+            .run(&mut tx, x.w.emitter, x.e)
+            .await
+            .expect_err("unmarked, the setting alone does not lower the erased-edge refusal");
+        assert!(
+            format!("{err:#}").contains(&refused),
+            "{write:?}: refused as erased; got {err:#}"
+        );
+        tx.rollback().await.unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        temper_substrate::test_schema::mark_replay_target(&mut tx).await;
+        let outcome = write.run(&mut tx, x.w.emitter, x.e).await;
+        assert!(
+            !outcome
+                .as_ref()
+                .is_err_and(|e| format!("{e:#}").contains(&refused)),
+            "control: in a marked target the erased-edge refusal stands down; got {outcome:?}"
+        );
+        tx.rollback().await.unwrap();
+    }
+}
+
 /// A write of the edge through the door every surface reaches (`DbBackend`), by the edge's owner.
 #[derive(Debug, Clone, Copy)]
 enum DoorWrite {

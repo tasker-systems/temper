@@ -22,7 +22,7 @@
 pub mod ledger;
 
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 /// The shared sqlx migration chain (workspace `migrations/`).
 ///
@@ -44,4 +44,29 @@ pub async fn connect() -> Result<PgPool> {
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgresql://temper:temper@localhost:5437/temper_development".into());
     Ok(PgPool::connect(&url).await?)
+}
+
+/// Why this database is unsafe to serve, empty when it is safe (`replay_posture()`,
+/// 20261203000010): the replay-target marker, a database or role default for `temper.replaying`,
+/// or this session carrying it. The guards stand down only under `_replay_mode()`, which needs the
+/// marker, so a deployed database must never hold one; the deploy refuses on any reason.
+///
+/// Call it on a connection outside a transaction, so a `temper.replaying` it reports is
+/// session-level. A database a halted additive run left below 20261203000010 has no
+/// `replay_posture()` yet, and no marker table either: it reports nothing, so the run's own exit
+/// (the halt) is what the caller sees.
+pub async fn replay_posture(conn: &mut PgConnection) -> Result<Vec<String>> {
+    let present = sqlx::query_scalar!(
+        r#"SELECT to_regprocedure('public.replay_posture()') IS NOT NULL AS "present!""#
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if !present {
+        return Ok(Vec::new());
+    }
+    Ok(
+        sqlx::query_scalar!(r#"SELECT replay_posture() AS "violations!""#)
+            .fetch_one(conn)
+            .await?,
+    )
 }

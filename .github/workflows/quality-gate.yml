@@ -119,6 +119,12 @@ jobs:
       - name: Security tripwire — raw standing writers outside standing_service
         run: bash .github/scripts/audit-raw-standing-writers.sh
 
+      # The erasure acts and redaction functions do what they are handed; the admin door decides
+      # who may call them. The replay setting and marker lower the guards (_replay_mode). Pins the
+      # reviewed set of production callers so a new or moved one is a reviewed decision.
+      - name: Security tripwire — erasure, redaction and replay-setting callers
+        run: bash .github/scripts/audit-erasure-callers.sh
+
       # Two triggers over one baseline, and the second is the reason it exists: a claim-only
       # baseline stays GREEN when a gate widens, which is how six of eight measured over-claims got
       # in. Binding each claim file to the gate it describes is what makes the widening commit the
@@ -510,6 +516,13 @@ jobs:
       # spelling, in a file with no earlier gate; the seam; a comment; tests/).
       - name: Guard test — audit-raw-standing-writers
         run: bash .github/scripts/test-audit-raw-standing-writers.sh
+
+      # Thirty-one probes: every caller class reds (a new file, a second call in a baselined file,
+      # a moved caller, api/*.rs, an SQL template, and the spellings SQL treats alike), the empty
+      # scan and an unreadable file red as a broken scan, and the field of view stays green (a
+      # test module, a comment or bare name, tests/, migrations).
+      - name: Guard test — audit-erasure-callers
+        run: bash .github/scripts/test-audit-erasure-callers.sh
 
       # Five probes, and two of them exist because the guard's own first run was green for the wrong
       # reason: `awk -v` had eaten a backslash out of the attribution pattern, and a `grep -v` on an

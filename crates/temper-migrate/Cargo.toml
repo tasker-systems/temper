@@ -37,3 +37,7 @@ futures-core = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+
+[features]
+# Gates the DB-backed tests in tests/ to the integration job, as in every other crate.
+test-db = []

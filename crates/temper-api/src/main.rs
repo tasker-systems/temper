@@ -4,7 +4,7 @@ use tokio::net::TcpListener;
 
 use temper_api::routes::create_app;
 use temper_services::config::ApiConfig;
-use temper_services::services::slack_grant_vault_service;
+use temper_services::services::{replay_posture_service, slack_grant_vault_service};
 use temper_services::state::{AppState, JwksKeyStore};
 
 #[tokio::main]
@@ -25,6 +25,10 @@ async fn main() {
         .connect(&config.database_url)
         .await
         .expect("Failed to connect to database");
+
+    // Log, once per process, if this database is marked as a replay target or carries a
+    // `temper.replaying` default. Never blocks boot; temper-migrate refuses the deploy.
+    replay_posture_service::check(&pool).await;
 
     // Warn loudly, once per process, if the vault key is not the one that sealed the most recent
     // grants. Never blocks boot.

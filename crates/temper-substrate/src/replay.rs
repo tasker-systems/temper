@@ -711,7 +711,17 @@ pub const WALK_ORDER: &str = walk_order!();
 /// appends. Id order had the same residual and the intra-millisecond inversion besides. Where it is
 /// hit the walk diverges, which the byte-identity diff reports (a write guard does not abort it;
 /// see `temper.replaying` below), or it raises on a reference, which fails the replay.
+///
+/// **The target is marked first.** The guards stand down only under `_replay_mode()`
+/// (20261203000010): `temper.replaying` on AND the database carrying the `kb_replay_target` row.
+/// `_replay_target_mark()` writes that row, and the table's trigger refuses it (`check_violation`)
+/// in a database whose `kb_events` holds any row, so a replay pointed at a live ledger fails here,
+/// before it restores anything or lowers any guard. A walk that succeeds deletes the row as its
+/// last step; one that fails leaves it, for `replay_posture()` to report.
 pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
+    sqlx::query_scalar!(r#"SELECT true AS "marked!" FROM (SELECT _replay_target_mark()) m"#)
+        .fetch_one(pool)
+        .await?;
     for (table, rows) in &snap.inputs {
         restore_table(pool, table, rows).await?;
     }
@@ -781,9 +791,9 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
         let payload: serde_json::Value = r.get(2);
         let kind = EventKind::from_canonical_name(&name)
             .with_context(|| format!("replay: no projector for event type {name}"))?;
-        // Each event projects in its own transaction, with `temper.replaying` set LOCAL to it:
-        // the resource write guard (`_resource_write_guard`, migration 20260929040730) returns at
-        // once under it. A lawful write the live guard admitted walks where its append ran; one
+        // Each event projects in its own transaction, with `temper.replaying` set LOCAL to it, so
+        // in this marked target `_replay_mode()` is true: the resource write guard
+        // (`_resource_write_guard`) returns at once. A lawful write the live guard admitted walks where its append ran; one
         // that walks after an erasure of its row (the residual in the walk order above) must make
         // the walk diverge (D14), not abort on the guard.
         // `set_config(.., true)` scopes the setting to this transaction, so it ends at the
@@ -1459,6 +1469,12 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
         .execute(pool)
         .await?;
     restored?;
+    // The walk is done, so the target stops being one: a database rebuilt by replay (and then
+    // dumped, or branched) carries no marker onward. A replay that failed above returned before
+    // this, and leaves the marker for replay_posture() to report.
+    sqlx::query!("DELETE FROM kb_replay_target")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

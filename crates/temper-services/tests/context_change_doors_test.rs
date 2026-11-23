@@ -490,6 +490,7 @@ async fn an_admin_act_never_moves_the_cursor(pool: PgPool) {
         .execute(&mut *tx)
         .await
         .unwrap();
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     for (sql, what) in [
         (
             "INSERT INTO kb_events (event_type_id, emitter_entity_id, correlation_id, category, \

@@ -961,6 +961,7 @@ async fn the_status_trigger_holds_under_replay(pool: PgPool) {
         .execute(&mut *tx)
         .await
         .unwrap();
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     let moved = sqlx::query(
         "UPDATE kb_erasure_members SET status = 'pending', erased_by_event_id = NULL \
           WHERE member_id = $1",

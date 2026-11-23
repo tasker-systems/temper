@@ -47,6 +47,22 @@ async fn replay_reproduces_projections_byte_identically(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
     replay::replay(&pool, &snap).await.unwrap();
 
+    // The walk marks its target first and clears the marker once it succeeds, so the rebuilt
+    // database carries none onward and is safe to serve.
+    let marked: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_replay_target")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(marked, 0, "a successful replay clears its marker");
+    let posture: Vec<String> = sqlx::query_scalar("SELECT replay_posture()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        posture.is_empty(),
+        "a replayed database is safe to serve: {posture:?}"
+    );
+
     let after = replay::dump_projections(&pool).await.unwrap();
     for ((table_a, a), (table_b, b)) in before.iter().zip(after.iter()) {
         assert_eq!(table_a, table_b);

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use temper_migrate::{connect, ledger, MIGRATOR};
+use temper_migrate::{connect, ledger, replay_posture, MIGRATOR};
 
 /// Apply pending migrations, recording each apply's outcome in `kb_migration_ledger`.
 ///
@@ -22,7 +22,8 @@ struct Cli {
     /// side effect of some later, unrelated, additive deploy.
     ///
     /// Exits 3 when it halts, so a caller can tell "an operator must take this" apart from "a
-    /// migration failed".
+    /// migration failed". A database with an unsafe replay posture exits 5 instead, even when the
+    /// run also halted; both are reported.
     #[arg(long)]
     additive_only: bool,
 }
@@ -35,6 +36,35 @@ const HALTED: i32 = 3;
 /// operator's next move is different and the ledger has nothing to say about it — see
 /// [`ledger::divergent_version`].
 const DIVERGED: i32 = 4;
+
+/// The database carries a replay-target marker or a persistent `temper.replaying` default, either
+/// of which a deployed database must never hold. Distinct from 1 because nothing failed: the
+/// schema applied, and the database itself is what the operator must inspect.
+const UNSAFE_REPLAY_POSTURE: i32 = 5;
+
+/// Report every reason [`replay_posture`] names, and whether there was any. Called after
+/// applying, in both modes, because the check is itself a migration's function and a fresh database
+/// gains it here. The caller decides the exit, so an additive run that also halted reports both.
+async fn report_replay_posture(conn: &mut sqlx::PgConnection) -> Result<bool> {
+    let reasons = replay_posture(conn).await?;
+    if reasons.is_empty() {
+        return Ok(false);
+    }
+    eprintln!();
+    eprintln!("UNSAFE REPLAY POSTURE");
+    eprintln!();
+    for reason in &reasons {
+        eprintln!("  * {reason}");
+    }
+    eprintln!();
+    eprintln!(
+        "The guards that keep erasure and the ledger honest stand down only for a replay walk's\n\
+         scratch database: temper.replaying on AND a kb_replay_target row. A deployed database\n\
+         carries no marker and no default for the setting. Find what marked it or set the\n\
+         default before serving from it; the migrations this run applied stay applied."
+    );
+    Ok(true)
+}
 
 /// Exit on the divergence class if that is what this is; otherwise hand the error back unchanged.
 ///
@@ -89,6 +119,9 @@ async fn main() -> Result<()> {
     if !cli.additive_only {
         classify(ledger::run_with_ledger(&MIGRATOR, &mut conn).await)?;
         println!("migrations applied; outcomes recorded in kb_migration_ledger");
+        if report_replay_posture(&mut conn).await? {
+            std::process::exit(UNSAFE_REPLAY_POSTURE);
+        }
         return Ok(());
     }
 
@@ -108,8 +141,13 @@ async fn main() -> Result<()> {
         );
     }
 
+    let unsafe_posture = report_replay_posture(&mut conn).await?;
+
     // The halt is reported AFTER what was applied, because both are true and the operator needs to
-    // know the schema moved before being told where it stopped.
+    // know the schema moved before being told where it stopped. An unsafe replay posture is
+    // reported first and its exit (5) wins over the halt's (3): the database must be inspected
+    // before any cutover is taken on it. Both are printed either way. No test builds a halted run,
+    // so this order is unwitnessed; tests/replay_posture_test.rs covers exit 5 without a halt.
     if let Some(halt) = run.halt {
         eprintln!();
         eprintln!("HALTED at migration {halt}");
@@ -122,7 +160,12 @@ async fn main() -> Result<()> {
              Nothing after it was applied. Halting is stopping, not skipping: a later migration\n\
              applied over a schema its predecessor never made is the failure this prevents."
         );
-        std::process::exit(HALTED);
+        if !unsafe_posture {
+            std::process::exit(HALTED);
+        }
+    }
+    if unsafe_posture {
+        std::process::exit(UNSAFE_REPLAY_POSTURE);
     }
 
     Ok(())

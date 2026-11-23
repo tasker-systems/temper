@@ -611,6 +611,24 @@ async fn the_trigger_and_the_checks_refuse_the_barred_shapes(pool: PgPool) {
         .execute(&mut *tx)
         .await
         .unwrap();
+    // The setting alone, in a database without the replay-target marker, lowers no guard.
+    {
+        let mut sp = sqlx::Connection::begin(&mut *tx).await.unwrap();
+        let err = sqlx::query(
+            "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) VALUES ($1, $2, NULL)",
+        )
+        .bind(w.eng_sec_red)
+        .bind(w.eng)
+        .execute(&mut *sp)
+        .await
+        .expect_err("unmarked, the setting alone restores no opener-less row");
+        assert_eq!(
+            err.as_database_error().and_then(|e| e.constraint()),
+            Some("kb_team_public_within_opened_by")
+        );
+        sp.rollback().await.unwrap();
+    }
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     sqlx::query(
         "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) VALUES ($1, $2, NULL)",
     )
@@ -3381,6 +3399,149 @@ async fn a_hard_deleted_team_records_each_row_before_the_cascade(pool: PgPool) {
     assert!(
         row_exists(&pool, w.eng_sec, w.eng).await,
         "another team's row is untouched"
+    );
+}
+
+/// The hard-delete triggers stand down only for a real replay: with `temper.replaying` on in a
+/// database without the replay-target marker, a hard delete is still recorded before the cascade;
+/// with the marker (the replay walk's own target), it restores as it stands and records nothing.
+///
+/// FAILS IF: the row trigger (`kb_teams_public_within_cascade`) reads the setting instead of
+/// `_replay_mode()`. The statement triggers have their own witness below.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hard_delete_under_the_setting_alone_is_still_recorded(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let records = |team: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT e.payload ->> 'act' FROM kb_events e \
+                   JOIN kb_event_types et ON et.id = e.event_type_id \
+                  WHERE et.name = 'team_public_within_changed' \
+                    AND (e.payload ->> 'team_id')::uuid = $1 ORDER BY e.id",
+            )
+            .bind(team)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let unmarked = team(&pool, "eng-unmarked", &[w.eng]).await;
+    let marked = team(&pool, "eng-marked", &[w.eng]).await;
+    for t in [unmarked, marked] {
+        join(&pool, t, d.both, "owner").await;
+        open_by(&pool, d.both, t, w.eng).await.unwrap();
+    }
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM kb_teams WHERE id = $1")
+        .bind(unmarked)
+        .execute(&mut *tx)
+        .await
+        .expect("hard delete");
+    tx.commit().await.unwrap();
+    assert_eq!(
+        records(unmarked).await,
+        ["opened", "cascade_deleted"],
+        "unmarked, the setting alone does not stand the hard-delete triggers down"
+    );
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
+    sqlx::query("DELETE FROM kb_teams WHERE id = $1")
+        .bind(marked)
+        .execute(&mut *tx)
+        .await
+        .expect("hard delete under replay");
+    let cascade_recorded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'team_public_within_changed' AND e.payload ->> 'act' = 'cascade_deleted' \
+            AND (e.payload ->> 'team_id')::uuid = $1",
+    )
+    .bind(marked)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(
+        cascade_recorded, 0,
+        "control: in a marked target the triggers stand down and record nothing"
+    );
+    tx.rollback().await.unwrap();
+}
+
+/// The two statement triggers stay up under the setting alone. The BEFORE statement trigger
+/// (`kb_teams_public_within_hard_delete_begin`) pushes the statement's frame before any row is
+/// deleted: a probe row trigger, ordered before the cascade, reads that frame. The AFTER statement
+/// trigger (`kb_teams_public_within_hard_delete_transitions`) records a mid-path delete as a lapse.
+///
+/// FAILS IF: either statement trigger reads the setting instead of `_replay_mode()`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_hard_delete_statement_triggers_hold_under_the_setting_alone(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let leaf = team(&pool, "eng-probe", &[w.eng]).await;
+    join(&pool, w.org, d.both, "owner").await;
+    open_by(&pool, d.both, w.eng_sec, w.org).await.unwrap();
+
+    // The frame, as the first row trigger sees it.
+    let mut tx = pool.begin().await.unwrap();
+    for sql in [
+        "SELECT set_config('temper.replaying', 'on', true)",
+        "CREATE TEMP TABLE frame_seen (v text)",
+        "CREATE FUNCTION pg_temp.frame_probe() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN \
+           INSERT INTO frame_seen VALUES \
+             (current_setting('temper.public_within_hard_delete', true)); \
+           RETURN OLD; END $$",
+        // BEFORE row triggers fire by name: `kb_teams_a_probe` runs before the cascade.
+        "CREATE TRIGGER kb_teams_a_probe BEFORE DELETE ON kb_teams \
+           FOR EACH ROW EXECUTE FUNCTION pg_temp.frame_probe()",
+    ] {
+        sqlx::query(sql).execute(&mut *tx).await.unwrap();
+    }
+    sqlx::query("DELETE FROM kb_teams WHERE id = $1")
+        .bind(leaf)
+        .execute(&mut *tx)
+        .await
+        .expect("hard delete");
+    let seen: Option<String> = sqlx::query_scalar("SELECT v FROM frame_seen")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    let frames: serde_json::Value =
+        serde_json::from_str(seen.as_deref().unwrap_or("[]")).unwrap_or_default();
+    assert_eq!(
+        frames.as_array().map(Vec::len),
+        Some(1),
+        "the BEFORE statement trigger pushed the statement's frame: {seen:?}"
+    );
+
+    // The lapse of a row a mid-path delete cut off.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM kb_teams WHERE id = $1")
+        .bind(w.eng)
+        .execute(&mut *tx)
+        .await
+        .expect("hard delete");
+    tx.commit().await.unwrap();
+    let recs = row_records(&pool, "team_public_within_changed", w.eng_sec, w.org).await;
+    assert_eq!(
+        recs.last().map(|r| r["act"].clone()),
+        Some(serde_json::json!("lapsed")),
+        "the cut-off row is recorded as lapsed: the AFTER statement trigger stayed up ({recs:?})"
     );
 }
 

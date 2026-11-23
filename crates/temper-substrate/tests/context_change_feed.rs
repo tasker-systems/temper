@@ -517,6 +517,20 @@ async fn rows_without_a_truthful_order_are_refused_or_never_served(pool: PgPool)
         .execute(&mut *tx)
         .await
         .unwrap();
+    // The setting alone, in a database without the replay-target marker, lowers no guard.
+    {
+        let mut sp = sqlx::Connection::begin(&mut *tx).await.unwrap();
+        let err = insert(None, None)
+            .execute(&mut *sp)
+            .await
+            .expect_err("unmarked, the setting alone restores no legacy row");
+        assert!(
+            err.to_string().contains("must record xact_id and seq"),
+            "{err}"
+        );
+        sp.rollback().await.unwrap();
+    }
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     insert(None, None)
         .execute(&mut *tx)
         .await

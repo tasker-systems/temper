@@ -321,6 +321,25 @@ never carried the number this failure is about.
 > changed underneath it. That is not a renumbering problem; work out which migration changed and
 > why before applying anything.
 
+## 4e. The deploy failed: "this database is marked as a replay target" (exit 5)
+
+The runner exited **5**. What it applied stays applied, and then `replay_posture()` named a reason this
+database is unsafe to serve: a `kb_replay_target` row, a database or role default for
+`temper.replaying`, or the runner's own session carrying it. The guards that keep erasure and the
+ledger honest stand down only under `_replay_mode()`, which needs the marker; only a replay walk's
+scratch database carries one.
+
+**Do not go to the ledger**: every apply this run made succeeded. An additive run that also
+halted reports the posture first and exits 5; take the halt (§4c) once the posture is clear. Read the runner's output for the reasons, then:
+
+```sql
+SELECT * FROM kb_replay_target;                                   -- the marker, and when
+SELECT setdatabase, setrole, setconfig FROM pg_db_role_setting
+ WHERE EXISTS (SELECT 1 FROM unnest(setconfig) c WHERE c LIKE 'temper.replaying=%');
+```
+
+Find what wrote it before removing it: nothing in a deployed path writes either.
+
 ---
 
 ## 5. Shipping a shape-breaking migration
@@ -439,7 +458,8 @@ curl -s "https://temperkb.io/api/health?cb=$(date +%s)" | jq -r .commit
 
 # What the DEPLOY will do to the schema — the same call vercel-build.sh makes.
 # Exit 0 = applied (or nothing pending); 3 = halted, an operator must take it;
-# 4 = the carried set disagrees with the database's history (§4d).
+# 4 = the carried set disagrees with the database's history (§4d);
+# 5 = the database carries a replay-target marker or a temper.replaying default (§4e).
 cargo run -p temper-migrate --bin temper-migrate -- --additive-only
 
 # Apply EVERYTHING, shape-breaking included. What a developer and an operator run.
