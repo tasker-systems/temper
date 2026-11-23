@@ -18,9 +18,9 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "@vercel/connect": "2.9.4",
+    "@vercel/connect": "2.9.5",
     "ai": "^7.0.128",
-    "eve": "^1.0.2",
+    "eve": "^1.1.0",
     "openapi-fetch": "^0.17.0",
     "@tasker-systems/temper-telemetry-ts": "file:../../../clients/temper-telemetry-ts",
     "@tasker-systems/temper-ts": "file:../../../clients/temper-ts",
