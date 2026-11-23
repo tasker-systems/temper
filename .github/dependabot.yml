@@ -18,8 +18,9 @@
 #
 # The cargo and JS entries group minor and patch bumps into one weekly PR per tree; a major bump
 # arrives on its own — except the web surface's toolchain majors, which the bun entry holds for
-# hand adoption (see it below), and TypeScript majors in the ts-clients entry, held behind
-# openapi-typescript's peer range. The github-actions entry groups majors too (see it below).
+# hand adoption (see it below), TypeScript majors in the ts-clients entry, held behind
+# openapi-typescript's peer range, and @types/node majors in the agent-workflows entry, held at
+# the Node runtime the agents deploy on. The github-actions entry groups majors too (see it below).
 # The question a reviewer asks of a bump set is "do I trust this set of upstream revisions", and splitting it
 # across a PR per package makes each look trivial while the aggregate goes unexamined. A major is a
 # different question (what broke), so it is not folded in.
@@ -140,5 +141,11 @@ updates:
     groups:
       agent-workflows:
         update-types: ["minor", "patch"]
+    # The agents run on Vercel's Node 24 runtime (engines.node "24.x"; mise.toml and CI pin 24.22.1).
+    # Types for a newer Node major let code type-check against APIs the runtime lacks. Lift this when
+    # the runtime and engines move.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "chore(deps)"
