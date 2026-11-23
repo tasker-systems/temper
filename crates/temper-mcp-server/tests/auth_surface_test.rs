@@ -132,6 +132,30 @@ async fn the_mcp_gate_accepts_a_token_for_either_surface_audience() {
     }
 }
 
+/// A token whose JOSE header names a critical extension the verifier does not implement is
+/// refused at the gate, though its signature, issuer, audience and expiry are all good. The
+/// control is the same claims with a plain header, which passes.
+///
+/// FAILS IF: the gate accepts a header whose `crit` names an extension it does not implement.
+#[tokio::test]
+async fn the_mcp_gate_refuses_a_token_naming_an_unknown_critical_header() {
+    let plain = hs256_token("https://inst.test/mcp");
+    assert_ne!(
+        mcp_status_with_token(&plain).await,
+        StatusCode::UNAUTHORIZED,
+        "the control token, with no crit header, must pass the gate"
+    );
+
+    let mut critical_header = Header::new(Algorithm::HS256);
+    critical_header.crit = Some(vec!["urn:example:unknown".into()]);
+    let critical = hs256_token_with_header(critical_header, "https://inst.test/mcp");
+    assert_eq!(
+        mcp_status_with_token(&critical).await,
+        StatusCode::UNAUTHORIZED,
+        "an unknown critical extension must be refused by validation"
+    );
+}
+
 #[derive(Serialize)]
 struct TestTokenClaims<'a> {
     sub: &'a str,
@@ -144,6 +168,10 @@ struct TestTokenClaims<'a> {
 /// Signs an HS256 bearer naming the given audience, for the static-key fixture. `iss` must match
 /// the fixture's configured issuer — the gate checks it too.
 fn hs256_token(aud: &str) -> String {
+    hs256_token_with_header(Header::new(Algorithm::HS256), aud)
+}
+
+fn hs256_token_with_header(header: Header, aud: &str) -> String {
     let claims = TestTokenClaims {
         sub: "auth|test-user",
         iss: "https://as.test",
@@ -152,9 +180,9 @@ fn hs256_token(aud: &str) -> String {
         iat: 0,
     };
     encode(
-        &Header::new(Algorithm::HS256),
+        &header,
         &claims,
-        &EncodingKey::from_secret(b"witness"),
+        &EncodingKey::from_secret(b"witness").expect("non-empty HMAC key"),
     )
     .expect("token signs")
 }

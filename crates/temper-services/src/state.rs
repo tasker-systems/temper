@@ -731,9 +731,9 @@ impl Shared {
     /// 2. **The token must actually carry an `aud` claim.** `set_audience` alone does NOT enforce
     ///    that. `required_spec_claims` defaults to `{"exp"}`, and jsonwebtoken's own docs say:
     ///    *"Validation only happens if `aud` claim is present in the token."* A token with **no**
-    ///    `aud` — or a malformed one that fails to parse as a string — hits the fallthrough arm and
-    ///    is **accepted**. Fixing (1) without (2) closes half the door and documents the other half
-    ///    as shut.
+    ///    `aud` is **accepted** unless `aud` is a required claim. (A malformed `aud` is refused
+    ///    whenever audience checking is on.) Fixing (1) without (2) closes half the door and
+    ///    documents the other half as shut.
     /// 3. The audience set is a SET, not a single value: the MCP surface passes its own RFC 8707
     ///    resource audience *plus* the API audience, because machine tokens and sessions minted
     ///    before `MCP_AUDIENCE` existed carry the API audience and both surfaces are one instance.
@@ -1888,6 +1888,47 @@ mod tests {
         let data = jsonwebtoken::decode::<TestClaims>(&token, &vk.key, &validation)
             .expect("EdDSA token verification should succeed");
         assert_eq!(data.claims.sub, "u1");
+    }
+
+    /// A token whose header names a critical extension temper does not understand is refused,
+    /// though its signature, issuer, audience and expiry are all good (RFC 7515 §4.1.11).
+    /// The control token differs only in the header, so the refusal is the `crit` member's.
+    ///
+    /// FAILS IF: jsonwebtoken accepts a header whose `crit` names an extension it does not implement.
+    #[tokio::test]
+    async fn a_token_naming_an_unknown_critical_header_is_refused() {
+        let (enc, dec) = try_make_keys().expect("the embedded Ed25519 test keypair is valid");
+        let store = JwksKeyStore::with_static_key(dec, Algorithm::EdDSA);
+        let validation = store.validation(
+            "https://as.example",
+            &["https://api.example"],
+            Algorithm::EdDSA,
+        );
+        let claims = TestClaims {
+            sub: "u1".into(),
+            iss: "https://as.example".into(),
+            aud: Some("https://api.example".into()),
+            exp: 9_999_999_999,
+        };
+
+        let plain = encode(&Header::new(Algorithm::EdDSA), &claims, &enc).expect("encodes");
+        let vk = store
+            .get_decoding_key_for_token(&plain)
+            .await
+            .expect("a static key resolves");
+        jsonwebtoken::decode::<TestClaims>(&plain, &vk.key, &validation)
+            .expect("the control token, with no crit header, verifies");
+
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.crit = Some(vec!["urn:example:unknown".into()]);
+        let critical = encode(&header, &claims, &enc).expect("encodes");
+        let vk = store
+            .get_decoding_key_for_token(&critical)
+            .await
+            .expect("the kid lookup reads the header unchecked, so the key still resolves");
+        let err = jsonwebtoken::decode::<TestClaims>(&critical, &vk.key, &validation)
+            .expect_err("an unknown critical extension must be refused");
+        assert_eq!(err.kind(), &jsonwebtoken::errors::ErrorKind::InvalidToken);
     }
 
     #[test]
