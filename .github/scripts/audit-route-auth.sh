@@ -518,23 +518,33 @@ if [[ "$NORM_AUTH_ONLY_STATUS" != "$AUTH_ONLY_STATUS_CURRENT" ]]; then
   fail=1
 fi
 
-# The signature of handler `handlers::<mod>::<fn>`: from `pub async fn <fn>(` through the line that
-# opens its body. Empty when the handler is not found.
-handler_signature() {
-  local h="$1" mod fname
-  mod="$(printf '%s' "$h" | cut -d: -f3)"
-  fname="$(printf '%s' "$h" | cut -d: -f5)"
-  awk -v f="pub async fn ${fname}(" 'index($0,f){p=1} p{print} p&&/\{[[:space:]]*$/{exit}' \
-    "${HANDLERS_DIR}/${mod}.rs" 2>/dev/null || true
-}
-
-# How many identity extractors a signature names: `: AuthUser` (a person) or `: AnyPrincipal` (an
-# explicit opt-in that admits a machine).
-extractor_count() {
-  printf '%s\n' "$1" | grep -Eo ':[[:space:]]*(AuthUser|AnyPrincipal)([^A-Za-z0-9_]|$)' | grep -c . || true
-}
-
 AUTH_COVERED_HANDLERS="$(printf '%s\n' "$ALL" | grep -E "^($AUTH_COVERED)"$'\t' | cut -f2 | sort -u)"
+
+# One row per auth-covered handler `handlers::<mod>::<fn>`, read from its signature: from
+# `pub async fn <fn>(` in handlers/<mod>.rs through the line that opens its body. Columns: the
+# handler; how many identity extractors the signature names (`: AuthUser`, a person, or
+# `: AnyPrincipal`, the opt-in that admits a machine), counted as `grep -o` counts them; and 1 when
+# it takes AnyPrincipal. A handler whose signature is not found reads `-` in both columns. Checks
+# (e) and (f) both read this table. It is built in one awk process rather than a pipeline per
+# handler per check, because test-audit-route-auth.sh runs this whole auditor once per fixture.
+SIGNATURE_TABLE="$(printf '%s\n' "$AUTH_COVERED_HANDLERS" | awk -F'::' -v dir="$HANDLERS_DIR" '
+  NF == 0 { next }
+  NF != 3 { print $0 "\t-\t-"; next }
+  {
+    file = dir "/" $2 ".rs"; f = "pub async fn " $3 "("
+    p = 0; found = 0; n = 0; any = 0
+    while ((getline line < file) > 0) {
+      if (index(line, f)) p = 1
+      if (!p) continue
+      found = 1
+      s = line
+      while (match(s, /:[[:space:]]*(AuthUser|AnyPrincipal)([^A-Za-z0-9_]|$)/)) { n++; s = substr(s, RSTART + RLENGTH) }
+      if (line ~ /:[[:space:]]*AnyPrincipal([^A-Za-z0-9_]|$)/) any = 1
+      if (line ~ /\{[[:space:]]*$/) break
+    }
+    close(file)
+    if (found) print $0 "\t" n "\t" any; else print $0 "\t-\t-"
+  }')"
 
 # (e) Every auth-covered handler names exactly one identity extractor. The extractor is where WHO
 # is decided: `AuthUser` refuses a machine, `AnyPrincipal` admits one. A handler naming neither
@@ -544,14 +554,13 @@ AUTH_COVERED_HANDLERS="$(printf '%s\n' "$ALL" | grep -E "^($AUTH_COVERED)"$'\t' 
 read -r -d '' NO_EXTRACTOR_BASELINE <<'EOF' || true
 EOF
 NO_EXTRACTOR_CURRENT=""
-for h in $AUTH_COVERED_HANDLERS; do
-  sig="$(handler_signature "$h")"
-  if [[ -z "$sig" ]]; then
+while IFS=$'\t' read -r h n _; do
+  [[ -n "$h" ]] || continue
+  if [[ "$n" == "-" ]]; then
     echo "audit-route-auth: FAIL — auth-covered handler $h: signature not found under ${HANDLERS_DIR}" >&2
     fail=1
     continue
   fi
-  n="$(extractor_count "$sig")"
   if [[ "$n" == "0" ]]; then
     NO_EXTRACTOR_CURRENT="${NO_EXTRACTOR_CURRENT}${h}"$'\n'
   elif [[ "$n" != "1" ]]; then
@@ -559,7 +568,7 @@ for h in $AUTH_COVERED_HANDLERS; do
     echo "  (AuthUser for a person's act, AnyPrincipal for content and workflow) decides who it admits." >&2
     fail=1
   fi
-done
+done <<< "$SIGNATURE_TABLE"
 NORM_NO_EXTRACTOR="$(printf '%s\n' "$NO_EXTRACTOR_BASELINE" | grep . | sort -u || true)"
 NO_EXTRACTOR_CURRENT="$(printf '%s' "$NO_EXTRACTOR_CURRENT" | grep . | sort -u || true)"
 if [[ "$NORM_NO_EXTRACTOR" != "$NO_EXTRACTOR_CURRENT" ]]; then
@@ -683,12 +692,11 @@ handlers::teams::detail
 handlers::teams::list
 EOF
 ANY_PRINCIPAL_CURRENT=""
-for h in $AUTH_COVERED_HANDLERS; do
-  sig="$(handler_signature "$h")"
-  if printf '%s\n' "$sig" | grep -Eq ':[[:space:]]*AnyPrincipal([^A-Za-z0-9_]|$)'; then
+while IFS=$'\t' read -r h _ any; do
+  if [[ "$any" == "1" ]]; then
     ANY_PRINCIPAL_CURRENT="${ANY_PRINCIPAL_CURRENT}${h}"$'\n'
   fi
-done
+done <<< "$SIGNATURE_TABLE"
 ANY_PRINCIPAL_CURRENT="$(printf '%s' "$ANY_PRINCIPAL_CURRENT" | grep . | sort -u || true)"
 NORM_ANY_PRINCIPAL="$(printf '%s\n' "$ANY_PRINCIPAL_BASELINE" | grep . | sort -u || true)"
 if [[ "${1:-}" == "--list-any-principal" ]]; then

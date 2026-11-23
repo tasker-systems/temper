@@ -474,6 +474,24 @@ run_test "an auth-covered handler with no extractor: fails" "$REAL_ROUTES" 1 \
     "names no identity extractor"
 unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
 
+# A mounted handler whose signature cannot be found has no extractor count to check, so (e) must
+# fail on it by name rather than skip it.
+FIX_SRC="${FIXTURE_DIR}/src_signature_missing"
+cp -R "$REAL_API_SRC" "$FIX_SRC"
+python3 - "$FIX_SRC/handlers/access.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = "pub async fn get_settings("
+assert s.count(a) == 1, "get_settings signature not found exactly once"
+s = s.replace(a, "pub async fn get_settings_renamed(", 1)
+open(p, "w").write(s)
+PYEOF
+FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+run_test "an auth-covered handler whose signature is not found: fails" "$REAL_ROUTES" 1 \
+    "auth-covered handler handlers::access::get_settings: signature not found"
+unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+
 # --- (m) a new machine-admitting (AnyPrincipal) handler fails (f) ---
 FIX_SRC="${FIXTURE_DIR}/src_new_any_principal"
 cp -R "$REAL_API_SRC" "$FIX_SRC"
