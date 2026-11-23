@@ -168,6 +168,10 @@ pub enum EventKind {
     /// title, origin URI or property family redacted, and today's value too when cleared. Same
     /// `admin` / NULL-anchored posture.
     ResourceScrubbed,
+    /// One edge of an estate erased (erasure estate-homed edges): a folded edge homed in a
+    /// context of the person's estate, its trail redacted to sentinels. Same `admin` /
+    /// NULL-anchored posture, one event per edge.
+    EdgeErased,
     /// One recorded write to `kb_team_members` — an add, a role change or a removal (team-role
     /// rank spec C8). Category `admin`, NULL-anchored, written only by
     /// `_admin_team_membership_write` in the same statement as the row.
@@ -303,6 +307,7 @@ impl EventKind {
             EventKind::ResourceErasureRefused => "resource_erasure_refused",
             EventKind::BlockHistoryScrubbed => "block_history_scrubbed",
             EventKind::ResourceScrubbed => "resource_scrubbed",
+            EventKind::EdgeErased => "edge_erased",
             EventKind::TeamMembershipChanged => "team_membership_changed",
             EventKind::TeamParentLinkChanged => "team_parent_link_changed",
             EventKind::TeamLifecycleChanged => "team_lifecycle_changed",
@@ -378,6 +383,7 @@ impl EventKind {
             "resource_erasure_refused" => EventKind::ResourceErasureRefused,
             "block_history_scrubbed" => EventKind::BlockHistoryScrubbed,
             "resource_scrubbed" => EventKind::ResourceScrubbed,
+            "edge_erased" => EventKind::EdgeErased,
             "team_membership_changed" => EventKind::TeamMembershipChanged,
             "team_parent_link_changed" => EventKind::TeamParentLinkChanged,
             "team_lifecycle_changed" => EventKind::TeamLifecycleChanged,
@@ -1099,7 +1105,8 @@ impl EventContext {
 /// path refuses.
 ///
 /// The write guard runs first on the same connection (spec 2026-09-28 D13): the edge's
-/// resource endpoints are locked `FOR KEY SHARE` and an erased one refuses the fold.
+/// resource endpoints and then the edge row are locked `FOR KEY SHARE`, and an erased endpoint,
+/// or the edge itself once an `edge_erased` record names it, refuses the fold.
 pub(crate) async fn project_property_retracted(
     conn: &mut sqlx::PgConnection,
     event_id: Uuid,

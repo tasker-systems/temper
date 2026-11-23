@@ -21,6 +21,10 @@ inputs:
     description: "ONNX Runtime version. Must satisfy ort's load-dynamic API level (18 ⇒ 1.18.x)."
     required: false
     default: "1.18.1"
+  sha256:
+    description: "SHA-256 of the Microsoft.ML.OnnxRuntime .nupkg for `version`. Change it with the version."
+    required: false
+    default: "e1fdeb5359407c948569905b4eb76af50b8bdb38b2bd3f2ad6516fe4a7186d6a"
 
 runs:
   using: "composite"
@@ -30,17 +34,23 @@ runs:
       uses: actions/cache@v4
       with:
         path: onnxruntime-linux-x64-${{ inputs.version }}
-        key: onnxruntime-${{ runner.os }}-${{ inputs.version }}
+        key: onnxruntime-${{ runner.os }}-${{ inputs.version }}-nuget-${{ inputs.sha256 }}
 
     - name: Download ONNX Runtime
       if: steps.onnx-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
-        curl -sSL -o onnxruntime.tgz \
-          "https://github.com/microsoft/onnxruntime/releases/download/v${{ inputs.version }}/onnxruntime-linux-x64-${{ inputs.version }}.tgz"
-        tar -xzf onnxruntime.tgz
-        rm -f onnxruntime.tgz
+        # The library comes from Microsoft's own NuGet package for this version, which carries the
+        # linux-x64 shared library. The package hash is pinned, so a changed or substituted package
+        # fails here.
+        curl -fsSL --retry 3 -o onnxruntime.nupkg \
+          "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${{ inputs.version }}/microsoft.ml.onnxruntime.${{ inputs.version }}.nupkg"
+        echo "${{ inputs.sha256 }}  onnxruntime.nupkg" | sha256sum -c -
+        dest="onnxruntime-linux-x64-${{ inputs.version }}/lib"
+        mkdir -p "$dest"
+        unzip -q -j onnxruntime.nupkg "runtimes/linux-x64/native/libonnxruntime.so" -d "$dest"
+        rm -f onnxruntime.nupkg
 
     - name: Export ORT_DYLIB_PATH
       shell: bash
