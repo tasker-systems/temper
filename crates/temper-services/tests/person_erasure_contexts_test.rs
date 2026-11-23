@@ -664,10 +664,12 @@ async fn forge_on(
     f: &Forged<'_>,
 ) -> Result<(), sqlx::Error> {
     if f.tombstone {
-        sqlx::query("UPDATE kb_profiles SET tombstoned_at = now() WHERE id = $1")
-            .bind(f.subject)
-            .execute(&mut *conn)
-            .await?;
+        sqlx::query(
+            "UPDATE kb_profiles SET tombstoned_at = COALESCE(tombstoned_at, now()) WHERE id = $1",
+        )
+        .bind(f.subject)
+        .execute(&mut *conn)
+        .await?;
     }
     let payload = serde_json::json!({
         "subject_table": f.subject_table,

@@ -355,6 +355,9 @@ refine = [
 "/redacted_fields/*/paths/*"  = { disposition = "structural", note = "paths, never values" }
 "/ledger_remainder/*/paths/*" = { disposition = "structural", note = "paths, never values" }
 
+[payload."edge_erased"]
+"/redacted_fields/*/paths/*" = { disposition = "structural", note = "paths, never values" }
+
 [payload."resource_erasure_refused"]
 "/detail" = { disposition = "structural", note = "fixed text" }
 

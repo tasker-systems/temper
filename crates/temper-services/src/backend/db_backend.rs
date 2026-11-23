@@ -82,6 +82,13 @@ fn api_err<E: Into<anyhow::Error>>(e: E) -> TemperError {
     if crate::error::exceeded_program_limit(&e) {
         return TemperError::BadRequest(crate::error::VALUE_TOO_LARGE_MESSAGE.to_string());
     }
+    // A write of an edge erased while the write waited on the edge's row lock: the SQL guard's
+    // refusal (`_resource_write_guard_owner`, `_project_relationship_folded`). The erased edge is
+    // folded, so the answer is the one `check_edge_mutable` gives the same write sent after the
+    // erasure, word for word, and never a `500`.
+    if let Some(edge) = crate::error::erased_edge_refused(&e) {
+        return TemperError::NotFound(format!("edge {edge} not found"));
+    }
     TemperError::Api(e.to_string())
 }
 
