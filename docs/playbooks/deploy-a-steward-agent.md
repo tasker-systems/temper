@@ -19,7 +19,7 @@ Getting that wrong produces no deploy-time error and no log line — it produces
 that 404s every audit it attempts.
 
 > **The auditor's cron is live, but the auditor itself is optional — and that combination is
-> safe.** Eve creates one Vercel Cron Job per file in `agent/schedules/`, so a schedule's
+> safe.** Eve registers one schedule per file in `agent/schedules/`, so a schedule's
 > *location* is the on/off switch; enabling or withdrawing it is a `git mv` plus an operator
 > decision, never a side effect of a merge. A deployment that sets no auditor credential
 > no-ops the tick with a log line instead of failing, so you can run the steward with no
@@ -367,15 +367,21 @@ vercel connect create https://<instance>/mcp --name steward
 
 ## Verify
 
-### Cron Jobs
+### Schedules
 
-Vercel → *Settings → Cron Jobs*: every `defineSchedule` becomes a Vercel Cron Job,
-evaluated in **UTC**. Expect **three**: the steward dispatch tick and the region-materialize
-tick, both hourly at `0 * * * *`, and the auditor dispatch tick **daily at `30 3 * * *`** — on
+On Vercel, eve deploys every `defineSchedule` as a **Vercel Schedule** (beta), not a Vercel Cron
+Job, evaluated in **UTC** and named `eve.` plus the file name. Expect **three**: `eve.steward` (the
+steward dispatch tick) and `eve.materialize` (the region-materialize tick), both hourly at
+`0 * * * *`, and `eve.auditor` (the auditor dispatch tick) **daily at `30 3 * * *`** — on
 the half hour, so citations a steward tick authors are auditable without the two writing
 concurrently over one map. The auditor's *hour* is a budget decision rather than a protocol one:
 each dispatched job spends an AI Gateway model session, and a deployment with a larger allowance
 may raise it.
+
+Each run starts within a short jitter window after its time, and **a failed invocation is not
+retried**: the next tick is the retry. A run's history is `vercel schedules executions list
+eve.auditor`, its logs are under *Observability → Logs*, and `vercel schedules invoke eve.auditor`
+fires one on demand. Renaming a schedule's file creates a new schedule.
 
 **The auditor's cron exists whether or not you run an auditor**, and there are three separate
 reasons it may do nothing on a given tick. All three log and return **green** — none is a

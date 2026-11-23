@@ -1,0 +1,15 @@
+title    = "The steward's three schedules run as Vercel Schedules on eve 1.0"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+The steward agent moves from eve 0.91 to 1.0.2. On Vercel, eve 1.0 deploys each file under
+`agent/schedules/` as a Vercel Schedule (beta) instead of a Vercel Cron Job: `eve.steward`,
+`eve.materialize` and `eve.auditor`. Each runs as a private function with no public route. A failed
+invocation is not retried, so the next tick is the retry, and a run starts within a short jitter
+window after its cron time. Cadences, handlers and guards are unchanged. Who observes: an operator
+reading run history, which moves from the Cron Jobs settings to `vercel schedules executions list
+<name>` and Observability logs. Release relevance: the steward deploys by git, so the move lands with
+the merge; confirm the three `eve.*` schedules exist and the old cron jobs are gone after the deploy.
+'''

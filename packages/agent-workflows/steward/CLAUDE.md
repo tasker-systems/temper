@@ -17,10 +17,17 @@ quality.
 project ships the **citation auditor** (Set 5) as a declared subagent at `agent/subagents/auditor/`.
 
 > **The auditor's cron is LIVE as of 2026-07-29** — `agent/schedules/auditor.ts`, **daily at 03:30
-> UTC**, trailing a steward tick. eve creates one Vercel Cron Job per file in `agent/schedules/`, so
+> UTC**, trailing a steward tick. eve registers one schedule per file in `agent/schedules/`, so
 > **this file's location is the repo-wide on/off switch**: withdrawing the *capability* means moving
 > it back out. The guards in `run` are a different thing — they decide whether a given *deployment's*
 > tick does work, and they never remove the ability to run the auditor on demand.
+>
+> **On Vercel, eve 1.0 deploys each schedule as a Vercel Schedule (beta), not a Vercel Cron Job.**
+> The three are `eve.steward`, `eve.materialize` and `eve.auditor`: `eve.` plus the file name, so
+> renaming a file creates a new schedule. Each runs as a private function with no public route.
+> A failed invocation is **not retried** — the next tick is the retry — and each run starts within a
+> short jitter window after its cron time. Run history is under `vercel schedules executions list
+> <name>`.
 >
 > **Cadence is a budget mechanism, not a preference.** The AI Gateway's monthly allowance is a fixed
 > ceiling rather than something to top up, so cadence is how the auditor is made to fit inside it.
