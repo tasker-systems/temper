@@ -267,6 +267,16 @@ jobs:
     # full auditor pass), so 5 minutes left no headroom and the job cancelled under runner load
     # after every harness had already passed.
     timeout-minutes: 10
+    # Every run: step below runs under guard-step-timer.sh, which runs it exactly as a step with no
+    # `shell:` runs (`bash -e`) and adds a `::warning::` naming any step that takes longer than
+    # GUARD_STEP_BUDGET_SECS. Slow steps are named, never failed: the timeout above stays the only
+    # thing that ends the job. The budget sits above a healthy harness's time on a slow runner, so a
+    # warning means a harness has grown, not that a runner was slow.
+    env:
+      GUARD_STEP_BUDGET_SECS: '120'
+    defaults:
+      run:
+        shell: bash .github/scripts/guard-step-timer.sh {0}
 
     steps:
       # Full history and tags, no blobs. The wire cross-check measures against the last release
@@ -310,6 +320,9 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null || git fetch --depth=1 origin "${BASE_SHA}"
+
+      - name: Guard test — guard-step-timer (the shell these steps run under)
+        run: bash .github/scripts/test-guard-step-timer.sh
 
       - name: Guard test — detect-ci-scope
         run: bash .github/scripts/test-detect-ci-scope.sh
