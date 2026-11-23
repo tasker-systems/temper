@@ -813,6 +813,8 @@ async fn the_edge_erasure_body_runs_only_under_its_records_transaction(pool: PgP
     };
     // Under the setting alone, in a database without the replay-target marker, the body still
     // refuses an edge with no record of this transaction; once the database is marked, it runs.
+    // This unmarked probe must stay first: the transaction that builds `earlier` below commits the
+    // marker, so every later probe runs in a marked database.
     {
         let mut tx = pool.begin().await.unwrap();
         sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
