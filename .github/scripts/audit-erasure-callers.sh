@@ -55,8 +55,8 @@ cd "${REPO_ROOT_OVERRIDE:-$(git rev-parse --show-toplevel)}"
 # Reviewed baseline: <count> <class> <path>. Every entry is a reasoned caller:
 #   erasure_service.rs           the person act's door; the admin route holds &SystemAdmin.
 #   resource_erasure_service.rs  the resource act's door; the admin route holds &SystemAdmin.
-#   replay.rs                    the replay walk: re-projects recorded erasures at their ledger
-#                                positions, sets the setting transaction-local, marks its empty
+#   replay.rs                    the replay walk: re-projects recorded erasures (resource,
+#                                person, scrub and edge) at their ledger positions, sets the setting transaction-local, marks its empty
 #                                target first and clears the marker once the walk succeeds.
 #   test_schema.rs               test-support only (feature-gated): marks a seeded test database,
 #                                bypassing the empty-ledger trigger by DDL (disable, insert, enable).
@@ -65,8 +65,8 @@ read -r -d '' BASELINE <<'EOF' || true
 1 replay_setting crates/temper-migrate/src/main.rs
 1 execute crates/temper-services/src/services/erasure_service.rs
 1 execute crates/temper-services/src/services/resource_erasure_service.rs
-2 apply_redaction crates/temper-substrate/src/replay.rs
-3 projector crates/temper-substrate/src/replay.rs
+3 apply_redaction crates/temper-substrate/src/replay.rs
+4 projector crates/temper-substrate/src/replay.rs
 2 replay_marker crates/temper-substrate/src/replay.rs
 2 replay_setting crates/temper-substrate/src/replay.rs
 3 replay_marker crates/temper-substrate/src/test_schema.rs

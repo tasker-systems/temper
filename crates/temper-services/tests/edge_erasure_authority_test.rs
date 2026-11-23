@@ -120,6 +120,7 @@ async fn forge(conn: &mut sqlx::PgConnection, w: &World, act: &Forged) -> Result
         sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
             .execute(&mut *conn)
             .await?;
+        temper_substrate::test_schema::mark_replay_target(conn).await;
     }
     sqlx::query("SELECT _project_edge_erased_redactions($1, $2)")
         .bind(record)
@@ -532,11 +533,31 @@ async fn an_edge_row_under_a_record_naming_a_live_owner_fails_at_commit(pool: Pg
         "folded": false,
         "redacted_fields": [{ "event": x.asserted, "paths": ["label"] }],
     });
+    // The setting alone, in a database without the replay-target marker, keeps the commit-time
+    // check (edge_erasure_requires_an_erased_owner) up.
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
         .execute(&mut *tx)
         .await
         .unwrap();
+    sqlx::query("SELECT _event_append('edge_erased', $1, NULL, NULL, $2)")
+        .bind(x.w.emitter)
+        .bind(&payload)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    owner_not_erased(
+        "a record under the setting alone",
+        x.w.profile,
+        tx.commit().await.err().map(|e| e.to_string()),
+    );
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    temper_substrate::test_schema::mark_replay_target(&mut tx).await;
     let record: Uuid =
         sqlx::query_scalar("SELECT _event_append('edge_erased', $1, NULL, NULL, $2)")
             .bind(x.w.emitter)
@@ -790,12 +811,42 @@ async fn the_edge_erasure_body_runs_only_under_its_records_transaction(pool: PgP
         let c = resource(&pool, w, "epsilon").await;
         edge(&pool, w, b, c, "a third label", EventContext::default()).await
     };
+    // Under the setting alone, in a database without the replay-target marker, the body still
+    // refuses an edge with no record of this transaction; once the database is marked, it runs.
+    {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let unmarked = {
+            let mut sp = sqlx::Connection::begin(&mut *tx).await.unwrap();
+            let err = apply_redaction(&mut sp, x.e, None).await;
+            sp.rollback().await.unwrap();
+            err
+        };
+        assert!(
+            unmarked.as_deref().is_some_and(|e| e.contains(&format!(
+                "_edge_erasure_apply_redaction: edge {} has no edge_erased record of this transaction",
+                x.e.uuid()
+            ))),
+            "unmarked, the setting alone keeps the record check: {unmarked:?}"
+        );
+        temper_substrate::test_schema::mark_replay_target(&mut tx).await;
+        assert_eq!(
+            apply_redaction(&mut tx, x.e, None).await,
+            None,
+            "control: in a marked target the body runs as the replay walk's does"
+        );
+        tx.rollback().await.unwrap();
+    }
     let earlier = {
         let mut tx = pool.begin().await.unwrap();
         sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
             .execute(&mut *tx)
             .await
             .unwrap();
+        temper_substrate::test_schema::mark_replay_target(&mut tx).await;
         let id = edge_record(&mut tx, w, x.e).await;
         tx.commit()
             .await

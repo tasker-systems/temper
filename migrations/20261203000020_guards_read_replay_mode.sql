@@ -13,7 +13,7 @@
 -- Latest definitions re-issued:
 --   _resource_write_guard                          20260929040730_resource_erasure_act
 --   kb_events_order_recorded                       20261116000010_kb_events_record_order
---   _project_field_redactions                      20261022100000_person_erasure_evented_retirement
+--   _project_field_redactions                      20261202000020_edge_erasure_authority
 --   kb_system_settings_gating_before
 --     20261124000010_gating_slug_writes_record_their_transitions
 --   kb_team_public_within_shape_guard              20261120000000_public_within_policy_and_helpers
@@ -74,6 +74,7 @@ DECLARE
                         WHEN 'erasure' THEN '_project_resource_erased_redactions'
                         WHEN 'scrub'   THEN '_project_resource_scrubbed_redactions'
                         WHEN 'principal' THEN '_project_principal_erased_redactions'
+                        WHEN 'edge'    THEN '_project_edge_erased_redactions'
                     END;
     v_entry jsonb;
     v_path  text;
@@ -84,7 +85,8 @@ BEGIN
         RAISE EXCEPTION '_project_field_redactions: event % names no known authority %', p_event, p_authority;
     END IF;
     -- The subject's trail, once: event id → true. For the person act (`principal`), its scope:
-    -- the context events of the estate it recorded, never a resource's trail.
+    -- the context events of the estate it recorded, never a resource's trail. For an edge
+    -- (`edge`), the edge's own trail.
     IF p_authority = 'principal' THEN
         SELECT coalesce(jsonb_object_agg(ce.event_id::text, true), '{}'::jsonb)
           INTO v_trail
@@ -92,6 +94,11 @@ BEGIN
                    (p_payload ->> 'subject_id')::uuid,
                    ARRAY(SELECT jsonb_array_elements_text(
                              coalesce(p_payload -> 'estate_contexts', '[]'::jsonb))::uuid)) ce
+         WHERE jsonb_array_length(coalesce(p_payload -> 'redacted_fields', '[]'::jsonb)) > 0;
+    ELSIF p_authority = 'edge' THEN
+        SELECT coalesce(jsonb_object_agg(ts.event_id::text, true), '{}'::jsonb)
+          INTO v_trail
+          FROM _edge_erasure_trail_scope((p_payload ->> 'subject_id')::uuid) ts
          WHERE jsonb_array_length(coalesce(p_payload -> 'redacted_fields', '[]'::jsonb)) > 0;
     ELSE
         SELECT coalesce(jsonb_object_agg(ts.event_id::text, true), '{}'::jsonb)
@@ -120,7 +127,7 @@ BEGIN
         END IF;
         FOR v_path IN SELECT jsonb_array_elements_text(v_entry -> 'paths') LOOP
             -- Each authority on its own allowlist: the person act names only the context paths of
-            -- _principal_erasure_redact_paths, and the resource acts never name one.
+            -- _principal_erasure_redact_paths, and the resource and edge acts never name one.
             IF NOT EXISTS (
                 SELECT 1 FROM _erasure_redact_paths() r
                  WHERE p_authority <> 'principal'
@@ -302,6 +309,30 @@ BEGIN
 END;
 $$;
 
+COMMENT ON FUNCTION _project_field_redactions(uuid,jsonb,text) IS
+$c$The one body of every redaction projection: one kb_event_field_redactions row per (event, path)
+of p_payload's redacted_fields, under p_authority (`erasure`, `scrub`, `principal` or `edge`; any
+other raises). Every named event must exist and, outside replay (_replay_mode), be in the
+subject's trail: a resource's (_resource_erasure_trail_scope) for `erasure` and `scrub`, the
+recorded estate's context events (_principal_erasure_context_events) for `principal`, an edge's
+(_edge_erasure_trail_scope) for `edge`. Every path must be on its authority's allowlist:
+_principal_erasure_redact_paths for `principal`, _erasure_redact_paths (never a `keep` path) for
+the others. Called through the per-kind wrappers.$c$;
+
+COMMENT ON FUNCTION _project_principal_erased_redactions(uuid,jsonb) IS
+$c$The principal_erased redaction projection (R7): one kb_event_field_redactions row per (event, path)
+of redacted_fields, authority `principal`. The same body as the resource acts'
+(_project_field_redactions): every named event is a context event of the estate the record names
+(skipped under replay, _replay_mode), and every path is on _principal_erasure_redact_paths for its
+event's type. The act calls it after appending its record; replay calls it at the event's position.$c$;
+
+COMMENT ON FUNCTION _project_resource_scrubbed_redactions(uuid,jsonb) IS
+$c$The resource_scrubbed projection (field-grain scrub spec S6.4, S8): one kb_event_field_redactions
+row per (event, path) of redacted_fields, authority `scrub`. The same checks as the erasure's
+projector, by the same body (_project_field_redactions): every named event is in the subject's
+trail (skipped under replay, _replay_mode), and every path is on the allowlist for its event's
+type. Replay calls it at the event's position and applies nothing else.$c$;
+
 COMMENT ON FUNCTION _resource_write_guard(uuid) IS
 $c$the write guard (spec 2026-09-28 D13): FOR KEY SHARE on the kb_resources row, then RAISE
 'resource % is erased; writes are refused' when erased_at IS NOT NULL. Conflicts only with the
@@ -314,20 +345,6 @@ uuidv7, unordered across transactions within a millisecond on PG17), and replay 
 for the write paths, and a raw SQL session can write the tables directly with or without it.
 The setting alone never bypasses it: without the kb_replay_target row the guard stays up, and
 replay_posture names the row or a session or role default in a deployed database.$c$;
-
-COMMENT ON FUNCTION _project_resource_scrubbed_redactions(uuid,jsonb) IS
-$c$The resource_scrubbed projection (field-grain scrub spec S6.4, S8): one kb_event_field_redactions
-row per (event, path) of redacted_fields, authority `scrub`. The same checks as the erasure's
-projector, by the same body (_project_field_redactions): every named event is in the subject's
-trail (skipped under replay, _replay_mode), and every path is on the allowlist for its event's
-type. Replay calls it at the event's position and applies nothing else.$c$;
-
-COMMENT ON FUNCTION _project_principal_erased_redactions(uuid,jsonb) IS
-$c$The principal_erased redaction projection (R7): one kb_event_field_redactions row per (event, path)
-of redacted_fields, authority `principal`. The same body as the resource acts'
-(_project_field_redactions): every named event is a context event of the estate the record names
-(skipped under replay, _replay_mode), and every path is on _principal_erasure_redact_paths for its
-event's type. The act calls it after appending its record; replay calls it at the event's position.$c$;
 
 COMMENT ON FUNCTION kb_team_public_within_shape_guard() IS
 $c$Refuses a public_within row whose team is personal, the root (temper-system) or the gating team,
@@ -377,5 +394,5 @@ SELECT declare_migration(
     'kb_teams_public_within_cascade, kb_teams_public_within_hard_delete_begin, '
     'kb_teams_public_within_hard_delete_transitions) with signatures unchanged; each reads '
     '_replay_mode() where it read temper.replaying. Outside replay the guards behave exactly as '
-    'before. Six function COMMENTs re-issued. No table, column or constraint is altered.'
+    'before. Seven function COMMENTs re-issued. No table, column or constraint is altered.'
 );

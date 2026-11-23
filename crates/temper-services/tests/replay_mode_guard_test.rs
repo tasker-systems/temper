@@ -1,5 +1,5 @@
 #![cfg(feature = "test-db")]
-//! The guards stand down only for a real replay (migrations 20261203000010, 20261203000020).
+//! The guards stand down only for a real replay (migrations 20261203000010 to 20261203000030).
 //!
 //! `temper.replaying` is a custom setting any session can set, so it alone must lower no guard:
 //! every guard asks `_replay_mode()`, true only when the setting is `on` AND the database carries
@@ -25,6 +25,10 @@ const GUARDS: &[&str] = &[
     "kb_teams_public_within_cascade",
     "kb_teams_public_within_hard_delete_begin",
     "kb_teams_public_within_hard_delete_transitions",
+    "_resource_write_guard_owner",
+    "_project_relationship_folded",
+    "_edge_erasure_apply_redaction",
+    "edge_erasure_requires_an_erased_owner",
 ];
 
 /// The functions, outside the helper and the posture check, that may read or set the setting: a
