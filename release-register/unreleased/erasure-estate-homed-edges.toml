@@ -1,0 +1,62 @@
+title    = "Person erasure erases the relationships homed in the erased person's estate, under an edge erasure authority"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "cli-stdout", "schema", "erasure-policy"]
+status   = "signal-only"
+body = '''
+Migration 20261202000020 adds the admin event type edge_erased and the redaction authority `edge`:
+an edge_erased record lets an act rewrite the ledger trail of one edge that is folded and homed in a
+context of the estate the record names, to the sentinels resource erasure writes. The ledger guard,
+the trail trigger and the sweep's place closure each read the new authority. The resource act's
+ledger derivation now runs through one shared loop, _erasure_trail_payload_redaction, whose output for
+a resource is unchanged but for one case: a label a writer typed as its own sentinel
+(erased-label-<n>, numbered to n) has no redaction row, so a later act on its pair numbers it after
+the sentinels already written there and can rewrite it once, where it was left as it was. Migration 20261202000030 adds edge_erasure_execute, which erases one edge
+homed in the estate: it folds the edge if it is live (relationship_folded, reason estate_erased),
+appends one edge_erased record, nulls the edge's label, sets every property the edge owns to its
+sentinels, and rewrites the edge's labels, properties, earlier fold reasons and corrections, and
+the authorship metadata on its events, to their sentinels on the ledger; the estate_erased reason of
+the fold it appends is kept. Migration 20261202000040 lets an edge_erased record commit only when
+the profile it names is tombstoned by the time the transaction commits.
+
+In that migration the person act (principal_erasure_execute) now runs the unit for every edge
+homed in the estate whose text is not yet erased, live or folded before the act, whatever it
+points at, after its resource erasures and before its record and the tombstone. An edge a
+resource erasure of the same act already erased is skipped, and an edge whose context has left the estate since the act's plan
+is skipped and counted. The act still locks its estate contexts after its resource erasures, so a
+context reassigned out of the estate before the act holds its row keeps the edges its resource
+erasures did not reach and its earlier names and slugs on the ledger, while its resources are erased and it is closed by context_erased.
+One reassigned out after the edge step found an edge to erase homed in it, and before the act
+holds its row, makes the act fail: the edge erasure's home check, the ledger guard at the edge
+erasure's rewrite of the edge's events, or the commit-time check that the record's edge is homed in
+the estate refuses it, the service answers 500, nothing the act did persists, and running the act
+again completes.
+The person act's record gains one kb_edges target naming how many edges it
+erased, and one `erasure` reference per edge_erased; its payload keys are unchanged. The survey
+(POST /api/admin/erasure/survey, temper admin erasure principal) predicts the same kb_edges target,
+and no longer counts the subject's labels and property values on those edges as text kept outside
+the estate; a charter's survey outcome names as kept only its edges homed outside the estate. The
+person act now runs with lock_timeout = 0, as the resource, edge and block history acts do, so a
+lock_timeout set on the pool, the role or the database cannot cancel it.
+
+Once the act commits, a property write (property_set, facet_set, a keyed assert,
+property_retracted), relationship_retype, relationship_reweight or relationship_fold of an erased
+edge is refused; one in flight while the unit holds the edge waits for the act and is then refused.
+A writer of an edge's properties, or a retype, reweight or fold of an edge, now takes FOR KEY SHARE
+on the edge row, which also waits briefly behind relationship_assert's lookup of the active edge,
+fold_goal_edges, and the resource erasure and field scrub edge loops. The sweep's findings on an
+erased edge's label and properties give up their digests as an erased resource's do. Replay
+projects edge_erased as it projects resource_erased. The erasure policy binds kb_edges' unit, and
+kb_properties' path through kb_edges, to edge_erasure_execute, declares edge_erased's payload paths
+structural, and records as gaps the regions, lenses and data-artifact schemas homed in an estate
+context.
+
+Who observes: an operator running a person erasure, or its survey, reads the kb_edges target; an
+admin reading the ledger sees one edge_erased per erased edge; anyone reading such an edge, its
+properties or its ledger trail finds its label and properties gone or at their sentinels, whoever
+wrote them. Witnesses: crates/temper-services/tests/person_erasure_estate_edges_test.rs,
+edge_erasure_authority_test.rs, edge_erasure_trail_test.rs, edge_erasure_unit_test.rs,
+edge_erasure_replay_test.rs, sensitivity_edge_erasure_bridge_test.rs and write_lock_bound_test.rs.
+Release relevance: additive in schema; behavioral for person erasure, which now reaches these
+edges.
+'''
