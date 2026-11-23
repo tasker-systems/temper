@@ -245,9 +245,16 @@ pub(super) fn reconstruct_full_file_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use filetime::{set_file_mtime, FileTime};
     use std::time::Duration;
     use tempfile::NamedTempFile;
+
+    /// Set a file's modification time.
+    fn set_mtime(path: &std::path::Path, when: std::time::SystemTime) -> std::io::Result<()> {
+        std::fs::File::options()
+            .write(true)
+            .open(path)?
+            .set_modified(when)
+    }
 
     #[test]
     fn read_if_fresh_returns_content_when_mtime_within_window() {
@@ -263,8 +270,8 @@ mod tests {
     fn read_if_fresh_returns_none_when_stale() {
         let file = NamedTempFile::new().expect("tempfile");
         std::fs::write(file.path(), "stale").expect("write");
-        let past = FileTime::from_system_time(SystemTime::now() - Duration::from_secs(60));
-        set_file_mtime(file.path(), past).expect("set mtime");
+        let past = SystemTime::now() - Duration::from_secs(60);
+        set_mtime(file.path(), past).expect("set mtime");
         let result = read_if_fresh(file.path(), Duration::from_secs(30)).expect("read_if_fresh");
         assert!(result.is_none(), "stale file should not be read");
     }
@@ -282,8 +289,8 @@ mod tests {
         // future. Treat them as fresh (age = 0) rather than as an error.
         let file = NamedTempFile::new().expect("tempfile");
         std::fs::write(file.path(), "future").expect("write");
-        let future = FileTime::from_system_time(SystemTime::now() + Duration::from_secs(120));
-        set_file_mtime(file.path(), future).expect("set mtime");
+        let future = SystemTime::now() + Duration::from_secs(120);
+        set_mtime(file.path(), future).expect("set mtime");
 
         let result = read_if_fresh(file.path(), Duration::from_secs(30))
             .expect("read_if_fresh")
