@@ -107,6 +107,11 @@ event_types:
   - erasure_reopened
   - erasure_batch_applied
   - erasure_completed
+  # One estate edge's erasure record (erasure estate-homed edges), added by migration
+  # 20261202000020 — TYPED with a committed payload snapshot, `admin`
+  # (payloads::ADMIN_EVENT_NAMES), NULL-anchored. A reset+seed_system system MUST register it or
+  # the replay of any ledger that carries one fails "event_type edge_erased not seeded".
+  - edge_erased
 # erasure_refusal_reasons: the drain's closed refusal vocabulary (kb_erasure_refusal_reasons). The
 #   migration seeds it and `reset_schema` truncates it, so bootseed refills it. Held equal, codes and
 #   meanings, to policy/erasure/estate.toml [refusal_reasons] and temper-core's ErasureMemberRefusalReason.

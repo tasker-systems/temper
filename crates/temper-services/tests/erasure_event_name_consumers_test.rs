@@ -74,7 +74,15 @@
 //!     `AUTHORITY_BY_ROLE`. A kind named `*_purged`, `*_redacted`, `*_struck` or `*_tombstoned`
 //!     would be in no class and fail nothing. The registry carries no flag that marks a kind as an
 //!     erasure's, so the closure matches names; whoever registers such a kind must add it to a
-//!     class or to `AUTHORITY_BY_ROLE`, in review.
+//!     class or to `AUTHORITY_BY_ROLE`, in review;
+//!   * a consumer that recognises an erasure by its record's subject or by table, without naming a
+//!     kind. `sensitivity.erased_place_findings` names no kind: its arms for an erased resource and
+//!     an edge's erased endpoint read `kb_resources.erased_at`, and its erased-edge arms, the write
+//!     guard's kb_edges arm and the fold projection call `_edge_is_erased`, which is rostered for
+//!     the `edge_erased` it names. A kind missing from any of those callers fails nothing here,
+//!     and neither does a caller that stops calling `_edge_is_erased`: the static roster names only
+//!     the helper. The run-time witnesses catch that (`edge_erasure_unit_test`'s race tests for the
+//!     guard and the fold, `sensitivity_edge_erasure_bridge_test` for the findings arms).
 //!
 //! The checker is a pure function over (consumers, roster, vocabulary), so the bite probes run in
 //! memory over the real bodies with one change each, one probe per failure branch.
@@ -306,17 +314,16 @@ const ROSTER: &[Entry] = &[
         }),
     },
     class(
-        "_resource_erasure_payload_redaction(uuid)",
+        "_erasure_trail_payload_redaction(uuid[],jsonb)",
         Class::PerItemAuthority,
-        "the resource act's ledger derivation, which leaves out the events an item's own \
-         correlated erasure authority appended",
+        "the shared ledger derivation, which leaves out the events an item's own correlated \
+         erasure authority appended",
     ),
-    union_of(
+    own(
         "resource_erasure_survey_plan(uuid)",
-        &[Class::PerItemAuthority],
-        &["blob_erased"],
-        "reads one item's own erasure authority record, and names blob_erased as the kind its \
-         blobs are struck under",
+        &["resource_erased", "blob_erased"],
+        "reads one resource's own erasure record, and names blob_erased as the kind its blobs \
+         are struck under",
     ),
     own(
         "_principal_erasure_contexts_to_erase(uuid[])",
@@ -355,6 +362,29 @@ const ROSTER: &[Entry] = &[
         "the resource erasure act, appending its own kinds: the record and each struck blob",
     ),
     own(
+        "edge_erasure_execute(uuid,uuid,uuid,uuid,uuid)",
+        &["edge_erased"],
+        "the edge erasure act, appending its own kind",
+    ),
+    own(
+        "_edge_erasure_apply_redaction(uuid,uuid)",
+        &["edge_erased"],
+        "the edge erasure body, run outside replay only under its own edge's edge_erased record \
+         from the same transaction",
+    ),
+    own(
+        "_edge_is_erased(uuid)",
+        &["edge_erased"],
+        "whether an edge_erased record names the edge: the one predicate of the edge's writers \
+         and of the sweep's erased-edge findings",
+    ),
+    own(
+        "edge_erasure_requires_an_erased_owner()",
+        &["edge_erased"],
+        "reads one edge_erased record's own estate_of and subject edge at commit: the inserted \
+         record, or an `edge` row's redacted_by",
+    ),
+    own(
         "resource_field_scrub_execute(uuid,text,uuid,boolean,uuid,uuid,uuid)",
         &["resource_scrubbed"],
         "the field scrub act, appending its own kind",
@@ -373,6 +403,7 @@ const ROSTER: &[Entry] = &[
             "principal_erased",
             "resource_scrubbed",
             "block_history_scrubbed",
+            "edge_erased",
             "erasure_declared",
             "erasure_member_arrived",
             "erasure_scope_sealed",
@@ -471,6 +502,11 @@ const ROSTER: &[Entry] = &[
     own(
         "rust:crates/temper-substrate/src/payloads.rs#resource_scrubbed_carries_no_trail_join_key_and_no_owner",
         &["resource_scrubbed"],
+        "a unit test of its own kind's payload",
+    ),
+    own(
+        "rust:crates/temper-substrate/src/payloads.rs#edge_erased_round_trips_and_carries_no_trail_join_key",
+        &["edge_erased"],
         "a unit test of its own kind's payload",
     ),
     class(
@@ -1139,7 +1175,7 @@ async fn place_closures_declared_gap_is_still_real(pool: PgPool) {
 // ── the bite probes ──────────────────────────────────────────────────────────────────────────
 
 /// An unrostered consumer fails, and rostered to a class it covers only in part it fails for the
-/// kind it leaves out.
+/// kinds it leaves out.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_consumer_naming_two_of_the_redaction_class_fails(pool: PgPool) {
     sqlx::query(
@@ -1170,9 +1206,10 @@ async fn a_consumer_naming_two_of_the_redaction_class_fails(pool: PgPool) {
     assert_eq!(
         problems(&bodies, &roster, &vocabulary),
         vec![format!(
-            "{who} is rostered to RedactionAuthority but does not name principal_erased"
+            "{who} is rostered to RedactionAuthority but does not name edge_erased, \
+             principal_erased"
         )],
-        "rostered to the redaction class, the probe fails for the kind it leaves out"
+        "rostered to the redaction class, the probe fails for the kinds it leaves out"
     );
 }
 

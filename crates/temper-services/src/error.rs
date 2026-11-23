@@ -176,6 +176,36 @@ pub(crate) fn exceeded_program_limit(e: &anyhow::Error) -> bool {
     })
 }
 
+/// SQLSTATE `P0001`, `raise_exception`: a bare `RAISE EXCEPTION` in a function body.
+pub(crate) const RAISE_EXCEPTION: &str = "P0001";
+
+/// The words around the edge id in the refusal `_resource_write_guard_owner` and
+/// `_project_relationship_folded` raise for a write of an edge an `edge_erased` record names
+/// (migration `20261202000030`).
+const ERASED_EDGE_REFUSAL: (&str, &str) = ("edge ", " is erased; writes are refused");
+
+/// The edge a write was refused for as erased, when `code` and `message` are that raise: a bare
+/// `RAISE` ([`RAISE_EXCEPTION`]), the refusal's words, and a well-formed edge id between them.
+pub(crate) fn erased_edge_named(code: Option<&str>, message: &str) -> Option<uuid::Uuid> {
+    if code != Some(RAISE_EXCEPTION) {
+        return None;
+    }
+    let (before, after) = ERASED_EDGE_REFUSAL;
+    let id = message.strip_prefix(before)?.strip_suffix(after)?;
+    uuid::Uuid::parse_str(id).ok()
+}
+
+/// The edge [`erased_edge_named`] finds in the first database error of `e`'s chain that names one.
+/// A write reaches that raise only when it passed the door's edge gate (`check_edge_mutable`) while
+/// the edge was live and then waited on the erasure's lock, so the door renders it as the gate
+/// renders a folded edge.
+pub(crate) fn erased_edge_refused(e: &anyhow::Error) -> Option<uuid::Uuid> {
+    e.chain().find_map(|cause| {
+        let db = cause.downcast_ref::<sqlx::Error>()?.as_database_error()?;
+        erased_edge_named(db.code().as_deref(), db.message())
+    })
+}
+
 pub type ApiResult<T> = Result<T, ApiError>;
 
 impl ApiError {
@@ -1310,6 +1340,35 @@ mod tests {
         assert!(
             !echoed.contains("/var/tmp/"),
             "the internal detail leaked into the client body: {echoed}"
+        );
+    }
+
+    // FAILS IF the erased-edge refusal is not read back to its edge, or if the same words under
+    // another SQLSTATE, around a malformed id, or with anything before or after them are.
+    #[test]
+    fn the_erased_edge_refusal_names_its_edge_and_nothing_else_does() {
+        let edge = uuid::Uuid::now_v7();
+        let refusal = format!("edge {edge} is erased; writes are refused");
+        assert_eq!(erased_edge_named(Some("P0001"), &refusal), Some(edge));
+        assert_eq!(erased_edge_named(Some("XX000"), &refusal), None);
+        assert_eq!(erased_edge_named(None, &refusal), None);
+        assert_eq!(
+            erased_edge_named(
+                Some("P0001"),
+                "edge not-a-uuid is erased; writes are refused"
+            ),
+            None
+        );
+        assert_eq!(
+            erased_edge_named(
+                Some("P0001"),
+                &format!("resource {edge} is erased; writes are refused")
+            ),
+            None
+        );
+        assert_eq!(
+            erased_edge_named(Some("P0001"), &format!("{refusal} (and more)")),
+            None
         );
     }
 

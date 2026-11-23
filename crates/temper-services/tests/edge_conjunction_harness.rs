@@ -263,6 +263,73 @@ const CLASSIFIED: &[(&str, Class)] = &[
         Class::NotCallerFacing("erasure act: authorized in resource_erasure_service"),
     ),
     (
+        "_edge_erasure_apply_redaction/2",
+        Class::NotCallerFacing("erasure act: redacts the one edge the act names"),
+    ),
+    (
+        "_edge_erasure_trail_scope/1",
+        Class::NotCallerFacing("erasure act: computes the edge's trail the act redacts"),
+    ),
+    (
+        "edge_erasure_execute/5",
+        Class::NotCallerFacing(
+            "erasure act: the per-edge unit, called by principal_erasure_execute under its own \
+             authority; returns its record's id and redacted fields, never an edge",
+        ),
+    ),
+    (
+        "_edge_projection_erased/1",
+        Class::NotCallerFacing(
+            "erasure predicate: whether one edge's projection is erased (folded, label NULL, owned \
+             keys at their sentinels), for the edge unit and _edge_erasure_complete; returns a \
+             boolean, never an edge",
+        ),
+    ),
+    (
+        "principal_erasure_execute/4",
+        Class::NotCallerFacing(
+            "erasure act: selects the edges homed in its estate for the edge unit, skipping one \
+             whose home has left the estate; authorized in erasure_service; returns its record, \
+             never an edge",
+        ),
+    ),
+    (
+        "principal_erasure_survey_plan/1",
+        Class::NotCallerFacing(
+            "erasure act's own scope computation, shared with the survey door, which authorizes \
+             the operator first; counts the edges homed in the estate and reads their trails, \
+             never returns an edge",
+        ),
+    ),
+    (
+        "kb_events_append_only/0",
+        Class::NotCallerFacing(
+            "ledger trigger: reads an edge_erased record's subject edge to admit a rewrite; \
+             returns no edge",
+        ),
+    ),
+    (
+        "_edge_is_erased/1",
+        Class::NotCallerFacing(
+            "erasure predicate: names kb_edges only as an edge_erased record's subject_table, \
+             read by the edge's write guards and the sweep; returns a boolean, never an edge",
+        ),
+    ),
+    (
+        "edge_erasure_requires_an_erased_owner/0",
+        Class::NotCallerFacing(
+            "commit-time trigger: reads one edge_erased record's subject edge, folded and homed \
+             in its estate, to admit the transaction; returns no edge",
+        ),
+    ),
+    (
+        "_edge_homed_in_estate/2",
+        Class::NotCallerFacing(
+            "erasure predicate: reads one edge's home for the edge unit and the `edge` \
+             authority's subject check; returns a boolean, never an edge",
+        ),
+    ),
+    (
         "resource_erasure_survey_plan/1",
         Class::NotCallerFacing(
             "erasure act's own scope computation, shared with the survey door, which authorizes \
