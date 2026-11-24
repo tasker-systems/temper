@@ -62,7 +62,10 @@ run_test() {
         FAIL=$((FAIL + 1))
         return
     fi
-    if [ -n "$expected_substr" ] && ! printf '%s' "$output" | grep -qF -- "$expected_substr"; then
+    # Matched as a string, not piped to `grep -qF`. Under `pipefail`, grep's exit on the first
+    # matching line can kill a printf still writing with SIGPIPE, and the pipeline then reports a
+    # present message as missing.
+    if [ -n "$expected_substr" ] && [[ "$output" != *"$expected_substr"* ]]; then
         echo "  FAIL: ${test_name}"
         echo "    exit code matched but expected message not found: ${expected_substr}"
         echo "    output: ${output}"
@@ -295,6 +298,27 @@ open(p, "w").write(s)
 PYEOF
 run_test "create_internal_app renamed: fails loudly" "$FIX" 1 \
     "does not mount from the route table"
+
+# --- (e) a builder that mounts early in a long body still passes ---
+# The mount-from-table check once piped the builder's body into `grep -q`. grep exits at the
+# `mount_group` line, so an awk with more of the body to write died of SIGPIPE, and `pipefail` read
+# the match as "does not mount from the route table". It happened under load. Here a body longer than
+# a pipe buffer forces it on every run: awk has more than 64 KiB left to write when grep exits.
+FIX="${FIXTURE_DIR}/long_builder"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+mount = "            app = app.merge(mount_group(&group, &state));\n"
+marker = "pub fn create_internal_app"
+head, tail = s.split(marker, 1)
+assert mount in tail, "create_internal_app no longer mounts with the expected line"
+pad = "".join(f"    // padding line {i:05d}: a builder body longer than one pipe buffer\n" for i in range(2000))
+tail = tail.replace(mount, mount + pad, 1)
+open(p, "w").write(head + marker + tail)
+PYEOF
+run_test "create_internal_app mounting early in a long body: passes" "$FIX" 0
 
 # --- (f) a row's build fn pointed at another group's fn must fail ---
 # The one-token edit the table made easy: swap the gated row's build fn for public's and every

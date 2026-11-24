@@ -397,8 +397,9 @@ require_order apply_tier 'Tier::BrokerAttested =>' 'END' 'broker_attested::requi
 
 # Both builders must mount FROM the table. A builder that stops consuming it (e.g. re-derives its
 # own router) is a second, drift-prone wiring path — the exact thing the table exists to prevent.
+# The body is captured, not piped to `grep -q`, for the reason given at TIER_BODY above.
 for app in $APP_BUILDERS; do
-  fn_body "$app" | grep -q 'mount_group' || {
+  [[ "$(fn_body "$app")" == *mount_group* ]] || {
     echo "audit-route-auth: FAIL — app builder '$app' does not mount from the route table" >&2
     echo "  Both builders must consume route_table() via mount_group; a builder assembling its" >&2
     echo "  own router is a parallel wiring path the posture assertions cannot see." >&2
