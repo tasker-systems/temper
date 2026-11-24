@@ -166,6 +166,15 @@ commented out in `slack-app-manifest.yml`'s phase-2 block, but `im:history` is a
 scope, so it is three uncommented lines away. **Enabling `message.im` requires wiring the identity
 pipeline into that handler first.**
 
+**Message edits are explicitly dropped.** `agent/channels/slack.ts` supplies `onMessageEdited:
+async () => null`. Without it, eve hands an edit in a thread with a session to the hook a new
+message of the same kind reaches — an edit that mentions the bot goes to `onAppMention`, which asks
+link-state, pre-flights the mint, and dispatches or prompts again. `onMessageEdited` runs before
+every hook, so this one key covers all of them; a `ctx.edit` check inside `onAppMention` would
+cover only that hook. Edits need the `message.*` subscriptions, which the manifest does not
+request. `tests/slack-dispatch.test.ts` drives an edit through eve's real `defaultOnMessageEdited`
+fallback, so it fails if the key is removed.
+
 ## The reply is Slack `mrkdwn`, and it cites with in-app links
 
 The turn's answer is delivered verbatim as the `text` of `chat.postEphemeral`
