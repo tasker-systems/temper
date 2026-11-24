@@ -60,12 +60,12 @@ impl ScopedAuthority for GrantAuthority {
         }
 
         // Structural escalation guard (plan Task 5b.4). The admin-only regime (`cogmap_write_requires_admin`) keeps the
-        // reserved L0 kernel and maps bound to an instance team admin-only, but the grant path never
-        // consulted it — so a non-admin `can_grant` holder could mint `can_write` on the kernel,
-        // reaching by the grant axis exactly what the write axis forbids. `machine_authz`'s own
-        // tests seed such a row, so the state is reachable, not hypothetical. Admins already
-        // returned above, so a map in the admin-only regime denies here regardless of any
-        // `can_grant` the caller holds.
+        // reserved L0 kernel and maps bound to an instance team admin-only, and the grant path
+        // consults it here, so the grant axis confers no `can_write` the write axis forbids: a
+        // non-admin `can_grant` holder on such a map has no grant authority there.
+        // `machine_authz`'s own tests seed such a row, so the state is reachable, not
+        // hypothetical. Admins not stopped at personal space already returned above, so a map in
+        // the admin-only regime denies here regardless of any `can_grant` the caller holds.
         if subject.kind == AnchorTable::Cogmaps
             && cogmap_write_requires_admin(pool, CogmapId(subject.id)).await?
         {

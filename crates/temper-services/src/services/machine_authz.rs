@@ -446,7 +446,7 @@ async fn contain_reach(
 ) -> ApiResult<()> {
     // The D4b role ceiling is NOT here: it asks a question about the role itself, not about
     // containment, so it runs for BOTH arms in `authorize_registration`. Do not restore a copy —
-    // a second copy is what would let the two arms drift apart again.
+    // one copy is what keeps the two arms from drifting apart.
     // D4 — the membership bar: exactly what `add_member` requires of a human. That is the
     // membership authority's managing arm (team-role rank plan P15), which also refuses a
     // non-admin on the gating team or temper-system (R11): an owner there who is not a system admin can no more
@@ -473,13 +473,12 @@ async fn contain_reach(
 
     for grant in grants {
         // D4 — exactly what `grant_capability` requires of a non-admin, by CALLING that decision
-        // rather than restating it. This previously checked `profile_can_grant` alone, which WAS
-        // parity until 5b.3/5b.4 hardened the human path and left this one behind. The divergence
-        // was exploitable in the same class this arc exists to close: a `read+grant`-without-write
-        // holder could provision a machine carrying `can_write` and then command a principal
-        // holding write they can never hold themselves (laundering by proxy), and a non-admin
-        // `can_grant` holder on the L0 kernel could do the same there, walking around 5b.4's
-        // admin-only guard. Sharing the decision is what stops it recurring.
+        // rather than restating it, so the human and machine sinks cannot drift. Under it a
+        // machine's reach never exceeds its provisioner's: `can_write` is conferred only by a
+        // caller who holds write on the cogmap, and read only on a cogmap the caller reads through
+        // membership; holding `can_grant` alone is not enough. The same decision carries 5b.4's
+        // admin-only regime (`cogmap_write_requires_admin`: the L0 kernel and maps bound to an
+        // instance team), so a non-admin `can_grant` holder there resolves to None and is refused.
         //
         // `apply_reach` confers exactly `read + (write iff spec)`, never delete or grant — so that
         // is what is attenuated here. The admin arm asks the same decision separately, so this

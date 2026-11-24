@@ -327,10 +327,10 @@ pub(crate) async fn gate_resolved_profile(
 /// Proof that a request carries a resolved, non-deactivated identity — Level 1.
 ///
 /// SEALED: the fields are private and `gate_resolved_profile` is this module's only constructor,
-/// so a struct-literal forgery outside `temper_services::auth` is a compile error. It lived in
-/// temper-core with `pub` fields until 2026-07-22, which meant any crate could mint proof of
-/// authentication without authenticating — the enforcement this doc comment has always *claimed*.
-/// It sits beside [`SystemAuthorized`] and [`SystemAdmin`] because all three are the same kind of
+/// so a struct-literal forgery outside `temper_services::auth` is a compile error: no crate can
+/// hold proof of authentication without passing the gate. It lives here, beside its gate, rather
+/// than in a shared crate such as temper-core, because the seal needs the private fields and the
+/// only constructor in the same module. It sits beside [`SystemAuthorized`] and [`SystemAdmin`] because all three are the same kind of
 /// thing: a proof, obtainable only from the gate that establishes it.
 ///
 /// Surfaces receive one from the seam and read it through the accessors below; they never build one.
