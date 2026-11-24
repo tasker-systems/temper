@@ -183,7 +183,7 @@ PAUSE_ENV="-u PUBLISH_PAUSE_SECS" run_target "$CALLS_PAUSE" "$VERSION" --from "$
     || fail "a publish with PUBLISH_PAUSE_SECS unset was refused: $(cat "$TMP/pause.log")"
 [ "$(pauses_after_publish "$CALLS_PAUSE")" = "$(want_pauses 2)" ] \
     || fail "with PUBLISH_PAUSE_SECS unset, each publish was not followed by 'sleep 2': $(cat "$CALLS_PAUSE")"
-for bad in "" "2s" "-1" "1.5"; do
+for bad in "" "2s" "-1" "1.5" "08"; do
     if PAUSE_ENV="PUBLISH_PAUSE_SECS=$bad" run_target "$TMP/calls-pause-bad" "$VERSION" --from "$OUT" > "$TMP/pause-bad.log" 2>&1; then
         fail "PUBLISH_PAUSE_SECS='$bad' was accepted"
     fi

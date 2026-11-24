@@ -13,9 +13,12 @@
 # mundane (a moved directory, a renamed prefix).
 #
 # NOT CHECKED:
-#   - that the step runs unconditionally. A step with an `if:` still counts as invoked.
+#   - that the step runs unconditionally. A step with an `if:`, or in a job with an `if:`, still
+#     counts as invoked.
 #   - that the step can fail the job. A step with `continue-on-error: true` still counts.
 #   - that the step sits in the guard-tests job. Any job in the workflow counts.
+#   - that a matching line is a step's `run:`. Text inside a `run: |` block that only looks like
+#     one (an indented `run: bash .github/scripts/<file>` inside an echo or heredoc) counts.
 #   - an invocation spelled any other way (a multi-line `run: |` block, a variable, a loop). It
 #     reads as missing: write the step as a one-line `run:`.
 #   - guard tests outside .github/scripts, such as tools/roadmap/test.sh.

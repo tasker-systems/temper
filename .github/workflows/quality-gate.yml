@@ -321,7 +321,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null || git fetch --depth=1 origin "${BASE_SHA}"
 
+      # Runs under GitHub's own default shell, not the timer: under the timer, a timer edited to
+      # `exit 0` would pass its own test along with every other step.
       - name: Guard test — guard-step-timer (the shell these steps run under)
+        shell: bash -e {0}
         run: bash .github/scripts/test-guard-step-timer.sh
 
       # THE CHECK ITSELF as well as its harness: every guard test under .github/scripts is run by a

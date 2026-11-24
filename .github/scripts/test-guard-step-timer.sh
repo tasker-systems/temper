@@ -113,7 +113,7 @@ else
 fi
 
 # --- a broken budget refuses the step without running it ---
-for b in unset "" "60s" "-1" "1.5"; do
+for b in unset "" "60s" "-1" "1.5" "08"; do
     rm -f "$TMP/ran"
     run "$b" "$(step marker.sh "touch '$TMP/ran'")"
     if [[ $RC -eq 2 && ! -e "$TMP/ran" && "$OUT" == *"GUARD_STEP_BUDGET_SECS must be a whole number"* ]]; then

@@ -19,8 +19,9 @@
 # NOT CHECKED: the job's total time. The budget is per step. The job's own `timeout-minutes` is the
 # only bound on the total.
 #
-# GUARD_STEP_BUDGET_SECS must be a whole number of seconds. When it is unset or anything else, the
-# step is refused (exit 2) without running, so a broken budget cannot pass for "nothing was slow".
+# GUARD_STEP_BUDGET_SECS must be a whole number of seconds, written without a leading zero (bash
+# arithmetic reads `08` as bad octal). When it is unset or anything else, the step is refused
+# (exit 2) without running, so a broken budget cannot pass for "nothing was slow".
 #
 #   bash .github/scripts/guard-step-timer.sh <step-script>
 
@@ -32,7 +33,7 @@ if [[ -z "$script" || ! -f "$script" ]]; then
     exit 2
 fi
 budget="${GUARD_STEP_BUDGET_SECS-}"
-if ! [[ "$budget" =~ ^[0-9]+$ ]]; then
+if ! [[ "$budget" =~ ^(0|[1-9][0-9]*)$ ]]; then
     echo "guard-step-timer: GUARD_STEP_BUDGET_SECS must be a whole number of seconds; got '${budget}'." >&2
     exit 2
 fi

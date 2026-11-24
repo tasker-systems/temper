@@ -93,10 +93,10 @@ fi
 # The pause after each `cargo publish`, in whole seconds. Unset, it is 2: release.yml sets nothing,
 # so the release path pauses 2 seconds after every publish. Only test-publish-crates.sh sets it: to
 # 0 for its stubbed runs, and to invalid values to prove they are refused. A value that is not a
-# whole number of seconds, an empty one included, is refused here, before anything is packaged or
-# published.
+# whole number of seconds without a leading zero, an empty one included, is refused here, before
+# anything is packaged or published.
 PAUSE_SECS="${PUBLISH_PAUSE_SECS-2}"
-if ! [[ "$PAUSE_SECS" =~ ^[0-9]+$ ]]; then
+if ! [[ "$PAUSE_SECS" =~ ^(0|[1-9][0-9]*)$ ]]; then
     echo "ERROR: PUBLISH_PAUSE_SECS must be a whole number of seconds; got '${PAUSE_SECS}'." >&2
     exit 1
 fi
