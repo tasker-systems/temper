@@ -195,7 +195,18 @@ for f in "${FILES[@]}"; do
         ALL_NAMED_VERSIONS="${ALL_NAMED_VERSIONS}${ver}"$'\n'
 
         # C — vocabulary and a reason that says something.
-        if ! printf '%s\n' $VALID_CLASSES | grep -qx -- "$cls"; then
+        #
+        # Compared in the shell, with no pipeline. `printf … | grep -qx` lost its answer under
+        # load: grep exits on the first matching line, a producer still writing then dies of
+        # SIGPIPE, and `pipefail` reports the match as a failure. 'additive' is the first token,
+        # so the guard rejected it — "class 'additive', which is not one of: additive
+        # shape-breaking". Measured under a concurrent cargo build: PIPESTATUS was `141 0` on
+        # every false rejection.
+        cls_known=0
+        for valid in $VALID_CLASSES; do
+            [ "$cls" = "$valid" ] && cls_known=1
+        done
+        if [ "$cls_known" -eq 0 ]; then
             PROBLEMS="${PROBLEMS}  ${base}: version ${ver} declares class '${cls}', which is not one of: ${VALID_CLASSES}"$'\n'
         fi
         if [ -z "$(printf '%s' "$rsn" | tr -d '[:space:]')" ]; then

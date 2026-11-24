@@ -51,6 +51,11 @@ trap 'rm -rf "$WORK"' EXIT
 ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL: $1"; shift; printf '    %s\n' "$@"; FAIL=$((FAIL + 1)); }
 
+# Output is matched with `grep -q … <<<"$out"`, never `printf '%s' "$out" | grep -q …`. Under
+# `pipefail`, grep's exit on the first matching line can kill a printf still writing with SIGPIPE,
+# and the pipeline then reports the match as a miss. That fails an assertion that should pass, and
+# it passes a negated one (`! … | grep -q`) that should fail.
+
 # Run the checker against a fixture migrations directory. Echoes output; returns its exit code.
 run_audit() {
   MIGRATIONS_DIR="$1" bash "$AUDIT_SCRIPT" 2>&1
@@ -88,7 +93,7 @@ cat > "$D/20260801000002_undeclared.sql" <<'SQL'
 CREATE TABLE kb_other (id uuid PRIMARY KEY);
 SQL
 out="$(run_audit "$D")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '20260801000002'; then
+if [ "$rc" -ne 0 ] && grep -q '20260801000002' <<<"$out"; then
   ok "a migration with no declaration fails, naming it"
 else bad "a migration with no declaration fails, naming it" "exit=$rc" "$out"; fi
 
@@ -107,7 +112,7 @@ SELECT declare_migration(
 );
 SQL
 out="$(run_audit "$D")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '29999999999999'; then
+if [ "$rc" -ne 0 ] && grep -q '29999999999999' <<<"$out"; then
   ok "a declaration for a nonexistent version fails, naming it"
 else bad "a declaration for a nonexistent version fails, naming it" "exit=$rc" "$out"; fi
 
@@ -122,7 +127,7 @@ SELECT declare_migration(
 );
 SQL
 out="$(run_audit "$D")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '20260801000004'; then
+if [ "$rc" -ne 0 ] && grep -q '20260801000004' <<<"$out"; then
   ok "a copy-pasted version leaves the file itself undeclared, and fails"
 else bad "a copy-pasted version leaves the file itself undeclared, and fails" "exit=$rc" "$out"; fi
 
@@ -136,7 +141,7 @@ SELECT declare_migration(
 );
 SQL
 out="$(run_audit "$D")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'destructive'; then
+if [ "$rc" -ne 0 ] && grep -q 'destructive' <<<"$out"; then
   ok "an unknown class token fails, naming it"
 else bad "an unknown class token fails, naming it" "exit=$rc" "$out"; fi
 
@@ -150,7 +155,7 @@ SELECT declare_migration(
 );
 SQL
 out="$(run_audit "$D")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '20260801000006'; then
+if [ "$rc" -ne 0 ] && grep -q '20260801000006' <<<"$out"; then
   ok "an empty reason fails, naming the migration"
 else bad "an empty reason fails, naming the migration" "exit=$rc" "$out"; fi
 
@@ -168,7 +173,7 @@ cat > "$D/20260801000007_commented.sql" <<'SQL'
 CREATE TABLE kb_yet_another (id uuid PRIMARY KEY);
 SQL
 out="$(run_audit "$D")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '20260801000007'; then
+if [ "$rc" -ne 0 ] && grep -q '20260801000007' <<<"$out"; then
   ok "a declaration inside a comment does not satisfy the rule"
 else bad "a declaration inside a comment does not satisfy the rule" "exit=$rc" "$out"; fi
 
@@ -255,7 +260,7 @@ SELECT reclassify_migration(
 );
 SQL
 out="$(run_audit "$D")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '20260801000013'; then
+if [ "$rc" -ne 0 ] && grep -q '20260801000013' <<<"$out"; then
   ok "a migration that only reclassifies still fails for declaring nothing itself"
 else bad "a migration that only reclassifies still fails for declaring nothing itself" "exit=$rc" "$out"; fi
 
@@ -274,7 +279,7 @@ SELECT reclassify_migration(
 );
 SQL
 out="$(run_audit "$D")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'destructive'; then
+if [ "$rc" -ne 0 ] && grep -q 'destructive' <<<"$out"; then
   ok "a reclassification is validated like a declaration"
 else bad "a reclassification is validated like a declaration" "exit=$rc" "$out"; fi
 
@@ -293,7 +298,7 @@ SELECT reclassify_migration(
 );
 SQL
 out="$(run_audit "$D")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '29999999999999'; then
+if [ "$rc" -ne 0 ] && grep -q '29999999999999' <<<"$out"; then
   ok "a reclassification naming no real migration fails"
 else bad "a reclassification naming no real migration fails" "exit=$rc" "$out"; fi
 
@@ -307,8 +312,8 @@ SELECT declare_migration(20260801000016, '', 'A reason, but no class at all.');
 SQL
 out="$(run_audit "$D")"; rc=$?
 if [ "$rc" -ne 0 ] \
-   && printf '%s' "$out" | grep -q "declares class ''" \
-   && ! printf '%s' "$out" | grep -q "declares class 'A reason"; then
+   && grep -q "declares class ''" <<<"$out" \
+   && ! grep -q "declares class 'A reason" <<<"$out"; then
   ok "an empty class token is rejected, naming the empty token and not the reason"
 else bad "an empty class token is rejected, naming the empty token and not the reason" "exit=$rc" "$out"; fi
 
@@ -328,9 +333,9 @@ SELECT declare_migration(
 SQL
 out="$(run_audit "$D")"; rc=$?
 if [ "$rc" -ne 0 ] \
-   && printf '%s' "$out" | grep -q 'more than one migration file has this version' \
-   && printf '%s' "$out" | grep -q '20260801000001_add_thing.sql' \
-   && printf '%s' "$out" | grep -q '20260801000001_other_branch.sql'; then
+   && grep -q 'more than one migration file has this version' <<<"$out" \
+   && grep -q '20260801000001_add_thing.sql' <<<"$out" \
+   && grep -q '20260801000001_other_branch.sql' <<<"$out"; then
   ok "two files sharing a version fail, naming both files"
 else bad "two files sharing a version fail, naming both files" "exit=$rc" "$out"; fi
 
@@ -351,7 +356,7 @@ SELECT declare_migration(
 );
 SQL
 out="$(run_audit "$D")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '20260801000001: declared more than once'; then
+if [ "$rc" -ne 0 ] && grep -q '20260801000001: declared more than once' <<<"$out"; then
   ok "a version declared twice fails, naming the version"
 else bad "a version declared twice fails, naming the version" "exit=$rc" "$out"; fi
 
@@ -374,7 +379,47 @@ out="$(run_audit "$D")"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "reclassifying a declared version passes"
 else bad "reclassifying a declared version passes" "exit=$rc" "$out"; fi
 
-# ── 18. The real repo passes — the check is live, not just fixture-true ─────────────────────────
+# ── 18. A valid class is accepted even when a `grep -q` answer is lost ───────────────────────────
+# The vocabulary check once piped the two tokens into `grep -qx`. Under a concurrent cargo build,
+# grep's exit on the first line SIGPIPEd printf, `pipefail` turned the match into a failure, and the
+# checker rejected the first token: "class 'additive', which is not one of: additive
+# shape-breaking". The race cannot be scheduled from a test, so its outcome is forced instead. A
+# `grep` earlier on PATH answers every `-q` query with "no match", which is the verdict the race
+# returned. A verdict that consults such a grep fails here on every run. The class check must not
+# depend on one. The control in the same environment shows the check is still live: an unknown
+# token is still rejected.
+LOST="${WORK}/lost-answer-bin"; mkdir -p "$LOST"
+REAL_GREP="$(command -v grep)"
+cat > "$LOST/grep" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in --) break ;; -*q*) exit 1 ;; esac
+done
+exec "$REAL_GREP" "\$@"
+SH
+chmod +x "$LOST/grep"
+D="${WORK}/lostanswer"; new_fixture "$D"
+cat > "$D/20260801000019_shape.sql" <<'SQL'
+SELECT declare_migration(
+    20260801000019,
+    'shape-breaking',
+    'The second token, so a check that stops at the first line is also covered.'
+);
+SQL
+out="$(MIGRATIONS_DIR="$D" PATH="${LOST}:${PATH}" bash "$AUDIT_SCRIPT" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then
+  ok "a valid class is accepted when a grep -q answer is lost (the parallel-load false rejection)"
+else bad "a valid class is accepted when a grep -q answer is lost (the parallel-load false rejection)" "exit=$rc" "$out"; fi
+D="${WORK}/lostanswerbad"; new_fixture "$D"
+cat > "$D/20260801000020_badclass.sql" <<'SQL'
+SELECT declare_migration(20260801000020, 'destructive', 'Not one of the two classes.');
+SQL
+out="$(MIGRATIONS_DIR="$D" PATH="${LOST}:${PATH}" bash "$AUDIT_SCRIPT" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -q "declares class 'destructive'" <<<"$out"; then
+  ok "an unknown class is still rejected when a grep -q answer is lost"
+else bad "an unknown class is still rejected when a grep -q answer is lost" "exit=$rc" "$out"; fi
+
+# ── 19. The real repo passes — the check is live, not just fixture-true ─────────────────────────
 out="$(bash "$AUDIT_SCRIPT" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "the repo's own migrations/ passes"
 else bad "the repo's own migrations/ passes" "exit=$rc" "$out"; fi
