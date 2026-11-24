@@ -195,7 +195,15 @@ for f in "${FILES[@]}"; do
         ALL_NAMED_VERSIONS="${ALL_NAMED_VERSIONS}${ver}"$'\n'
 
         # C — vocabulary and a reason that says something.
-        if ! printf '%s\n' $VALID_CLASSES | grep -qx -- "$cls"; then
+        #
+        # Compared in the shell, never piped to `grep -q`. Under `pipefail`, grep's exit on the
+        # first matching line can kill a producer still writing with SIGPIPE, and the pipeline
+        # then reports the match as a failure: a valid class rejected, under load, at random.
+        cls_known=0
+        for valid in $VALID_CLASSES; do
+            [ "$cls" = "$valid" ] && cls_known=1
+        done
+        if [ "$cls_known" -eq 0 ]; then
             PROBLEMS="${PROBLEMS}  ${base}: version ${ver} declares class '${cls}', which is not one of: ${VALID_CLASSES}"$'\n'
         fi
         if [ -z "$(printf '%s' "$rsn" | tr -d '[:space:]')" ]; then

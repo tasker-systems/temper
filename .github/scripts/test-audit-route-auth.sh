@@ -62,7 +62,10 @@ run_test() {
         FAIL=$((FAIL + 1))
         return
     fi
-    if [ -n "$expected_substr" ] && ! printf '%s' "$output" | grep -qF -- "$expected_substr"; then
+    # Matched as a string, not piped to `grep -qF`. Under `pipefail`, grep's exit on the first
+    # matching line can kill a printf still writing with SIGPIPE, and the pipeline then reports a
+    # present message as missing.
+    if [ -n "$expected_substr" ] && [[ "$output" != *"$expected_substr"* ]]; then
         echo "  FAIL: ${test_name}"
         echo "    exit code matched but expected message not found: ${expected_substr}"
         echo "    output: ${output}"
@@ -296,6 +299,27 @@ PYEOF
 run_test "create_internal_app renamed: fails loudly" "$FIX" 1 \
     "does not mount from the route table"
 
+# --- (e) a builder that mounts early in a long body still passes ---
+# The mount-from-table check once piped the builder's body into `grep -q`. grep exits at the
+# `mount_group` line, so an awk with more of the body to write died of SIGPIPE, and `pipefail` read
+# the match as "does not mount from the route table". It happened under load. Here a body longer than
+# a pipe buffer forces it on every run: awk has more than 64 KiB left to write when grep exits.
+FIX="${FIXTURE_DIR}/long_builder"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+mount = "            app = app.merge(mount_group(&group, &state));\n"
+marker = "pub fn create_internal_app"
+head, tail = s.split(marker, 1)
+assert mount in tail, "create_internal_app no longer mounts with the expected line"
+pad = "".join(f"    // padding line {i:05d}: a builder body longer than one pipe buffer\n" for i in range(10000))
+tail = tail.replace(mount, mount + pad, 1)
+open(p, "w").write(head + marker + tail)
+PYEOF
+run_test "create_internal_app mounting early in a long body: passes" "$FIX" 0
+
 # --- (f) a row's build fn pointed at another group's fn must fail ---
 # The one-token edit the table made easy: swap the gated row's build fn for public's and every
 # (key, tier) pin stays textually true while the gated API mounts with no middleware at all.
@@ -506,6 +530,28 @@ open(p, "w").write(s)
 PYEOF
 FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
 run_test "a handler newly taking AnyPrincipal: fails" "$REAL_ROUTES" 1 \
+    "the set of machine-admitting (AnyPrincipal) handlers changed"
+unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+
+# --- (m2) a new AnyPrincipal handler with a long signature still fails (f) ---
+# A regression pin: the AnyPrincipal set must be read from the whole signature, however long. A
+# reader that stopped at the matching line while its producer was still writing would lose the
+# match under `pipefail`, and a signature longer than a pipe buffer after its AnyPrincipal line is
+# the input that would expose it. The current auditor reads the signature with no such pipe.
+FIX_SRC="${FIXTURE_DIR}/src_new_any_principal_long"
+cp -R "$REAL_API_SRC" "$FIX_SRC"
+python3 - "$FIX_SRC/handlers/access.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = "    _auth: AuthUser,\n) -> ApiResult<Json<PublicSystemSettings>> {"
+assert a in s, "get_settings signature not found"
+pad = "".join(f"    // padding line {i:05d}: a signature longer than one pipe buffer\n" for i in range(10000))
+s = s.replace(a, "    _auth: AnyPrincipal,\n" + pad + ") -> ApiResult<Json<PublicSystemSettings>> {", 1)
+open(p, "w").write(s)
+PYEOF
+FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+run_test "a handler newly taking AnyPrincipal, in a long signature: fails" "$REAL_ROUTES" 1 \
     "the set of machine-admitting (AnyPrincipal) handlers changed"
 unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
 
