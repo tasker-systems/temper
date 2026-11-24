@@ -90,6 +90,17 @@ if [[ -n "$OUT_DIR" && "$DRY_RUN" == "true" ]]; then
     exit 1
 fi
 
+# The pause after each `cargo publish`, in whole seconds. Unset, it is 2: release.yml sets nothing,
+# so the release path pauses 2 seconds after every publish. Only test-publish-crates.sh sets it: to
+# 0 for its stubbed runs, and to invalid values to prove they are refused. A value that is not a
+# whole number of seconds without a leading zero, an empty one included, is refused here, before
+# anything is packaged or published.
+PAUSE_SECS="${PUBLISH_PAUSE_SECS-2}"
+if ! [[ "$PAUSE_SECS" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    echo "ERROR: PUBLISH_PAUSE_SECS must be a whole number of seconds; got '${PAUSE_SECS}'." >&2
+    exit 1
+fi
+
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 TARGET_DIR="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
@@ -164,7 +175,7 @@ for crate in "${CRATES[@]}"; do
 
     echo "==> Publishing ${crate} ${VERSION}"
     cargo publish --no-verify -p "$crate"
-    sleep 2
+    sleep "$PAUSE_SECS"
     PUBLISHED=$((PUBLISHED + 1))
 done
 

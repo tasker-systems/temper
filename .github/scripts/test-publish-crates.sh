@@ -74,6 +74,15 @@ exit 0
 STUB
 chmod +x "$STUB_DIR/curl"
 
+# Stub `sleep`: log the pause and return at once, so the default pause can be witnessed without
+# waiting it out.
+cat > "$STUB_DIR/sleep" <<'STUB'
+#!/bin/sh
+echo "sleep $*" >> "$CARGO_CALLS"
+exit 0
+STUB
+chmod +x "$STUB_DIR/sleep"
+
 REPO="$TMP/repo"
 git init -q "$REPO"
 
@@ -92,10 +101,14 @@ write_manifest() {
     } > "${REPO}/Cargo.toml"
 }
 
+# Every run pauses 0 seconds after a publish unless PAUSE_ENV says otherwise: `-u PUBLISH_PAUSE_SECS`
+# runs it as release.yml does, with the variable unset; `PUBLISH_PAUSE_SECS=<v>` passes a value.
 run_target() {
     CALLS="$1"; shift
     : > "$CALLS"
-    (cd "$REPO" && PATH="$STUB_DIR:$PATH" CARGO_CALLS="$CALLS" \
+    local pause_env
+    read -r -a pause_env <<< "${PAUSE_ENV:-PUBLISH_PAUSE_SECS=0}"
+    (cd "$REPO" && env "${pause_env[@]}" PATH="$STUB_DIR:$PATH" CARGO_CALLS="$CALLS" \
         STUB_PUBLISHED="${STUB_PUBLISHED:-}" \
         STUB_PUBLISHED_VERSION="${STUB_PUBLISHED_VERSION:-$VERSION}" STUB_VERSION="$VERSION" \
         bash "$TARGET" "$@")
@@ -156,6 +169,30 @@ CORE_PKG=$(line_of "package --no-verify -p temperkb-core" "$CALLS_FRESH")
     || fail "temperkb-core was not re-packaged and compared before its publish: $(cat "$CALLS_FRESH")"
 
 echo "PASS: the publish stage probes, re-packages and compares, then publishes each crate unverified, in order"
+
+# --- 2b. The pause after each publish: 2 seconds unset, the given value when set, else refused --
+# Unset is how release.yml runs it, so that run must still pause 2 seconds after every publish.
+pauses_after_publish() {
+    awk '/^cargo publish /{p=1; next} p{print; p=0}' "$1" | paste -sd, -
+}
+want_pauses() { local out="" _crate; for _crate in "${CRATES[@]}"; do out="${out:+$out,}sleep $1"; done; printf '%s' "$out"; }
+[ "$(pauses_after_publish "$CALLS_FRESH")" = "$(want_pauses 0)" ] \
+    || fail "with PUBLISH_PAUSE_SECS=0, each publish was not followed by 'sleep 0': $(cat "$CALLS_FRESH")"
+CALLS_PAUSE="$TMP/calls-pause-unset"
+PAUSE_ENV="-u PUBLISH_PAUSE_SECS" run_target "$CALLS_PAUSE" "$VERSION" --from "$OUT" > "$TMP/pause.log" 2>&1 \
+    || fail "a publish with PUBLISH_PAUSE_SECS unset was refused: $(cat "$TMP/pause.log")"
+[ "$(pauses_after_publish "$CALLS_PAUSE")" = "$(want_pauses 2)" ] \
+    || fail "with PUBLISH_PAUSE_SECS unset, each publish was not followed by 'sleep 2': $(cat "$CALLS_PAUSE")"
+for bad in "" "2s" "-1" "1.5" "08"; do
+    if PAUSE_ENV="PUBLISH_PAUSE_SECS=$bad" run_target "$TMP/calls-pause-bad" "$VERSION" --from "$OUT" > "$TMP/pause-bad.log" 2>&1; then
+        fail "PUBLISH_PAUSE_SECS='$bad' was accepted"
+    fi
+    grep -q "PUBLISH_PAUSE_SECS must be a whole number" "$TMP/pause-bad.log" \
+        || fail "PUBLISH_PAUSE_SECS='$bad' was refused for another reason: $(cat "$TMP/pause-bad.log")"
+    [ -s "$TMP/calls-pause-bad" ] && fail "PUBLISH_PAUSE_SECS='$bad' was refused only after work began: $(cat "$TMP/calls-pause-bad")"
+done
+
+echo "PASS: unset, each publish pauses 2 seconds; a set value is used; a non-integer is refused before any work"
 
 # --- 3. Fully-published closure: loud skip, no publish runs ----------------------------
 # The bite: a re-cut release must skip every crate loudly and exit 0 (idempotent, like

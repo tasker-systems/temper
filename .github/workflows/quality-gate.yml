@@ -267,6 +267,16 @@ jobs:
     # full auditor pass), so 5 minutes left no headroom and the job cancelled under runner load
     # after every harness had already passed.
     timeout-minutes: 10
+    # Every run: step below runs under guard-step-timer.sh, which runs it exactly as a step with no
+    # `shell:` runs (`bash -e`) and adds a `::warning::` naming any step that takes longer than
+    # GUARD_STEP_BUDGET_SECS. Slow steps are named, never failed: the timeout above stays the only
+    # thing that ends the job. The budget is chosen to sit above a healthy harness's time on a slow
+    # runner, so a warning should mean a harness has grown, not that a runner was slow.
+    env:
+      GUARD_STEP_BUDGET_SECS: '120'
+    defaults:
+      run:
+        shell: bash .github/scripts/guard-step-timer.sh {0}
 
     steps:
       # Full history and tags, no blobs. The wire cross-check measures against the last release
@@ -310,6 +320,20 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null || git fetch --depth=1 origin "${BASE_SHA}"
+
+      # Runs under GitHub's own default shell, not the timer: under the timer, a timer edited to
+      # `exit 0` would pass its own test along with every other step.
+      - name: Guard test — guard-step-timer (the shell these steps run under)
+        shell: bash -e {0}
+        run: bash .github/scripts/test-guard-step-timer.sh
+
+      # THE CHECK ITSELF as well as its harness: every guard test under .github/scripts is run by a
+      # step of this workflow. Pure bash over this file. `cargo make tripwires` runs it too.
+      - name: Check every guard test is run by this workflow
+        run: bash .github/scripts/check-guard-tests-invoked.sh
+
+      - name: Guard test — check-guard-tests-invoked
+        run: bash .github/scripts/test-check-guard-tests-invoked.sh
 
       - name: Guard test — detect-ci-scope
         run: bash .github/scripts/test-detect-ci-scope.sh

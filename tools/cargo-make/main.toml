@@ -240,6 +240,10 @@ description = "Run every .github/scripts/audit-*.sh tripwire, and fail if CI run
 # pass), they are slower, and CI runs them in their own steps. Named so their absence reads as a
 # decision rather than as the same oversight one level down.
 #
+# What this task does check about them is that CI runs them: check-guard-tests-invoked.sh fails when a
+# `test-*.sh` or `test-*.py` under the scripts directory has no step in the workflow. A guard test CI
+# never runs proves nothing, the same way a tripwire CI never runs enforces nothing.
+#
 # Delegates to the same scripts CI runs, so local and CI logic are identical (CI cannot call
 # cargo-make: the root Makefile.toml needs a ./.env no runner has).
 script = '''
@@ -282,11 +286,15 @@ if [ -n "${missing_in_ci}" ]; then
   fail=1
 fi
 
+if ! GUARD_TESTS_SCRIPTS_DIR="${scripts_dir}" GUARD_TESTS_WORKFLOW="${workflow}" bash .github/scripts/check-guard-tests-invoked.sh; then
+  fail=1
+fi
+
 if [ "${fail}" -ne 0 ]; then
   echo "tripwires: one or more failed (see above)." >&2
   exit 1
 fi
-echo "tripwires: all ${found} passed, and CI runs every one of them."
+echo "tripwires: all ${found} passed, and CI runs every one of them and every guard test."
 '''
 
 # `[2026-08-15]` The old name, kept so anything invoking it still resolves. The set it runs is no
