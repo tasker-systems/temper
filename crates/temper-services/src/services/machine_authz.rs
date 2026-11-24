@@ -446,7 +446,7 @@ async fn contain_reach(
 ) -> ApiResult<()> {
     // The D4b role ceiling is NOT here: it asks a question about the role itself, not about
     // containment, so it runs for BOTH arms in `authorize_registration`. Do not restore a copy —
-    // a second copy is what would let the two arms drift apart again.
+    // one copy is what keeps the two arms from drifting apart.
     // D4 — the membership bar: exactly what `add_member` requires of a human. That is the
     // membership authority's managing arm (team-role rank plan P15), which also refuses a
     // non-admin on the gating team or temper-system (R11): an owner there who is not a system admin can no more
@@ -475,9 +475,10 @@ async fn contain_reach(
         // D4 — exactly what `grant_capability` requires of a non-admin, by CALLING that decision
         // rather than restating it, so the human and machine sinks cannot drift. Under it a
         // machine's reach never exceeds its provisioner's: `can_write` is conferred only by a
-        // caller who holds write on the cogmap; holding `can_grant` alone is not enough. The
-        // same decision carries 5b.4's admin-only guard on the L0 kernel, so a non-admin
-        // `can_grant` holder there resolves to None.
+        // caller who holds write on the cogmap, and read only on a cogmap the caller reads through
+        // membership; holding `can_grant` alone is not enough. The same decision carries 5b.4's
+        // admin-only regime (`cogmap_write_requires_admin`: the L0 kernel and maps bound to an
+        // instance team), so a non-admin `can_grant` holder there resolves to None and is refused.
         //
         // `apply_reach` confers exactly `read + (write iff spec)`, never delete or grant — so that
         // is what is attenuated here. The admin arm asks the same decision separately, so this
