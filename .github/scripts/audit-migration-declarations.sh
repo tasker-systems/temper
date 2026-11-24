@@ -196,12 +196,9 @@ for f in "${FILES[@]}"; do
 
         # C — vocabulary and a reason that says something.
         #
-        # Compared in the shell, with no pipeline. `printf … | grep -qx` lost its answer under
-        # load: grep exits on the first matching line, a producer still writing then dies of
-        # SIGPIPE, and `pipefail` reports the match as a failure. 'additive' is the first token,
-        # so the guard rejected it — "class 'additive', which is not one of: additive
-        # shape-breaking". Measured under a concurrent cargo build: PIPESTATUS was `141 0` on
-        # every false rejection.
+        # Compared in the shell, never piped to `grep -q`. Under `pipefail`, grep's exit on the
+        # first matching line can kill a producer still writing with SIGPIPE, and the pipeline
+        # then reports the match as a failure: a valid class rejected, under load, at random.
         cls_known=0
         for valid in $VALID_CLASSES; do
             [ "$cls" = "$valid" ] && cls_known=1
