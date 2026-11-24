@@ -47,9 +47,9 @@ pub(super) async fn resolve_email_from_claims(
         lookup_cached_email(&state.pool, &state.config.auth_provider_name, &claims.sub).await;
 
     match cached {
-        // Propagate the STORED flag. This arm used to discard it and substitute
-        // `Some(true)` — see `lookup_cached_email` for why that was a profile-takeover
-        // primitive rather than a cosmetic default.
+        // Propagate the STORED flag: on this rung `email_verified` comes only from the stored
+        // row, never a substituted `Some(true)`. See `lookup_cached_email` for why the flag is
+        // an identity assertion rather than a cosmetic default.
         Some((email, email_verified)) => {
             tracing::debug!("resolved email from cached auth link");
             Ok((email, email_verified))
@@ -86,25 +86,24 @@ pub(super) async fn resolve_email_from_claims(
 ///
 /// # Why this reads the real column
 ///
-/// It used to `SELECT email` only and return a hardcoded `Some(true)` for the flag, which its
-/// own doc called an `email_verified_placeholder`. That value is not cosmetic. Two consumers
-/// treat it as the identity provider's assertion:
+/// The flag is not cosmetic, so it is never a placeholder. Two consumers treat it as the identity
+/// provider's assertion:
 /// `profile_service::refresh_link_verification`, which PERSISTS it back onto the row, and
 /// `profile_service::reconcile_by_email`, which uses the stored flag to decide whether an
 /// address may be trusted to match one account against another. Read those two before changing
 /// anything here.
 ///
 /// `refresh_link_verification`'s doc promises the flag "never flips false→true here without the
-/// provider's say-so". The provider never said so — this function did. **Never synthesize this
-/// value.** If it is not read from the row, it must be `None`, which both consumers treat as
-/// "unknown" rather than "yes".
+/// provider's say-so". A value this function made up would be its say-so, not the provider's.
+/// **Never synthesize this value.** If it is not read from the row, it must be `None`, which both
+/// consumers treat as "unknown" rather than "yes".
 ///
 /// Rows storing a real email at `email_verified = false` are ordinary, not exotic:
 /// `create_new_profile_and_link` and `create_link_for_existing_profile` both write the email with
 /// `email_verified` taken from the claims, and migration `20260709000004` deliberately backfilled
 /// every pre-existing row to `false`, its comment refusing a liberal backfill because it "would
-/// mark emails verified that never carried the claim". This function was performing that refused
-/// backfill one row at a time.
+/// mark emails verified that never carried the claim". A synthesized `Some(true)` here would
+/// perform that refused backfill one row at a time.
 ///
 /// Nor is this rung exotic: it is the steady-state path for any deployment whose tokens lack an
 /// email claim, which `auth/mod.rs` describes as "the path that keeps every returning MCP human
