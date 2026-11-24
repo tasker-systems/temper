@@ -64,9 +64,8 @@ impl ScopedAuthority for GrantAuthority {
         // consults it here, so the grant axis confers no `can_write` the write axis forbids: a
         // non-admin `can_grant` holder on such a map has no grant authority there.
         // `machine_authz`'s own tests seed such a row, so the state is reachable, not
-        // hypothetical. Admins already
-        // returned above, so a map in the admin-only regime denies here regardless of any
-        // `can_grant` the caller holds.
+        // hypothetical. Admins not stopped at personal space already returned above, so a map in
+        // the admin-only regime denies here regardless of any `can_grant` the caller holds.
         if subject.kind == AnchorTable::Cogmaps
             && cogmap_write_requires_admin(pool, CogmapId(subject.id)).await?
         {

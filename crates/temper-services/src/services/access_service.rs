@@ -821,7 +821,7 @@ pub async fn grant_capability(
 ///
 /// Authority over the subject (`GrantAuthority`) decides what may be conferred; it does not look at
 /// who receives it. This bar does, so the grant door holds the same line as the two-sided share
-/// gate: a delegate names only a recipient that gate would admit, never an arbitrary team id —
+/// gate: a delegate names only a recipient team that gate would admit, never an arbitrary team id —
 /// `temper-system`, which every profile reaches, the gating team, a team they have nothing to do
 /// with, or a soft-deleted or nonexistent one (`principal_id` has no foreign key). It applies that
 /// gate's bar to the recipient:
@@ -928,9 +928,9 @@ async fn recipient_bar(
 ///
 /// This is the grant door's half of "a machine you control is you". The registration half is
 /// structural: the machine being registered is the caller's by construction. Rotation counts as
-/// control because a rotator holds the credential: a co-owner of the owning team who rotates the
-/// secret is held to the same bar as the registrant, so a right they hold only through a team does
-/// not pass to the machine (S3 route 3, ruled 2026-11-01, decision
+/// control because a rotator holds the credential: anyone who has rotated the secret, and any
+/// owner of the owning team (who can rotate it), is held to the same bar as the registrant, so a
+/// right they hold only through a team does not pass to the machine (S3 route 3, ruled 2026-11-01, decision
 /// `01a19843-b86b-766f-b06e-65560b0f6f6f`). The owning team's liveness is deliberately not asked:
 /// a soft-deleted team's owner holding the bar is the stricter answer, never a looser one.
 async fn is_machine_controlled_by<'e, E>(
