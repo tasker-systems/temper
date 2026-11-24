@@ -206,12 +206,12 @@ impl From<&GrantCapabilityRequest> for RequestedCapabilities {
 /// **The** authorization decision for "may `caller` confer this capability set on this subject?" —
 /// authority arm plus attenuation, in one pass.
 ///
-/// This is the single policy for EVERY grant sink, called and never restated. Two sinks exist and
-/// they must not drift: the human path (`grant_capability`) and the machine path
-/// (`machine_authz::contain_reach` → `apply_reach`). They already drifted once — 5b.3/5b.4 hardened
-/// the human path while the machine path kept gating on `can_grant` alone, which let a
-/// `read+grant`-without-write holder provision a machine carrying `can_write` and thereby command a
-/// principal holding write they could never hold themselves. Laundering by proxy. Hence one helper.
+/// This is the single policy for EVERY grant sink, called and never restated. Two sinks exist: the
+/// human path (`grant_capability`) and the machine path (`machine_authz::contain_reach` →
+/// `apply_reach`). Both call this one decision, so attenuation cannot differ between them: a
+/// capability conferred on a machine is one its provisioner already holds on that subject, and a
+/// machine's write reach never exceeds its provisioner's. Gating either sink on `can_grant` alone
+/// would let a capability the caller lacks reach a principal they command. Hence one helper.
 ///
 /// Semantics:
 /// - **SystemAdmin** — unrestricted in what it confers. Bootstrap and repair would otherwise
@@ -841,8 +841,8 @@ pub async fn grant_capability(
 /// - **team, admin:** exists and is active (`NotFound` otherwise) — an admin may grant to any team,
 ///   but never mint a dangling row.
 /// - **profile:** exists (`NotFound` to an admin, `Forbidden` to a delegate, who learns nothing about
-///   which ids exist); a delegate may not grant to themselves, which is how an inherited `can_grant`
-///   used to launder into a personal row that outlived the team. A machine the delegate controls
+///   which ids exist); a delegate may not grant to themselves, so an inherited `can_grant` never
+///   becomes a personal row that outlives the team. A machine the delegate controls
 ///   (registered it, rotated its secret, or owns a team that owns it and so could rotate it) is held to
 ///   [`callers_machine_grant_bar`]: admitted only on a grant right held in their own name.
 async fn recipient_bar(

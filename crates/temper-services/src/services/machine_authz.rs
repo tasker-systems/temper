@@ -473,13 +473,11 @@ async fn contain_reach(
 
     for grant in grants {
         // D4 — exactly what `grant_capability` requires of a non-admin, by CALLING that decision
-        // rather than restating it. This previously checked `profile_can_grant` alone, which WAS
-        // parity until 5b.3/5b.4 hardened the human path and left this one behind. The divergence
-        // was exploitable in the same class this arc exists to close: a `read+grant`-without-write
-        // holder could provision a machine carrying `can_write` and then command a principal
-        // holding write they can never hold themselves (laundering by proxy), and a non-admin
-        // `can_grant` holder on the L0 kernel could do the same there, walking around 5b.4's
-        // admin-only guard. Sharing the decision is what stops it recurring.
+        // rather than restating it, so the human and machine sinks cannot drift. Under it a
+        // machine's reach never exceeds its provisioner's: `can_write` is conferred only by a
+        // caller who holds write on the cogmap; holding `can_grant` alone is not enough. The
+        // same decision carries 5b.4's admin-only guard on the L0 kernel, so a non-admin
+        // `can_grant` holder there resolves to None.
         //
         // `apply_reach` confers exactly `read + (write iff spec)`, never delete or grant — so that
         // is what is attenuated here. The admin arm asks the same decision separately, so this
