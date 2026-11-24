@@ -1,0 +1,13 @@
+title    = "The Slack mention agent ignores edited messages instead of answering them again"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+Since eve 1.0, an edit to a message in a Slack thread that already has a session is handed to the
+hook a new message of the same kind reaches, so an edited mention re-ran the mention agent's
+account check: it could start a second turn or send the account-link prompt again. The agent now
+drops every edit. Who observes: Slack users of a deployment whose app subscribes to the `message.*`
+events. Visible difference: editing a mention no longer produces a new answer or a repeated link
+prompt; mention the agent again instead. Release relevance: none beyond the agent's own deploy.
+'''

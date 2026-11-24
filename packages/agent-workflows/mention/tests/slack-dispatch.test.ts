@@ -304,6 +304,51 @@ describe("onDirectMessage — the gate that must exist", () => {
   });
 });
 
+/**
+ * eve's REAL edit router, imported by path for the reason `events.test.ts` gives (the package
+ * does not export it). Without `onMessageEdited`, eve decides an edit with
+ * `defaultOnMessageEdited(config)`, which hands an edit that mentions the bot to
+ * `onAppMention` (`docs/channels/slack/reference.mdx`, "Message edits").
+ */
+const { defaultOnMessageEdited } = await import(
+  "../node_modules/eve/dist/src/public/channels/slack/defaults.js"
+);
+
+describe("onMessageEdited — an edit repeats no side effect", () => {
+  /** An edit of a message that mentions the bot, in a non-DM thread that has a session. */
+  function fakeEdit() {
+    const message = { text: "<@UBOT> what changed?", ts: "1700000000.000004", raw: {} };
+    return { message, previousText: "<@UBOT> what changed", editedTs: "1700000000.000009" };
+  }
+
+  // FAILS IF: `onMessageEdited` is removed. eve then routes the edit through `onAppMention`,
+  // which asks link-state (a write on the unlinked arm), pre-flights the mint, and either
+  // dispatches a second turn or sends the link prompt again. The decider is resolved the way
+  // eve's `slackChannel` resolves it (as of eve 1.1.0; recheck on upgrade), so the absent key
+  // is tested by its real fallback.
+  it("dispatches no turn, asks no link state, mints nothing and sends nothing", async () => {
+    const channel = (await import("../agent/channels/slack.js")).default as AnyArgs;
+    requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
+    requestMintedToken.mockResolvedValue({
+      status: "token",
+      access_token: "at-1",
+      expires_at_ms: 1_784_505_600_000,
+    });
+    const edit = fakeEdit();
+    const { ctx, request, post } = fakeCtx();
+    const editCtx = { ...ctx, edit, isBotMentioned: () => true };
+
+    const decide = channel.onMessageEdited ?? defaultOnMessageEdited(channel);
+    const result = await decide(editCtx as AnyArgs, edit as AnyArgs);
+
+    expect(result).toBeNull();
+    expect(requestLinkState).not.toHaveBeenCalled();
+    expect(requestMintedToken).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+});
+
 describe("channel config — rendering and overlap", () => {
   // FAILS IF: the renderer is dropped (every eve default — the answer itself included — would
   // render publicly), or the channel goes back to eve's default `turnPolicy: "steer"`, which folds

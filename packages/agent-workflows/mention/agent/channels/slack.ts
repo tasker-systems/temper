@@ -82,6 +82,28 @@ export default slackChannel({
   onDirectMessage: async () => null,
 
   /**
+   * Edits are deliberately NOT served.
+   *
+   * Without this key, eve decides an edit (in a thread that already has a session) with the
+   * hook a new message of the same kind reaches — an edit that mentions the bot, before or
+   * after the edit, goes to `onAppMention` (`docs/channels/slack/reference.mdx`, "Message
+   * edits"). `onAppMention` has side effects on every call: it asks link-state (a write on
+   * the unlinked arm), pre-flights the mint, sends an ephemeral on every non-dispatching arm,
+   * and dispatches a turn on the linked one. So a user editing their own mention would get a
+   * second turn or a second link prompt.
+   *
+   * eve documents two guards: check `ctx.edit` in each hook, or define this one, which decides
+   * every edit in place of `onAppMention`, `onMessage` and `onDirectMessage`. So it also covers
+   * the other two if either ever starts dispatching. Returning `null` drops the edit.
+   *
+   * Edits reach eve only through the `message.*` event subscriptions. The committed
+   * `slack-app-manifest.yml` keeps its whole `event_subscriptions` block commented out, so it
+   * cannot tell us what the live app subscribes to, and Vercel Connect's defaults include
+   * `message.*`. The guard holds however the app is subscribed.
+   */
+  onMessageEdited: async () => null,
+
+  /**
    * Replaces eve's default mention pipeline (auth derivation + a "Thinking..."
    * typing indicator). We keep the same auth derivation and add the human-only
    * gate, so bots cannot drive a turn.
