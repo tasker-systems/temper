@@ -299,8 +299,9 @@ pub struct PropertyPredicate {
 /// `created` and `updated` are the columns a caller reaches for: every resource view shows them
 /// at top level, and no filter narrows by them. `temper-created` and `temper-updated` are the same
 /// two columns under the names a resource's frontmatter shows them by, next to `temper-stage`,
-/// which is a property row and answers. The write path strips both from managed meta
-/// (`TIER1_SYSTEM_FIELDS`), so they never become rows.
+/// which is a property row and answers. Frontmatter routes every `temper-` key to managed meta,
+/// and the write path strips these two there (`TIER1_SYSTEM_FIELDS`), so ingest never stores
+/// them; the measurement below found no row of either.
 ///
 /// Every other field is left alone, because a refusal here also makes an open key of that name
 /// unreachable, and the open tier admits any key:

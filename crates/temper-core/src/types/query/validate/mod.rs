@@ -1589,12 +1589,22 @@ mod tests {
     fn the_published_column_fields_are_the_refused_ones() {
         use crate::types::query::filter::RESOURCE_COLUMN_FIELDS;
         use utoipa::PartialSchema;
-        let text =
-            serde_json::to_string(&RefusalReason::schema()).expect("RefusalReason has a schema");
-        let start = text
-            .find("never as a property row")
-            .expect("`column_not_a_property` is published with its description");
-        let description = &text[start..start + text[start..].find("\",").expect("its end")];
+        // The `oneOf` arm whose `enum` is exactly this reason, read by structure, never by text.
+        fn arm(v: &serde_json::Value) -> Option<&serde_json::Value> {
+            if v.get("enum") == Some(&serde_json::json!(["column_not_a_property"])) {
+                return Some(v);
+            }
+            match v {
+                serde_json::Value::Object(m) => m.values().find_map(arm),
+                serde_json::Value::Array(a) => a.iter().find_map(arm),
+                _ => None,
+            }
+        }
+        let schema =
+            serde_json::to_value(RefusalReason::schema()).expect("RefusalReason has a schema");
+        let description = arm(&schema)
+            .and_then(|a| a["description"].as_str())
+            .expect("`column_not_a_property` is published with a description");
         for (field, _) in RESOURCE_COLUMN_FIELDS {
             assert!(
                 description.contains(&format!("`{field}`")),
