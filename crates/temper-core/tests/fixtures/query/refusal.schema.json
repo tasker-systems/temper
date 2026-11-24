@@ -174,7 +174,7 @@
         },
         {
           "const": "column_not_a_property",
-          "description": "A `resource_filter.properties` predicate names a field every resource carries as a column,\nnever as a property row: `created` or `updated`.\n\nA property predicate reads only `kb_properties` rows, so it could match nothing, and the\nempty answer it would give looks exactly like an honest \"none\". The detail names the field\nand says where it lives. The list is `filter::RESOURCE_COLUMN_FIELDS`.",
+          "description": "A `resource_filter.properties` predicate names a field every resource carries as a column,\nnever as a property row: `created` or `updated`, or their frontmatter names\n`temper-created` and `temper-updated`.\n\nA property predicate reads only `kb_properties` rows, so it could match nothing, and the\nempty answer it would give looks exactly like an honest \"none\". The detail names the field\nand says where it lives. The list is `filter::RESOURCE_COLUMN_FIELDS`.",
           "type": "string"
         },
         {

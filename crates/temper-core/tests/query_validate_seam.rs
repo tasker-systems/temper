@@ -113,8 +113,10 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("BoundTermNotApplicable", 1),
         ("CombinatorArity", 2),
         // `ColumnNotAProperty` `[added — 2026-11-24]`: a resource predicate on `created` or
-        // `updated`. Reads no declaration, only `filter::RESOURCE_COLUMN_FIELDS`, and clears the
-        // bar through the variant's published description, which names both fields. A property
+        // `updated`, or their `temper-` names. Reads no declaration, only
+        // `filter::RESOURCE_COLUMN_FIELDS`, and clears the bar through the variant's published
+        // description, which names every field (`the_published_column_fields_are_the_refused_ones`
+        // holds the two together). A property
         // predicate on a column matches nothing on any server, so `--check` refusing it is right.
         ("ColumnNotAProperty", 1),
         ("StageNotReturnable", 1),

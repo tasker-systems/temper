@@ -388,7 +388,8 @@ pub enum RefusalReason {
     /// A `contains` predicate was supplied with no values, so it narrows nothing.
     EmptyContains,
     /// A `resource_filter.properties` predicate names a field every resource carries as a column,
-    /// never as a property row: `created` or `updated`.
+    /// never as a property row: `created` or `updated`, or their frontmatter names
+    /// `temper-created` and `temper-updated`.
     ///
     /// A property predicate reads only `kb_properties` rows, so it could match nothing, and the
     /// empty answer it would give looks exactly like an honest "none". The detail names the field

@@ -1580,6 +1580,29 @@ mod tests {
         }
     }
 
+    /// Every key `RESOURCE_COLUMN_FIELDS` refuses is named in `column_not_a_property`'s published
+    /// description. The shape pass raises it offline, in `--check`, so the published contract must
+    /// say which keys it covers; a key added to the list alone would refuse a plan the published
+    /// contract admits.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_column_fields_are_the_refused_ones() {
+        use crate::types::query::filter::RESOURCE_COLUMN_FIELDS;
+        use utoipa::PartialSchema;
+        let text =
+            serde_json::to_string(&RefusalReason::schema()).expect("RefusalReason has a schema");
+        let start = text
+            .find("never as a property row")
+            .expect("`column_not_a_property` is published with its description");
+        let description = &text[start..start + text[start..].find("\",").expect("its end")];
+        for (field, _) in RESOURCE_COLUMN_FIELDS {
+            assert!(
+                description.contains(&format!("`{field}`")),
+                "`{field}` is refused but not named in the published description: {description}"
+            );
+        }
+    }
+
     /// The node cap, the text budget, and the search door's caps are published as the numbers
     /// enforced: in `PropertyOp`'s and `RefusalReason`'s descriptions, and as `maxLength` /
     /// `maxItems` on `SearchParams`, which `reject_oversized_search` holds to these constants.
@@ -3424,7 +3447,7 @@ mod tests {
                 },
             ]
         };
-        for field in ["created", "updated"] {
+        for field in ["created", "updated", "temper-created", "temper-updated"] {
             for op in ops() {
                 let c = selection_with_properties(vec![PropertyPredicate {
                     key: field.to_string(),
@@ -3440,9 +3463,9 @@ mod tests {
                         .collect();
                     assert_eq!(hit.len(), 1, "{pass}, `{field}` {op:?}: got {errs:?}");
                     assert!(
-                        hit[0]
-                            .detail
-                            .starts_with(&format!("`{field}` is not a property: it is")),
+                        hit[0].detail.starts_with(&format!(
+                            "`{field}` is read as a property here, but it is"
+                        )),
                         "{pass}: the detail names the field and where it lives: {}",
                         hit[0].detail
                     );
@@ -3466,6 +3489,19 @@ mod tests {
                 .collect(),
         );
         assert_eq!(count_refusals(&c, RefusalReason::ColumnNotAProperty), 2);
+        let errs = validate(&c).expect_err("must refuse");
+        let created = errs
+            .iter()
+            .find(|e| e.detail.starts_with("`created`"))
+            .expect("a refusal for `created`");
+        assert!(
+            created.detail.contains(
+                "2 in `resource_filter.properties` name it, the first \
+                 `resource_filter.properties[0]`"
+            ),
+            "the detail counts the predicates and names the first: {}",
+            created.detail
+        );
 
         // Controls: the fields left alone still validate — `title`, `status` and `date` are live
         // open keys, `doc_type` is a property row, and a near-miss key is just an open key.

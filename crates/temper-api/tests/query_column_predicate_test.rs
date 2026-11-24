@@ -1,6 +1,6 @@
 #![cfg(feature = "test-db")]
-//! **A resource property predicate on `created` or `updated` is refused through `POST /api/query`,
-//! and the refusal keeps its kind to the caller.**
+//! **A resource property predicate on `created` or `updated`, under either name, is refused
+//! through `POST /api/query`, and the refusal keeps its kind to the caller.**
 //!
 //! Both are columns of every resource and never property rows, so a predicate on either matched
 //! nothing: the door answered `200` with an `empty` stage, which a caller asking "created after X"
@@ -57,7 +57,7 @@ async fn a_predicate_on_created_or_updated_is_refused_by_name(pool: PgPool) {
     let (status, body) = post(plan(ctx, "date", json!({ "op": "has_key" }))).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
-    for field in ["created", "updated"] {
+    for field in ["created", "updated", "temper-created", "temper-updated"] {
         let compare = json!({ "op": "compare", "direction": "gte", "value": "2000-01-01" });
         let (status, body) = post(plan(ctx, field, compare)).await;
         assert_eq!(
@@ -74,7 +74,7 @@ async fn a_predicate_on_created_or_updated_is_refused_by_name(pool: PgPool) {
         assert_eq!(refusals[0]["stage"], "rows");
         let detail = refusals[0]["detail"].as_str().expect("a detail");
         assert!(
-            detail.starts_with(&format!("`{field}` is not a property: it is"))
+            detail.starts_with(&format!("`{field}` is read as a property here, but it is"))
                 && detail.contains("a column of every resource"),
             "the detail names the field and where it lives: {detail}"
         );

@@ -1061,8 +1061,8 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
                     Some(name),
                     RefusalReason::ColumnNotAProperty,
                     format!(
-                        "`{field}` is not a property: it is {lives}. A property predicate reads \
-                         only property rows, so it would match nothing; {} in \
+                        "`{field}` is read as a property here, but it is {lives}. A property \
+                         predicate reads only property rows, so it would match nothing; {} in \
                          `resource_filter.properties` name it, the first \
                          `resource_filter.properties[{first}]`",
                         named.len()

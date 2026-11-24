@@ -10568,6 +10568,10 @@ export interface components {
              *     against an exploded element, and a `[]`-valued key is a row in the one and no rows in the
              *     other. The element view continues to serve `tags` and `facets`, whose semantics genuinely
              *     are AND-containment over elements.
+             *
+             *     **A key naming a resource column is refused `column_not_a_property`:** `created`,
+             *     `updated`, `temper-created` and `temper-updated`. Those are columns, never property rows,
+             *     so a predicate on one could only answer empty.
              */
             properties?: components["schemas"]["PropertyPredicate"][];
             stage?: string | null;

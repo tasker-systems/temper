@@ -1,13 +1,14 @@
-title    = "A resource property predicate on created or updated is refused as column_not_a_property, not answered empty"
+title    = "A resource property predicate on created or updated, under either name, is refused as column_not_a_property, not answered empty"
 pr       = "self"
 classes  = ["additive", "behavioral"]
 surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
 status   = "signal-only"
 body = '''
-What changed: a `resource_filter.properties` predicate whose key is `created` or `updated`, with
-any operator (`compare`, `contains`, `has_key`), is refused by the shape pass with the new
-RefusalReason `column_not_a_property`. The detail names the field and says it is a column of every
-resource that no filter narrows by. Both are columns, never property rows, and a property predicate
+What changed: a `resource_filter.properties` predicate whose key is `created` or `updated`, or
+their frontmatter names `temper-created` and `temper-updated`, with any operator (`compare`,
+`contains`, `has_key`), is refused by the shape pass with the new RefusalReason
+`column_not_a_property`. The detail names the field and says it is a column of every resource that
+no filter narrows by. These are columns, never property rows, and a property predicate
 reads only property rows, so before this the plan ran and its stage answered `empty` with
 `total: 0`, which a caller asking "created after X" read as "none". Every other key is unchanged,
 `title`, `doc_type` and `status` included (live open keys or property rows; the field list and its
@@ -15,9 +16,8 @@ reasons are `filter::RESOURCE_COLUMN_FIELDS`).
 
 Who observes: any caller of POST /api/query, the MCP query tool, and `temper query`, which now gets
 400 PLAN_REFUSED with that reason where it got 200 and an empty stage. `temper query --check`
-refuses it too, because it runs the same shape pass. An open-meta key literally named `created` or
-`updated` stays writable and is now unreachable by a property predicate; none exists in the
-corpus measured. A client built before this parses the new reason as an unknown one (RefusalReason
+refuses it too, because it runs the same shape pass. An open-meta key literally named one of the four stays
+writable and is now unreachable by a property predicate; none exists in the corpus measured. A client built before this parses the new reason as an unknown one (RefusalReason
 is open) and degrades.
 
 Why additive + behavioral: the shape change is one new value in the open RefusalReason enum
