@@ -388,6 +388,10 @@ else bad "reclassifying a declared version passes" "exit=$rc" "$out"; fi
 # returned. A verdict that consults such a grep fails here on every run. The class check must not
 # depend on one. The control in the same environment shows the check is still live: an unknown
 # token is still rejected.
+#
+# The shim is coarse: it loses the answer of EVERY `grep -q` the auditor runs, not only one in the
+# class check. The auditor runs none today. If one is added elsewhere, this case fails, and the new
+# call must either avoid a pipe into `grep -q` or this shim must be narrowed to the class check.
 LOST="${WORK}/lost-answer-bin"; mkdir -p "$LOST"
 REAL_GREP="$(command -v grep)"
 cat > "$LOST/grep" <<SH
@@ -419,7 +423,19 @@ if [ "$rc" -ne 0 ] && grep -q "declares class 'destructive'" <<<"$out"; then
   ok "an unknown class is still rejected when a grep -q answer is lost"
 else bad "an unknown class is still rejected when a grep -q answer is lost" "exit=$rc" "$out"; fi
 
-# ── 19. The real repo passes — the check is live, not just fixture-true ─────────────────────────
+# ── 19. A class is compared as a string, never as a pattern ───────────────────────────────────
+# `.*` matches every token as a regex. A check that matched the class as a pattern would accept it,
+# and `additiv.` and `[a]dditive` with it.
+D="${WORK}/regexclass"; new_fixture "$D"
+cat > "$D/20260801000021_regex_class.sql" <<'SQL'
+SELECT declare_migration(20260801000021, '.*', 'A pattern, not a class.');
+SQL
+out="$(run_audit "$D")"; rc=$?
+if [ "$rc" -ne 0 ] && grep -qF "declares class '.*'" <<<"$out"; then
+  ok "a class that is a regex matching every token is refused"
+else bad "a class that is a regex matching every token is refused" "exit=$rc" "$out"; fi
+
+# ── 20. The real repo passes — the check is live, not just fixture-true ─────────────────────────
 out="$(bash "$AUDIT_SCRIPT" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "the repo's own migrations/ passes"
 else bad "the repo's own migrations/ passes" "exit=$rc" "$out"; fi

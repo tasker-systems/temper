@@ -534,10 +534,10 @@ run_test "a handler newly taking AnyPrincipal: fails" "$REAL_ROUTES" 1 \
 unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
 
 # --- (m2) a new AnyPrincipal handler with a long signature still fails (f) ---
-# The AnyPrincipal set must be read from the whole signature, however long. A reader that stops at
-# the matching line while its producer is still writing loses the match under `pipefail`. A
-# signature longer than a pipe buffer after its AnyPrincipal line makes that loss certain rather
-# than load-dependent.
+# A regression pin: the AnyPrincipal set must be read from the whole signature, however long. A
+# reader that stopped at the matching line while its producer was still writing would lose the
+# match under `pipefail`, and a signature longer than a pipe buffer after its AnyPrincipal line is
+# the input that would expose it. The current auditor reads the signature with no such pipe.
 FIX_SRC="${FIXTURE_DIR}/src_new_any_principal_long"
 cp -R "$REAL_API_SRC" "$FIX_SRC"
 python3 - "$FIX_SRC/handlers/access.rs" <<'PYEOF'
