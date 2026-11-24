@@ -52,6 +52,8 @@ elapsed=$((SECONDS - start))
 if (( elapsed > budget )); then
     # Workflow-command escaping: the message may carry `%`, and a name never carries a newline.
     msg="${name//%/%25} took ${elapsed}s, over the ${budget}s per-step budget (GUARD_STEP_BUDGET_SECS); the step itself exited ${rc}."
+    # A workflow command must start its own line, and the step's last output may lack a newline.
+    echo ""
     echo "::warning title=Slow guard step::${msg}"
 fi
 exit "$rc"

@@ -2,8 +2,8 @@
 # .github/scripts/check-guard-tests-invoked.sh
 #
 # Every guard test under .github/scripts (`test-*.sh`, `test-*.py`) is run by quality-gate.yml: on
-# an uncommented `run:` line that invokes it directly, as `run: bash .github/scripts/<file>` or
-# `run: python3 .github/scripts/<file>`.
+# an uncommented one-line `run:` that invokes it directly, as `run: bash .github/scripts/<file>` or
+# `run: python3 .github/scripts/<file>` (or the same line opening a step, `- run: ...`).
 #
 # WHY. A guard test is the proof that its guard can still fail (TW-5). A guard test that CI never
 # runs proves nothing, however green it is locally. The set is derived by glob, never listed,
@@ -14,19 +14,21 @@
 #
 # NOT CHECKED:
 #   - that the step runs unconditionally. A step with an `if:` still counts as invoked.
+#   - that the step can fail the job. A step with `continue-on-error: true` still counts.
 #   - that the step sits in the guard-tests job. Any job in the workflow counts.
 #   - an invocation spelled any other way (a multi-line `run: |` block, a variable, a loop). It
 #     reads as missing: write the step as a one-line `run:`.
 #   - guard tests outside .github/scripts, such as tools/roadmap/test.sh.
 #
-# SCRIPTS_DIR and WORKFLOW point the check at a fixture. The harness is test-check-guard-tests-invoked.sh.
+# GUARD_TESTS_SCRIPTS_DIR and GUARD_TESTS_WORKFLOW point the check at a fixture. The harness is
+# test-check-guard-tests-invoked.sh.
 #
 #   bash .github/scripts/check-guard-tests-invoked.sh
 
 set -euo pipefail
 
-SCRIPTS_DIR="${SCRIPTS_DIR:-.github/scripts}"
-WORKFLOW="${WORKFLOW:-.github/workflows/quality-gate.yml}"
+SCRIPTS_DIR="${GUARD_TESTS_SCRIPTS_DIR:-.github/scripts}"
+WORKFLOW="${GUARD_TESTS_WORKFLOW:-.github/workflows/quality-gate.yml}"
 
 if [[ ! -f "$WORKFLOW" ]]; then
     echo "check-guard-tests-invoked: FAIL — workflow ${WORKFLOW} not found." >&2
@@ -45,7 +47,7 @@ for path in "${SCRIPTS_DIR}"/test-*.sh "${SCRIPTS_DIR}"/test-*.py; do
     esac
     # Literal match on the file name: escape the regex metacharacters a file name can carry.
     escaped="$(printf '%s' "$file" | sed 's/[.[\*^$+?(){}|]/\\&/g')"
-    if ! grep -qE "^[[:space:]]+run: ${runner} \\.github/scripts/${escaped}[[:space:]]*$" "$WORKFLOW"; then
+    if ! grep -qE "^[[:space:]]+(-[[:space:]]+)?run: ${runner} \\.github/scripts/${escaped}[[:space:]]*$" "$WORKFLOW"; then
         missing+=("$file")
     fi
 done

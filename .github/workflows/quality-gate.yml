@@ -270,8 +270,8 @@ jobs:
     # Every run: step below runs under guard-step-timer.sh, which runs it exactly as a step with no
     # `shell:` runs (`bash -e`) and adds a `::warning::` naming any step that takes longer than
     # GUARD_STEP_BUDGET_SECS. Slow steps are named, never failed: the timeout above stays the only
-    # thing that ends the job. The budget sits above a healthy harness's time on a slow runner, so a
-    # warning means a harness has grown, not that a runner was slow.
+    # thing that ends the job. The budget is chosen to sit above a healthy harness's time on a slow
+    # runner, so a warning should mean a harness has grown, not that a runner was slow.
     env:
       GUARD_STEP_BUDGET_SECS: '120'
     defaults:

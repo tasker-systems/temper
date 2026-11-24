@@ -105,6 +105,13 @@ else
     bad "% not escaped: $OUT"
 fi
 
+run 0 "$(step nonl.sh $'sleep 1\nprintf no-newline')"
+if [[ "$OUT" == *$'\n::warning title=Slow guard step::'* ]]; then
+    ok "the warning starts its own line after output with no trailing newline"
+else
+    bad "warning glued to the step's last output: $OUT"
+fi
+
 # --- a broken budget refuses the step without running it ---
 for b in unset "" "60s" "-1" "1.5"; do
     rm -f "$TMP/ran"

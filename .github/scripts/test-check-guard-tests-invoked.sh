@@ -20,7 +20,7 @@ FAIL=0
 run_case() {
     local name="$1" want="$2" substr="${3:-}" out rc
     set +e
-    out="$(SCRIPTS_DIR="$TMP/scripts" WORKFLOW="$TMP/wf.yml" bash "$CHECK" 2>&1)"
+    out="$(GUARD_TESTS_SCRIPTS_DIR="$TMP/scripts" GUARD_TESTS_WORKFLOW="$TMP/wf.yml" bash "$CHECK" 2>&1)"
     rc=$?
     set -e
     if [[ "$rc" -ne "$want" ]]; then
@@ -86,6 +86,17 @@ s = s.replace("        run: bash .github/scripts/test-a.sh\n",
 open(p, "w").write(s)
 PYEOF
 run_case "a multi-line run: block does not count" 1 "test-a.sh"
+
+reset
+python3 - "$TMP/wf.yml" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("      - name: a\n        run: bash .github/scripts/test-a.sh\n",
+              "      - run: bash .github/scripts/test-a.sh\n")
+open(p, "w").write(s)
+PY
+run_case "a step opened by its run: line counts" 0 "all 2 guard tests"
 
 reset
 rm -f "$TMP/scripts/test-a.sh" "$TMP/scripts/test-b.py"

@@ -286,7 +286,7 @@ if [ -n "${missing_in_ci}" ]; then
   fail=1
 fi
 
-if ! SCRIPTS_DIR="${scripts_dir}" WORKFLOW="${workflow}" bash .github/scripts/check-guard-tests-invoked.sh; then
+if ! GUARD_TESTS_SCRIPTS_DIR="${scripts_dir}" GUARD_TESTS_WORKFLOW="${workflow}" bash .github/scripts/check-guard-tests-invoked.sh; then
   fail=1
 fi
 
