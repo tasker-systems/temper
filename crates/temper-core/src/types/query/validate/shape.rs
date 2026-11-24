@@ -50,6 +50,7 @@ use crate::types::query::filter::{
     worst_case_value_bytes, PropertyOp, PropertyPredicate, MAX_COMPOSITION_PROPERTY_VALUE_BYTES,
     MAX_COMPOSITION_TEXT_BYTES, MAX_FILTER_STRING_BYTES, MAX_FILTER_VALUES,
     MAX_PROPERTY_VALUE_BYTES, MAX_PROPERTY_VALUE_NODES, MAX_TITLE_CONTAINS_BYTES,
+    RESOURCE_COLUMN_FIELDS,
 };
 use crate::types::query::id_set::{IdKind, MAX_ID_SET_IDS};
 use crate::types::query::stage::{StageInput, StageName, StageRelation};
@@ -1043,6 +1044,31 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
                     empty.len()
                 ),
             ));
+        }
+    }
+
+    // **A resource predicate on a column.** `RESOURCE_COLUMN_FIELDS` names the fields and why only
+    // they are refused. Every operator is refused, since each reads property rows only. Shape, not
+    // capability: no server could answer it, and so `--check` refuses it too. One refusal per field
+    // per stage, never per predicate, and the key echoed is the list's own spelling.
+    if let Some(f) = &inv.resource_filter {
+        for (field, lives) in RESOURCE_COLUMN_FIELDS {
+            let named: Vec<usize> = (0..f.properties.len())
+                .filter(|&i| f.properties[i].key == *field)
+                .collect();
+            if let Some(first) = named.first() {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::ColumnNotAProperty,
+                    format!(
+                        "`{field}` is not a property: it is {lives}. A property predicate reads \
+                         only property rows, so it would match nothing; {} in \
+                         `resource_filter.properties` name it, the first \
+                         `resource_filter.properties[{first}]`",
+                        named.len()
+                    ),
+                ));
+            }
         }
     }
 

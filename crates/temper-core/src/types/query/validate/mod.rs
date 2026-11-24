@@ -3404,6 +3404,90 @@ mod tests {
         );
     }
 
+    /// **A resource predicate on `created` or `updated` is refused by name, never answered.**
+    ///
+    /// Both are columns, never property rows, so a predicate on either matched nothing and the
+    /// door answered `empty`: a caller asking "created after X" was told "none" for a question
+    /// never asked. Every operator is refused, in both the full pass and `validate_shape`, which
+    /// is what `temper query --check` runs.
+    #[test]
+    fn a_resource_predicate_on_a_column_is_refused_naming_the_field() {
+        let ops = || {
+            [
+                PropertyOp::Compare {
+                    direction: crate::types::query::filter::OrdOp::Gte,
+                    value: serde_json::json!("2026-07-01"),
+                },
+                PropertyOp::HasKey,
+                PropertyOp::Contains {
+                    values: vec![serde_json::json!("2026-07-01")],
+                },
+            ]
+        };
+        for field in ["created", "updated"] {
+            for op in ops() {
+                let c = selection_with_properties(vec![PropertyPredicate {
+                    key: field.to_string(),
+                    op: op.clone(),
+                }]);
+                for (pass, errs) in [
+                    ("validate", validate(&c).expect_err("must refuse")),
+                    ("validate_shape", super::validate_shape(&c)),
+                ] {
+                    let hit: Vec<_> = errs
+                        .iter()
+                        .filter(|e| e.reason == RefusalReason::ColumnNotAProperty)
+                        .collect();
+                    assert_eq!(hit.len(), 1, "{pass}, `{field}` {op:?}: got {errs:?}");
+                    assert!(
+                        hit[0]
+                            .detail
+                            .starts_with(&format!("`{field}` is not a property: it is")),
+                        "{pass}: the detail names the field and where it lives: {}",
+                        hit[0].detail
+                    );
+                    assert!(
+                        hit[0].detail.contains("a column of every resource"),
+                        "{pass}: {}",
+                        hit[0].detail
+                    );
+                }
+            }
+        }
+
+        // Two predicates on one field are one refusal, counted; two fields are two.
+        let c = selection_with_properties(
+            ["created", "created", "updated"]
+                .into_iter()
+                .map(|k| PropertyPredicate {
+                    key: k.to_string(),
+                    op: PropertyOp::HasKey,
+                })
+                .collect(),
+        );
+        assert_eq!(count_refusals(&c, RefusalReason::ColumnNotAProperty), 2);
+
+        // Controls: the fields left alone still validate — `title`, `status` and `date` are live
+        // open keys, `doc_type` is a property row, and a near-miss key is just an open key.
+        for key in [
+            "title",
+            "doc_type",
+            "status",
+            "date",
+            "temper-stage",
+            "created_at",
+        ] {
+            assert!(
+                validate(&selection_with_properties(vec![PropertyPredicate {
+                    key: key.to_string(),
+                    op: PropertyOp::HasKey,
+                }]))
+                .is_ok(),
+                "`{key}` must stay a property predicate"
+            );
+        }
+    }
+
     #[test]
     fn a_malformed_predicate_inside_a_container_is_refused_too() {
         // **The gap this half surfaced** `[fixed — 2026-08-15]`. The shape pass read only

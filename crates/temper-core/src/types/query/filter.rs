@@ -284,6 +284,44 @@ pub struct PropertyPredicate {
     pub op: PropertyOp,
 }
 
+/// The fields a resource carries as `kb_resources` columns that a
+/// [`ResourceFilter::properties`] predicate refuses to name, each with where the field is
+/// reached instead. A predicate on one is refused
+/// [`super::disposition::RefusalReason::ColumnNotAProperty`] whatever its operator.
+///
+/// # Why exactly these two
+///
+/// A property predicate reads `kb_properties` rows and nothing else, so a key that is a column
+/// and never a property row can only answer empty, and the empty looks like an honest "none".
+/// `created` and `updated` are the columns a caller reaches for: every resource view shows them
+/// at top level, and no filter narrows by them.
+///
+/// Every other field is left alone, because a refusal here also makes an open key of that name
+/// unreachable, and the open tier admits any key:
+///
+/// - `title` is a column, and also a live open key `[measured — 2026-11-24: 7 resources in one
+///   principal's 24 contexts]`. Its column is reached by `ResourceFilter::title_contains`.
+/// - `doc_type` is a property row, so a predicate on it already answers.
+/// - `stage`, `status` and `owner` are not columns. The workflow keys are the property rows
+///   `temper-stage` and `temper-status`, and `status` is also a live open key (415 there).
+///   `owner` has its own slot, `ResourceFilter::owner`.
+/// - `id` and the storage columns (`origin_uri`, `is_active`, `ingest_state`, `body_storage`,
+///   `body_hash`, `erased_at`) are not fields a caller narrows by. An id set is a bound.
+///
+/// The same measurement found no open key named `created` or `updated`. An open key of either
+/// name stays writable, and this refusal makes it unreachable by a property predicate.
+pub const RESOURCE_COLUMN_FIELDS: &[(&str, &str)] = &[
+    (
+        "created",
+        "the resource's creation time, a column of every resource. No filter narrows by it; a \
+         `list-resources-with` stage orders by it (`order`)",
+    ),
+    (
+        "updated",
+        "the resource's last-update time, a column of every resource. No filter narrows by it",
+    ),
+];
+
 /// The most values one narrowing LIST may carry — `doc_type`, `tags`, `labels`.
 ///
 /// # It bounds BYTES, not work, and that is why it is tighter than its neighbours
