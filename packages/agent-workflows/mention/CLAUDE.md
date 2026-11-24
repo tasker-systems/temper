@@ -169,11 +169,13 @@ pipeline into that handler first.**
 **Message edits are explicitly dropped.** `agent/channels/slack.ts` supplies `onMessageEdited:
 async () => null`. Without it, eve hands an edit in a thread with a session to the hook a new
 message of the same kind reaches — an edit that mentions the bot goes to `onAppMention`, which asks
-link-state, pre-flights the mint, and dispatches or prompts again. `onMessageEdited` runs before
-every hook, so this one key covers all of them; a `ctx.edit` check inside `onAppMention` would
-cover only that hook. Edits need the `message.*` subscriptions, which the manifest does not
-request. `tests/slack-dispatch.test.ts` drives an edit through eve's real `defaultOnMessageEdited`
-fallback, so it fails if the key is removed.
+link-state, pre-flights the mint, and dispatches or prompts again. `onMessageEdited` decides every
+edit in place of `onAppMention`, `onMessage` and `onDirectMessage`, so this one key covers all of
+them; a `ctx.edit` check inside `onAppMention` would cover only that hook. Edits need the
+`message.*` subscriptions. The manifest's `event_subscriptions` block is wholly commented out, so
+it does not show what the live app receives, and Vercel Connect's defaults include `message.*`.
+`tests/slack-dispatch.test.ts` drives an edit through eve's real `defaultOnMessageEdited` fallback,
+so it fails if the key is removed.
 
 ## The reply is Slack `mrkdwn`, and it cites with in-app links
 

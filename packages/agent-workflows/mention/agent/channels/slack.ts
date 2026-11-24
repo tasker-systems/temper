@@ -92,13 +92,14 @@ export default slackChannel({
    * and dispatches a turn on the linked one. So a user editing their own mention would get a
    * second turn or a second link prompt.
    *
-   * eve documents two guards: check `ctx.edit` in each hook, or define this one, which runs
-   * before every hook. This one also covers `onMessage` and `onDirectMessage` if either ever
-   * starts dispatching. Returning `null` drops the edit.
+   * eve documents two guards: check `ctx.edit` in each hook, or define this one, which decides
+   * every edit in place of `onAppMention`, `onMessage` and `onDirectMessage`. So it also covers
+   * the other two if either ever starts dispatching. Returning `null` drops the edit.
    *
-   * Edits reach eve only through the `message.*` event subscriptions, which the committed
-   * `slack-app-manifest.yml` does not request. The guard holds regardless of how the app is
-   * subscribed.
+   * Edits reach eve only through the `message.*` event subscriptions. The committed
+   * `slack-app-manifest.yml` keeps its whole `event_subscriptions` block commented out, so it
+   * cannot tell us what the live app subscribes to, and Vercel Connect's defaults include
+   * `message.*`. The guard holds however the app is subscribed.
    */
   onMessageEdited: async () => null,
 

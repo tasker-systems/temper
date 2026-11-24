@@ -324,7 +324,8 @@ describe("onMessageEdited — an edit repeats no side effect", () => {
   // FAILS IF: `onMessageEdited` is removed. eve then routes the edit through `onAppMention`,
   // which asks link-state (a write on the unlinked arm), pre-flights the mint, and either
   // dispatches a second turn or sends the link prompt again. The decider is resolved the way
-  // eve's `slackChannel` resolves it, so the absent key is tested by its real fallback.
+  // eve's `slackChannel` resolves it (as of eve 1.1.0; recheck on upgrade), so the absent key
+  // is tested by its real fallback.
   it("dispatches no turn, asks no link state, mints nothing and sends nothing", async () => {
     const channel = (await import("../agent/channels/slack.js")).default as AnyArgs;
     requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
