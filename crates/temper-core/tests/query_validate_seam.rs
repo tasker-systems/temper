@@ -112,6 +112,11 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("AnchorTakesOneId", 1),
         ("BoundTermNotApplicable", 1),
         ("CombinatorArity", 2),
+        // `ColumnNotAProperty` `[added — 2026-11-24]`: a resource predicate on `created` or
+        // `updated`. Reads no declaration, only `filter::RESOURCE_COLUMN_FIELDS`, and clears the
+        // bar through the variant's published description, which names both fields. A property
+        // predicate on a column matches nothing on any server, so `--check` refusing it is right.
+        ("ColumnNotAProperty", 1),
         ("StageNotReturnable", 1),
         // `StageNotPipeable` `[added — 2026-11-14]`, the mirror of `StageNotReturnable` and decided
         // the same way: by act NAME, consulting no declaration, so a client raises it against a
