@@ -1081,7 +1081,7 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
             if let Some(TimeRange {
                 from: Some(from),
                 until: Some(until),
-            }) = range
+            }) = range.as_ref().map(TimeRange::at_store_precision)
             {
                 if from < until {
                     continue;

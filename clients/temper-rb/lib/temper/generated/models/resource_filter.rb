@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.  **No field here has a closed vocabulary, and none is checked against one.** `[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed vocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three is: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as `FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value for. `[2026-08-15]` `UnknownFilterValue` used to be raised here for exactly one thing — an unrecognized `PropertySubject` — and **that reason is now gone with the type**, so nothing on this struct raises it.  The rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal, because it can never match; *a string that may be perfectly legitimate and matches nothing in the scope you asked about* is an honest empty. `doc_type` is the second kind.
   class ResourceFilter < ApiModelBase
-    # The resource's creation time (`kb_resources.created`) lies in this range. Either end may be left open; `{}` narrows nothing.
+    # The resource's creation time (`kb_resources.created`) lies in this range: at or after `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows nothing. A range whose `from` is not before its `until` is refused `inverted_range`.
     attr_accessor :created
 
     # `kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes.
@@ -39,7 +39,7 @@ module Temper::Generated
 
     attr_accessor :title_contains
 
-    # The resource's last-update time (`kb_resources.updated`) lies in this range. Either end may be left open; `{}` narrows nothing.
+    # The resource's last-update time (`kb_resources.updated`) lies in this range: at or after `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows nothing. A range whose `from` is not before its `until` is refused `inverted_range`.
     attr_accessor :updated
 
     # Attribute mapping from ruby-style variable name to JSON key.

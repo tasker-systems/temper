@@ -3547,13 +3547,18 @@ mod tests {
     }
 
     /// **An inverted range is refused by name, never answered empty** — `from` after `until`, and
-    /// `from` equal to `until`, which `[from, until)` also leaves empty. By both passes, one
+    /// `from` equal to `until` as the store reads them, which `[from, until)` also leaves empty. By both passes, one
     /// refusal per range, naming the range.
     #[test]
     fn an_inverted_time_range_is_refused_naming_the_range() {
         for (from, until) in [
             ("2026-07-01T00:00:00Z", "2026-01-01T00:00:00Z"),
             ("2026-07-01T00:00:00Z", "2026-07-01T02:00:00+02:00"),
+            // Distinct only below the microsecond, so the store reads both ends as one instant.
+            (
+                "2026-07-01T00:00:00.0000005Z",
+                "2026-07-01T00:00:00.0000009Z",
+            ),
         ] {
             let inverted = TimeRange {
                 from: Some(at(from)),

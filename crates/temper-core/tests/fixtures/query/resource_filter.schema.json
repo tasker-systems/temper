@@ -4,7 +4,7 @@
   "properties": {
     "created": {
       "additionalProperties": false,
-      "description": "The resource's creation time (`kb_resources.created`) lies in this range. Either end may be\nleft open; `{}` narrows nothing.",
+      "description": "The resource's creation time (`kb_resources.created`) lies in this range: at or after\n`from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to\nthe microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows\nnothing. A range whose `from` is not before its `until` is refused `inverted_range`.",
       "properties": {
         "from": {
           "description": "The inclusive lower end: a resource whose time is at or after it.",
@@ -179,7 +179,7 @@
     },
     "updated": {
       "additionalProperties": false,
-      "description": "The resource's last-update time (`kb_resources.updated`) lies in this range. Either end may\nbe left open; `{}` narrows nothing.",
+      "description": "The resource's last-update time (`kb_resources.updated`) lies in this range: at or after\n`from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to\nthe microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows\nnothing. A range whose `from` is not before its `until` is refused `inverted_range`.",
       "properties": {
         "from": {
           "description": "The inclusive lower end: a resource whose time is at or after it.",

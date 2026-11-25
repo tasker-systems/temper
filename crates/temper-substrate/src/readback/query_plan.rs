@@ -1809,7 +1809,8 @@ fn resource_properties_for(
 /// An absent range is `NULL::tstzrange`, which narrows nothing. A present one is
 /// `tstzrange(from, until, '[)')`: `from` inclusive and `until` exclusive, which is the wire's
 /// contract, and an absent end a typed `NULL`, which `tstzrange` reads as unbounded. Each end binds
-/// as a `timestamptz`, never as range text this function would have to spell.
+/// as a `timestamptz` at the store's precision (`TimeRange::at_store_precision`), never as range
+/// text this function would have to spell.
 ///
 /// **Both slots are `tstzrange`, so a transposition would typecheck.** The order is held by
 /// `the_time_ranges_bind_created_then_updated` rather than by the signature.
@@ -1826,6 +1827,7 @@ fn time_ranges_for(
     .map(|range| match range {
         None => "NULL::tstzrange".to_string(),
         Some(r) => {
+            let r = r.at_store_precision();
             let mut end = |t: Option<chrono::DateTime<chrono::Utc>>| match t {
                 Some(t) => {
                     binds.push(QueryBind::Timestamp(t));

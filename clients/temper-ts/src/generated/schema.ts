@@ -12701,10 +12701,12 @@ export interface components {
          *
          *     **Each end is an RFC 3339 timestamp with an offset** (`2026-11-01T00:00:00Z`,
          *     `2026-11-01T09:00:00+09:00`) and is read as UTC. A bare date is not a timestamp and does not
-         *     parse.
+         *     parse. **Each end is read to the microsecond**, the store's precision: a finer fraction is
+         *     truncated before the range is checked, applied or echoed ([`TimeRange::at_store_precision`]).
          *
          *     **A range whose `from` is not before its `until` is refused** `inverted_range`, never answered:
-         *     no timestamp lies in it, so its empty answer would look exactly like an honest "none".
+         *     no timestamp lies in it, so its empty answer would look exactly like an honest "none". The
+         *     comparison is of the ends as the store reads them.
          *
          *     Applied in the store, as a conjunct of the selection's `WHERE`, so the stage's page and its
          *     `total` are counted over the narrowed set.

@@ -57,7 +57,7 @@ newest first, paged by `limit` and `offset`, with a `total` — and feeds no lat
 `data-artifacts.md` carries the ask's semantics and refusals.
 
 **Narrowing by what a resource is.** `resource_filter` applies on `find-resources-with` and
-`list-resources-with`; the three ranked find acts refuse it and point there. Its fields AND
+`list-resources-with`; the three ranked find acts refuse each of its fields and point there. Its fields AND
 together: `doc_type`, `tags`, `facets`, `properties`, `stage`, `status`, `owner`,
 `title_contains`, and two time ranges, `created` and `updated`:
 
@@ -66,9 +66,13 @@ together: `doc_type`, `tags`, `facets`, `properties`, `stage`, `status`, `owner`
                      "updated": { "from": "2026-11-17T00:00:00Z", "until": "2026-11-24T00:00:00Z" } }
 ```
 
-Each end is an RFC 3339 timestamp with an offset, read as UTC. `from` is inclusive and `until`
-exclusive, so adjacent windows neither overlap nor leave a gap; either end may be left out. A
-range whose `from` is not before its `until` is refused `inverted_range`. `created` and `updated`
+Each end is an RFC 3339 timestamp with an offset, read as UTC to the microsecond. `from` is
+inclusive and `until` exclusive, so adjacent windows neither overlap nor leave a gap; either end
+may be left out. A range whose `from` is not before its `until` is refused `inverted_range`. A
+bare date or a timestamp without an offset does not parse, and the plan is answered
+`UNREADABLE_PLAN`. The stage's `narrowed_by` echoes each end it applied (`created_from`,
+`updated_until`, …): read it to confirm a range ran, since an unknown field in `resource_filter`
+is ignored. `created` and `updated`
 are columns, not properties: a `properties` predicate on either is refused
 `column_not_a_property`, so use the range.
 

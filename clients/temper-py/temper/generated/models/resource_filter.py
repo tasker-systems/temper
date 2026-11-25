@@ -31,7 +31,7 @@ class ResourceFilter(BaseModel):
     """
     Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.  **No field here has a closed vocabulary, and none is checked against one.** `[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed vocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three is: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as `FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value for. `[2026-08-15]` `UnknownFilterValue` used to be raised here for exactly one thing — an unrecognized `PropertySubject` — and **that reason is now gone with the type**, so nothing on this struct raises it.  The rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal, because it can never match; *a string that may be perfectly legitimate and matches nothing in the scope you asked about* is an honest empty. `doc_type` is the second kind.
     """ # noqa: E501
-    created: Optional[TimeRange] = Field(default=None, description="The resource's creation time (`kb_resources.created`) lies in this range. Either end may be left open; `{}` narrows nothing.")
+    created: Optional[TimeRange] = Field(default=None, description="The resource's creation time (`kb_resources.created`) lies in this range: at or after `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows nothing. A range whose `from` is not before its `until` is refused `inverted_range`.")
     doc_type: Optional[Annotated[List[StrictStr], Field(max_length=256)]] = Field(default=None, description="`kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes.")
     facets: Optional[List[FacetPredicate]] = Field(default=None, description="`kb_properties` where `property_key = 'facet'`.")
     owner: Optional[Annotated[str, Field(strict=True, max_length=256)]] = None
@@ -40,7 +40,7 @@ class ResourceFilter(BaseModel):
     status: Optional[Annotated[str, Field(strict=True, max_length=256)]] = None
     tags: Optional[Annotated[List[StrictStr], Field(max_length=256)]] = Field(default=None, description="`kb_properties` where `property_key = 'tags'`. AND-containment. Each tag is at most 256 bytes.")
     title_contains: Optional[Annotated[str, Field(strict=True, max_length=4096)]] = None
-    updated: Optional[TimeRange] = Field(default=None, description="The resource's last-update time (`kb_resources.updated`) lies in this range. Either end may be left open; `{}` narrows nothing.")
+    updated: Optional[TimeRange] = Field(default=None, description="The resource's last-update time (`kb_resources.updated`) lies in this range: at or after `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows nothing. A range whose `from` is not before its `until` is refused `inverted_range`.")
     __properties: ClassVar[List[str]] = ["created", "doc_type", "facets", "owner", "properties", "stage", "status", "tags", "title_contains", "updated"]
 
     model_config = ConfigDict(

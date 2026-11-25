@@ -17,8 +17,13 @@ applied end is echoed in the stage's `narrowed_by` (`created_from`, `created_unt
 on `created`, `updated`, `temper-created` or `temper-updated` now names the range that narrows by
 that column.
 
+Each end is read to the microsecond, the store's precision. A bare date or an offset-less
+timestamp does not parse and is answered 422 UNREADABLE_PLAN, as any mistyped stage field is.
+
 Who observes: any caller of POST /api/query, the MCP query tool, and `temper query`. A plan that
-does not send the new fields answers exactly as before. A client built before this parses
+does not send the new fields answers exactly as before. A server built before this ignores the two
+fields (`resource_filter` admits unknown fields) and answers unnarrowed; `narrowed_by` is how a
+caller confirms a range was applied. A client built before this parses
 `inverted_range` as an unknown reason (RefusalReason is open) and degrades.
 
 Why additive: two new optional fields on `ResourceFilter`, a new `TimeRange` type, one new value

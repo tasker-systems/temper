@@ -111,6 +111,49 @@ async fn a_time_range_narrows_at_either_end_and_an_inverted_one_is_refused(pool:
         assert_eq!(titles(&body), expected, "{case}: {body}");
     }
 
+    // The trace echoes each applied end, in UTC at the store's precision, and nothing for an end
+    // left open: a nanosecond `from` is echoed as the microsecond it ran at.
+    let (status, body) = post(plan(
+        ctx,
+        json!({ "created": { "from": "2026-11-02T09:00:00.123456789+09:00" } }),
+    ))
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let echoed: Vec<(String, String)> = body["returned"]["rows"]["narrowed_by"]
+        .as_array()
+        .unwrap_or_else(|| panic!("narrowed_by: {body}"))
+        .iter()
+        .filter(|n| n["key"].as_str().is_some_and(|k| k.starts_with("created_")))
+        .map(|n| {
+            (
+                n["key"].as_str().unwrap().to_string(),
+                n["value"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        echoed,
+        vec![(
+            "created_from".to_string(),
+            "2026-11-02T00:00:00.123456+00:00".to_string()
+        )],
+        "{body}"
+    );
+
+    // A bare date and an offset-less timestamp do not parse: the plan is unreadable, never run.
+    for unparsed in ["2026-11-02", "2026-11-02T00:00:00"] {
+        let (status, body) = post(plan(ctx, json!({ "created": { "from": unparsed } }))).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "`{unparsed}`: {body}"
+        );
+        assert_eq!(
+            body["error"]["code"], "UNREADABLE_PLAN",
+            "`{unparsed}`: {body}"
+        );
+    }
+
     // Inverted: refused by name, never answered empty.
     let (status, body) = post(plan(
         ctx,

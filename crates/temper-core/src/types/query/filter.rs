@@ -155,12 +155,16 @@ pub struct ResourceFilter {
     #[cfg_attr(feature = "web-api", schema(max_length = 4096))]
     #[cfg_attr(feature = "mcp", schemars(length(max = 4096)))]
     pub title_contains: Option<String>,
-    /// The resource's creation time (`kb_resources.created`) lies in this range. Either end may be
-    /// left open; `{}` narrows nothing.
+    /// The resource's creation time (`kb_resources.created`) lies in this range: at or after
+    /// `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to
+    /// the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows
+    /// nothing. A range whose `from` is not before its `until` is refused `inverted_range`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<TimeRange>,
-    /// The resource's last-update time (`kb_resources.updated`) lies in this range. Either end may
-    /// be left open; `{}` narrows nothing.
+    /// The resource's last-update time (`kb_resources.updated`) lies in this range: at or after
+    /// `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to
+    /// the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows
+    /// nothing. A range whose `from` is not before its `until` is refused `inverted_range`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated: Option<TimeRange>,
 }
@@ -173,10 +177,12 @@ pub struct ResourceFilter {
 ///
 /// **Each end is an RFC 3339 timestamp with an offset** (`2026-11-01T00:00:00Z`,
 /// `2026-11-01T09:00:00+09:00`) and is read as UTC. A bare date is not a timestamp and does not
-/// parse.
+/// parse. **Each end is read to the microsecond**, the store's precision: a finer fraction is
+/// truncated before the range is checked, applied or echoed ([`TimeRange::at_store_precision`]).
 ///
 /// **A range whose `from` is not before its `until` is refused** `inverted_range`, never answered:
-/// no timestamp lies in it, so its empty answer would look exactly like an honest "none".
+/// no timestamp lies in it, so its empty answer would look exactly like an honest "none". The
+/// comparison is of the ends as the store reads them.
 ///
 /// Applied in the store, as a conjunct of the selection's `WHERE`, so the stage's page and its
 /// `total` are counted over the narrowed set.
@@ -194,6 +200,19 @@ pub struct TimeRange {
     /// The exclusive upper end: a resource whose time is before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<DateTime<Utc>>,
+}
+
+impl TimeRange {
+    /// The range as the store reads it: each end truncated to the microsecond, `timestamptz`'s
+    /// precision. The shape pass compares these ends, the compiler binds them and the trace echoes
+    /// them, so all three agree with what runs.
+    pub fn at_store_precision(&self) -> TimeRange {
+        use chrono::SubsecRound;
+        TimeRange {
+            from: self.from.map(|t| t.trunc_subsecs(6)),
+            until: self.until.map(|t| t.trunc_subsecs(6)),
+        }
+    }
 }
 
 /// Which filter slot an act admits. An unadmitted filter is DECLINED, never ignored.
@@ -339,7 +358,7 @@ pub struct PropertyPredicate {
 /// and never a property row can only answer empty, and the empty looks like an honest "none".
 /// `created` and `updated` are the columns a caller reaches for: every resource view shows them
 /// at top level, and the filter's own ranges, [`ResourceFilter::created`] and
-/// [`ResourceFilter::updated`], are what narrow by them. `temper-created` and `temper-updated` are the same
+/// [`ResourceFilter::updated`], narrow by them. `temper-created` and `temper-updated` are the same
 /// two columns under the names a resource's frontmatter shows them by, next to `temper-stage`,
 /// which is a property row and answers. Frontmatter routes every `temper-` key to managed meta,
 /// and the write path strips these two there (`TIER1_SYSTEM_FIELDS`), so ingest never stores

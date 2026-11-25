@@ -27864,7 +27864,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/TimeRange",
-                "description": "The resource's creation time (`kb_resources.created`) lies in this range. Either end may be\nleft open; `{}` narrows nothing."
+                "description": "The resource's creation time (`kb_resources.created`) lies in this range: at or after\n`from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to\nthe microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows\nnothing. A range whose `from` is not before its `until` is refused `inverted_range`."
               },
               {
                 "type": "null"
@@ -27933,7 +27933,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/TimeRange",
-                "description": "The resource's last-update time (`kb_resources.updated`) lies in this range. Either end may\nbe left open; `{}` narrows nothing."
+                "description": "The resource's last-update time (`kb_resources.updated`) lies in this range: at or after\n`from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to\nthe microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows\nnothing. A range whose `from` is not before its `until` is refused `inverted_range`."
               },
               {
                 "type": "null"
@@ -30889,7 +30889,7 @@
       },
       "TimeRange": {
         "type": "object",
-        "description": "A range over one of a resource's timestamp columns: `from <= t < until`.\n\n**`from` is inclusive and `until` exclusive**, so two windows that share an end tile the line\nwith neither an overlap nor a gap: `{until: X}` and `{from: X}` together are every resource,\nonce. Either end may be absent, and an absent end is unbounded.\n\n**Each end is an RFC 3339 timestamp with an offset** (`2026-11-01T00:00:00Z`,\n`2026-11-01T09:00:00+09:00`) and is read as UTC. A bare date is not a timestamp and does not\nparse.\n\n**A range whose `from` is not before its `until` is refused** `inverted_range`, never answered:\nno timestamp lies in it, so its empty answer would look exactly like an honest \"none\".\n\nApplied in the store, as a conjunct of the selection's `WHERE`, so the stage's page and its\n`total` are counted over the narrowed set.",
+        "description": "A range over one of a resource's timestamp columns: `from <= t < until`.\n\n**`from` is inclusive and `until` exclusive**, so two windows that share an end tile the line\nwith neither an overlap nor a gap: `{until: X}` and `{from: X}` together are every resource,\nonce. Either end may be absent, and an absent end is unbounded.\n\n**Each end is an RFC 3339 timestamp with an offset** (`2026-11-01T00:00:00Z`,\n`2026-11-01T09:00:00+09:00`) and is read as UTC. A bare date is not a timestamp and does not\nparse. **Each end is read to the microsecond**, the store's precision: a finer fraction is\ntruncated before the range is checked, applied or echoed ([`TimeRange::at_store_precision`]).\n\n**A range whose `from` is not before its `until` is refused** `inverted_range`, never answered:\nno timestamp lies in it, so its empty answer would look exactly like an honest \"none\". The\ncomparison is of the ends as the store reads them.\n\nApplied in the store, as a conjunct of the selection's `WHERE`, so the stage's page and its\n`total` are counted over the narrowed set.",
         "properties": {
           "from": {
             "type": [
