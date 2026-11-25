@@ -6,6 +6,7 @@
 //! | Concern | Owner | Evidence |
 //! |---|---|---|
 //! | redirects | **us** | `exporter_http_client` builds the client with redirects off; the SDK's default client follows them |
+//! | export timing, and a failure's real cause | **us** | `observed_client::ObservedClient` wraps the client; the SDK flattens every client error to `network error` and logs the cause only at `debug` |
 //! | protocol, headers, timeout | **the SDK** | `SpanExporter::builder().build()` resolves `OTEL_EXPORTER_OTLP_(TRACES_)*`, signal-specific first (`opentelemetry-otlp` 0.32.0: `SpanExporterBuilder::build`, `HttpExporterBuilder::build_client`, `resolve_http_endpoint`) |
 //! | endpoint | **us**, from the same variables | resolved and vetted by `traces_url` / `vet_endpoint`, then passed to `with_endpoint` — the SDK's own env resolution falls back to the general variable when the signal-specific one fails to parse, which would route the credential to a URL nobody vetted |
 //! | `service.name`, resource attributes | **the SDK** | `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` (`opentelemetry_sdk` 0.32.1, `resource::SdkProvidedResourceDetector::detect` / `EnvResourceDetector`) |
@@ -46,6 +47,8 @@
 //! That is an invariant held by *absence*, which is the fragile kind. `inbound_context_never_becomes_a_parent`
 //! in this module's tests pins it, so that someone later "improving" extraction into a real parent
 //! trips a test rather than silently handing every caller the ability to force-sample us.
+
+mod observed_client;
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -436,11 +439,12 @@ fn build_provider() -> Option<SdkTracerProvider> {
     // Protocol, headers and timeout come from the spec env vars; `with_http` pins the transport
     // family so the HTTP/protobuf path is used rather than gRPC. The endpoint is the vetted URL,
     // passed explicitly so the SDK never resolves one of its own (see `traces_url`), and the client
-    // is ours so that it follows no redirect (see `exporter_http_client`).
+    // is ours so that it follows no redirect (see `exporter_http_client`) and so that each send is
+    // timed and its failure kept intact (see `observed_client`).
     let exporter = match opentelemetry_otlp::SpanExporter::builder()
         .with_http()
         .with_endpoint(url)
-        .with_http_client(client)
+        .with_http_client(observed_client::ObservedClient::new(client, FLUSH_BUDGET))
         .build()
     {
         Ok(exporter) => exporter,
