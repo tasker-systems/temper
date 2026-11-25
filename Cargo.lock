@@ -6505,9 +6505,11 @@ dependencies = [
 name = "temperkb-telemetry"
 version = "0.6.5"
 dependencies = [
+ "async-trait",
  "axum",
  "http",
  "opentelemetry",
+ "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry-proto",
  "opentelemetry-semantic-conventions",

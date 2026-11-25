@@ -52,6 +52,12 @@ url = "2"
 # reason `reqwest-blocking-client` is chosen above. TLS comes from the `reqwest-rustls` feature
 # opentelemetry-otlp already enables on this same reqwest.
 reqwest = { version = "0.13", default-features = false, features = ["blocking"] }
+# `HttpClient`, the trait `export::observed_client::ObservedClient` implements to time each export and
+# keep a failed export's cause, which the OTLP exporter flattens to "network error". `reqwest-blocking`
+# for the implementation it delegates to. Both crates are already in the graph through
+# opentelemetry-otlp, at these versions.
+opentelemetry-http = { version = "0.33", default-features = false, features = ["reqwest-blocking"] }
+async-trait = "0.1"
 
 [features]
 # Test-only surface for installing an in-memory span exporter, so a caller's integration test can
