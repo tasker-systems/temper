@@ -78,5 +78,14 @@ async fn a_predicate_on_created_or_updated_is_refused_by_name(pool: PgPool) {
                 && detail.contains("a column of every resource"),
             "the detail names the field and where it lives: {detail}"
         );
+        let range = if field.ends_with("created") {
+            "`resource_filter.created`"
+        } else {
+            "`resource_filter.updated`"
+        };
+        assert!(
+            detail.contains(&format!("Narrow by it with the range {range}")),
+            "the detail points at the range that narrows by the column: {detail}"
+        );
     }
 }

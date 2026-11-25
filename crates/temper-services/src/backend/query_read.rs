@@ -1249,6 +1249,16 @@ fn narrowed_by(
             out.push(entry(key.to_string(), v.clone()));
         }
     }
+    // Each end of a time range is echoed under its own key, so `created_from` and `created_until`
+    // say which end was bounded. The value is the end as RFC 3339 UTC, the form it was applied in.
+    for (field, range) in [("created", &f.created), ("updated", &f.updated)] {
+        let Some(r) = range else { continue };
+        for (end, t) in [("from", r.from), ("until", r.until)] {
+            if let Some(t) = t {
+                out.push(entry(format!("{field}_{end}"), t.to_rfc3339()));
+            }
+        }
+    }
     Ok(out)
 }
 

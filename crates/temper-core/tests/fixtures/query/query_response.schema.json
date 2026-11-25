@@ -667,7 +667,12 @@
         },
         {
           "const": "column_not_a_property",
-          "description": "A `resource_filter.properties` predicate names a field every resource carries as a column,\nnever as a property row: `created` or `updated`, or their frontmatter names\n`temper-created` and `temper-updated`.\n\nA property predicate reads only `kb_properties` rows, so it could match nothing, and the\nempty answer it would give looks exactly like an honest \"none\". The detail names the field\nand says where it lives. The list is `filter::RESOURCE_COLUMN_FIELDS`.",
+          "description": "A `resource_filter.properties` predicate names a field every resource carries as a column,\nnever as a property row: `created` or `updated`, or their frontmatter names\n`temper-created` and `temper-updated`.\n\nA property predicate reads only `kb_properties` rows, so it could match nothing, and the\nempty answer it would give looks exactly like an honest \"none\". The detail names the field\nand the range that narrows by it, `resource_filter.created` or `resource_filter.updated`.\nThe list is `filter::RESOURCE_COLUMN_FIELDS`.",
+          "type": "string"
+        },
+        {
+          "const": "inverted_range",
+          "description": "A `resource_filter.created` or `resource_filter.updated` range has both ends and its `from`\nis not before its `until`. `from` is inclusive and `until` exclusive, so no timestamp lies\nin it, and its empty answer would look exactly like an honest \"none\". The detail names the\nrange.",
           "type": "string"
         },
         {

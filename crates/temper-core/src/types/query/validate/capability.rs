@@ -625,6 +625,8 @@ fn check_act(
                 ("status", f.status.is_some()),
                 ("owner", f.owner.is_some()),
                 ("title_contains", f.title_contains.is_some()),
+                ("created", f.created.is_some()),
+                ("updated", f.updated.is_some()),
             ];
             for field in declared
                 .iter()

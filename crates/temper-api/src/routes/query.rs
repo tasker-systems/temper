@@ -354,6 +354,22 @@ mod tests {
             status: Some("a".to_string()),
             owner: Some("o".to_string()),
             title_contains: Some("t".to_string()),
+            // Both ends of both ranges, each at nanosecond precision, the longest form the
+            // server writes.
+            created: Some(full_time_range()),
+            updated: Some(full_time_range()),
+        }
+    }
+
+    fn full_time_range() -> temper_core::types::query::TimeRange {
+        let at = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .expect("a fixed timestamp")
+                .with_timezone(&chrono::Utc)
+        };
+        temper_core::types::query::TimeRange {
+            from: Some(at("2026-01-01T00:00:00.123456789Z")),
+            until: Some(at("2026-12-31T23:59:59.987654321Z")),
         }
     }
 
