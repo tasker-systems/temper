@@ -1,0 +1,34 @@
+title    = "A selection narrows by created and updated: resource_filter takes created and updated ranges, and an inverted range is refused as inverted_range"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
+status   = "signal-only"
+body = '''
+What changed: `resource_filter` gains two optional fields, `created` and `updated`, each a range
+`{from?, until?}` over the resource column of that name. Each end is an RFC 3339 timestamp with an
+offset, read as UTC; `from` is inclusive and `until` exclusive, and either end may be left out. The
+range applies on `find-resources-with` and `list-resources-with`, in the store, beneath the page:
+a `list-resources-with` stage's `limit` still holds and its `total` counts the narrowed set. The
+three ranked find acts refuse a range with `filter_not_applicable`, as they refuse every other
+`resource_filter` field. A range whose `from` is not before its `until` is refused by the shape
+pass with the new RefusalReason `inverted_range`, so `temper query --check` refuses it too. Each
+applied end is echoed in the stage's `narrowed_by` (`created_from`, `created_until`,
+`updated_from`, `updated_until`). The `column_not_a_property` detail for a `properties` predicate
+on `created`, `updated`, `temper-created` or `temper-updated` now names the range that narrows by
+that column.
+
+Who observes: any caller of POST /api/query, the MCP query tool, and `temper query`. A plan that
+does not send the new fields answers exactly as before. A client built before this parses
+`inverted_range` as an unknown reason (RefusalReason is open) and degrades.
+
+Why additive: two new optional fields on `ResourceFilter`, a new `TimeRange` type, one new value
+in the open RefusalReason enum and a changed refusal detail (openapi.json, the three SDKs, the ts-rs
+tree, the query JSON-Schema snapshots, the MCP declarations). The store side is four new SQL
+function overloads (migration 20261203000040), each calling the existing function of its name
+unchanged; nothing existing is replaced or dropped. Witnesses:
+`a_time_range_narrows_at_either_end_and_an_inverted_one_is_refused`
+(crates/temper-api/tests/query_time_range_test.rs) and
+`a_time_range_narrows_beneath_the_page_and_the_limit_still_holds`
+(crates/temper-substrate/tests/list_resources_with.rs).
+Release relevance: signal-only.
+'''

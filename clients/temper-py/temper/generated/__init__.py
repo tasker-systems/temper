@@ -551,6 +551,7 @@ __all__ = [
     "Territory",
     "TerritoryKind",
     "TerritoryOverview",
+    "TimeRange",
     "UnbindTeamOutcome",
     "UnrecognizedStanding",
     "UnshareContextOutcome",
@@ -1103,6 +1104,7 @@ from temper.generated.models.team_update_request import TeamUpdateRequest as Tea
 from temper.generated.models.territory import Territory as Territory
 from temper.generated.models.territory_kind import TerritoryKind as TerritoryKind
 from temper.generated.models.territory_overview import TerritoryOverview as TerritoryOverview
+from temper.generated.models.time_range import TimeRange as TimeRange
 from temper.generated.models.unbind_team_outcome import UnbindTeamOutcome as UnbindTeamOutcome
 from temper.generated.models.unrecognized_standing import UnrecognizedStanding as UnrecognizedStanding
 from temper.generated.models.unshare_context_outcome import UnshareContextOutcome as UnshareContextOutcome

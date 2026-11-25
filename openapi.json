@@ -26631,9 +26631,16 @@
           },
           {
             "type": "string",
-            "description": "A `resource_filter.properties` predicate names a field every resource carries as a column,\nnever as a property row: `created` or `updated`, or their frontmatter names\n`temper-created` and `temper-updated`.\n\nA property predicate reads only `kb_properties` rows, so it could match nothing, and the\nempty answer it would give looks exactly like an honest \"none\". The detail names the field\nand says where it lives. The list is `filter::RESOURCE_COLUMN_FIELDS`.",
+            "description": "A `resource_filter.properties` predicate names a field every resource carries as a column,\nnever as a property row: `created` or `updated`, or their frontmatter names\n`temper-created` and `temper-updated`.\n\nA property predicate reads only `kb_properties` rows, so it could match nothing, and the\nempty answer it would give looks exactly like an honest \"none\". The detail names the field\nand the range that narrows by it, `resource_filter.created` or `resource_filter.updated`.\nThe list is `filter::RESOURCE_COLUMN_FIELDS`.",
             "enum": [
               "column_not_a_property"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A `resource_filter.created` or `resource_filter.updated` range has both ends and its `from`\nis not before its `until`. `from` is inclusive and `until` exclusive, so no timestamp lies\nin it, and its empty answer would look exactly like an honest \"none\". The detail names the\nrange.",
+            "enum": [
+              "inverted_range"
             ]
           },
           {
@@ -27853,6 +27860,17 @@
         "type": "object",
         "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\n**No field here has a closed vocabulary, and none is checked against one.**\n`[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed\nvocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three\nis: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as\n`FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value\nfor. `[2026-08-15]` `UnknownFilterValue` used to be raised here for exactly one thing — an\nunrecognized `PropertySubject` — and **that reason is now gone with the type**, so nothing on\nthis struct raises it.\n\nThe rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal,\nbecause it can never match; *a string that may be perfectly legitimate and matches nothing in the\nscope you asked about* is an honest empty. `doc_type` is the second kind.",
         "properties": {
+          "created": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimeRange",
+                "description": "The resource's creation time (`kb_resources.created`) lies in this range. Either end may be\nleft open; `{}` narrows nothing."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "doc_type": {
             "type": "array",
             "items": {
@@ -27880,7 +27898,7 @@
             "items": {
               "$ref": "#/components/schemas/PropertyPredicate"
             },
-            "description": "`kb_properties` rows owned by the resource itself: open key space, closed operator set.\nAND across the list, OR within a [`PropertyOp::Contains`].\n\n**The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of\nthe seventy live property keys were narrowable by nothing on any act\n`[measured on prod — 2026-08-14]`.\n\n**The container is the point, and it is the same container `EdgeFilter` has.** This is where\na resource property predicate lives; it moved off `ActInvocation::properties`, where the same\nfield meant different things depending on which act carried it. Given a container the subject\ntag has no job, which is why the tag no longer exists.\n\n**`Contains` reads the value WHOLE — `kb_resource_properties`, never\n`kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly\nwhat [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently\nnarrow the operator: an array-shaped probe matches the whole value and matches *nothing*\nagainst an exploded element, and a `[]`-valued key is a row in the one and no rows in the\nother. The element view continues to serve `tags` and `facets`, whose semantics genuinely\nare AND-containment over elements.\n\n**A key naming a resource column is refused `column_not_a_property`:** `created`,\n`updated`, `temper-created` and `temper-updated`. Those are columns, never property rows,\nso a predicate on one could only answer empty."
+            "description": "`kb_properties` rows owned by the resource itself: open key space, closed operator set.\nAND across the list, OR within a [`PropertyOp::Contains`].\n\n**The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of\nthe seventy live property keys were narrowable by nothing on any act\n`[measured on prod — 2026-08-14]`.\n\n**The container is the point, and it is the same container `EdgeFilter` has.** This is where\na resource property predicate lives; it moved off `ActInvocation::properties`, where the same\nfield meant different things depending on which act carried it. Given a container the subject\ntag has no job, which is why the tag no longer exists.\n\n**`Contains` reads the value WHOLE — `kb_resource_properties`, never\n`kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly\nwhat [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently\nnarrow the operator: an array-shaped probe matches the whole value and matches *nothing*\nagainst an exploded element, and a `[]`-valued key is a row in the one and no rows in the\nother. The element view continues to serve `tags` and `facets`, whose semantics genuinely\nare AND-containment over elements.\n\n**A key naming a resource column is refused `column_not_a_property`:** `created`,\n`updated`, `temper-created` and `temper-updated`. Those are columns, never property rows,\nso a predicate on one could only answer empty. The ranges `created` and `updated` below\nnarrow by them."
           },
           "stage": {
             "type": [
@@ -27910,6 +27928,17 @@
               "null"
             ],
             "maxLength": 4096
+          },
+          "updated": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimeRange",
+                "description": "The resource's last-update time (`kb_resources.updated`) lies in this range. Either end may\nbe left open; `{}` narrows nothing."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -30857,6 +30886,29 @@
             }
           }
         }
+      },
+      "TimeRange": {
+        "type": "object",
+        "description": "A range over one of a resource's timestamp columns: `from <= t < until`.\n\n**`from` is inclusive and `until` exclusive**, so two windows that share an end tile the line\nwith neither an overlap nor a gap: `{until: X}` and `{from: X}` together are every resource,\nonce. Either end may be absent, and an absent end is unbounded.\n\n**Each end is an RFC 3339 timestamp with an offset** (`2026-11-01T00:00:00Z`,\n`2026-11-01T09:00:00+09:00`) and is read as UTC. A bare date is not a timestamp and does not\nparse.\n\n**A range whose `from` is not before its `until` is refused** `inverted_range`, never answered:\nno timestamp lies in it, so its empty answer would look exactly like an honest \"none\".\n\nApplied in the store, as a conjunct of the selection's `WHERE`, so the stage's page and its\n`total` are counted over the narrowed set.",
+        "properties": {
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The inclusive lower end: a resource whose time is at or after it."
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The exclusive upper end: a resource whose time is before it."
+          }
+        },
+        "additionalProperties": false
       },
       "UnbindTeamOutcome": {
         "type": "object",

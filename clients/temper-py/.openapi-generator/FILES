@@ -529,6 +529,7 @@ temper/generated/models/team_update_request.py
 temper/generated/models/territory.py
 temper/generated/models/territory_kind.py
 temper/generated/models/territory_overview.py
+temper/generated/models/time_range.py
 temper/generated/models/unbind_team_outcome.py
 temper/generated/models/unrecognized_standing.py
 temper/generated/models/unshare_context_outcome.py

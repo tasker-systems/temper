@@ -506,6 +506,7 @@ from temper.generated.models.team_update_request import TeamUpdateRequest
 from temper.generated.models.territory import Territory
 from temper.generated.models.territory_kind import TerritoryKind
 from temper.generated.models.territory_overview import TerritoryOverview
+from temper.generated.models.time_range import TimeRange
 from temper.generated.models.unbind_team_outcome import UnbindTeamOutcome
 from temper.generated.models.unrecognized_standing import UnrecognizedStanding
 from temper.generated.models.unshare_context_outcome import UnshareContextOutcome
