@@ -173,6 +173,11 @@
           "type": "string"
         },
         {
+          "const": "column_not_a_property",
+          "description": "A `resource_filter.properties` predicate names a field every resource carries as a column,\nnever as a property row: `created` or `updated`, or their frontmatter names\n`temper-created` and `temper-updated`.\n\nA property predicate reads only `kb_properties` rows, so it could match nothing, and the\nempty answer it would give looks exactly like an honest \"none\". The detail names the field\nand says where it lives. The list is `filter::RESOURCE_COLUMN_FIELDS`.",
+          "type": "string"
+        },
+        {
           "const": "property_value_too_large",
           "description": "A property-predicate value — a `contains` value, a `compare` bound or a facet value — is\nlarger than 16384 bytes, or carries more than 256 nested array elements or object members.\n\nThe probe cap counts values, not bytes, so without this one value of any size validated.\nThe refusal names the predicate's position and the limit, never the value: echoing a value\nrefused for its size would return the oversized payload in the error body.",
           "type": "string"

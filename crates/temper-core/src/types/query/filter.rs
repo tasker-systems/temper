@@ -131,6 +131,10 @@ pub struct ResourceFilter {
     /// against an exploded element, and a `[]`-valued key is a row in the one and no rows in the
     /// other. The element view continues to serve `tags` and `facets`, whose semantics genuinely
     /// are AND-containment over elements.
+    ///
+    /// **A key naming a resource column is refused `column_not_a_property`:** `created`,
+    /// `updated`, `temper-created` and `temper-updated`. Those are columns, never property rows,
+    /// so a predicate on one could only answer empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyPredicate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -283,6 +287,60 @@ pub struct PropertyPredicate {
     pub key: String,
     pub op: PropertyOp,
 }
+
+/// The keys a [`ResourceFilter::properties`] predicate refuses, because each names a resource
+/// column and never a property row, each with where the field is reached instead. A predicate on
+/// one is refused [`super::disposition::RefusalReason::ColumnNotAProperty`] whatever its operator.
+///
+/// # Why exactly these four
+///
+/// A property predicate reads `kb_properties` rows and nothing else, so a key that is a column
+/// and never a property row can only answer empty, and the empty looks like an honest "none".
+/// `created` and `updated` are the columns a caller reaches for: every resource view shows them
+/// at top level, and no filter narrows by them. `temper-created` and `temper-updated` are the same
+/// two columns under the names a resource's frontmatter shows them by, next to `temper-stage`,
+/// which is a property row and answers. Frontmatter routes every `temper-` key to managed meta,
+/// and the write path strips these two there (`TIER1_SYSTEM_FIELDS`), so ingest never stores
+/// them; the measurement below found no row of either.
+///
+/// Every other field is left alone, because a refusal here also makes an open key of that name
+/// unreachable, and the open tier admits any key:
+///
+/// - `title` is a column, and also a live open key `[measured — 2026-11-24, over one principal's
+///   24 contexts: 7 resources]`. Its column is reached by `ResourceFilter::title_contains`.
+/// - `doc_type` is a property row, so a predicate on it already answers.
+/// - `stage`, `status` and `owner` are not columns. The workflow keys are the property rows
+///   `temper-stage` and `temper-status`; `status` is also a live open key (415 resources in the
+///   same measurement); `owner` has its own slot, `ResourceFilter::owner`.
+/// - `id` and the storage columns (`origin_uri`, `is_active`, `ingest_state`, `body_storage`,
+///   `body_hash`, `erased_at`) are not fields a caller narrows by. An id set is a bound.
+///
+/// The same measurement found no key named any of the four. An open key of one of these names
+/// stays writable, and this refusal makes it unreachable by a property predicate.
+///
+/// Each name is published in `ColumnNotAProperty`'s description, which is what lets the offline
+/// `--check` raise it; `the_published_column_fields_are_the_refused_ones` holds the two together.
+pub const RESOURCE_COLUMN_FIELDS: &[(&str, &str)] = &[
+    (
+        "created",
+        "a column of every resource, its creation time. No filter narrows by it; a \
+         `list-resources-with` stage orders by it (`order`)",
+    ),
+    (
+        "updated",
+        "a column of every resource, its last-update time. No filter narrows by it",
+    ),
+    (
+        "temper-created",
+        "the frontmatter name of `created`, a column of every resource, its creation time. No \
+         filter narrows by it; a `list-resources-with` stage orders by it (`order`)",
+    ),
+    (
+        "temper-updated",
+        "the frontmatter name of `updated`, a column of every resource, its last-update time. No \
+         filter narrows by it",
+    ),
+];
 
 /// The most values one narrowing LIST may carry — `doc_type`, `tags`, `labels`.
 ///

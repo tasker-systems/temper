@@ -1580,6 +1580,39 @@ mod tests {
         }
     }
 
+    /// Every key `RESOURCE_COLUMN_FIELDS` refuses is named in `column_not_a_property`'s published
+    /// description. The shape pass raises it offline, in `--check`, so the published contract must
+    /// say which keys it covers; a key added to the list alone would refuse a plan the published
+    /// contract admits.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_column_fields_are_the_refused_ones() {
+        use crate::types::query::filter::RESOURCE_COLUMN_FIELDS;
+        use utoipa::PartialSchema;
+        // The `oneOf` arm whose `enum` is exactly this reason, read by structure, never by text.
+        fn arm(v: &serde_json::Value) -> Option<&serde_json::Value> {
+            if v.get("enum") == Some(&serde_json::json!(["column_not_a_property"])) {
+                return Some(v);
+            }
+            match v {
+                serde_json::Value::Object(m) => m.values().find_map(arm),
+                serde_json::Value::Array(a) => a.iter().find_map(arm),
+                _ => None,
+            }
+        }
+        let schema =
+            serde_json::to_value(RefusalReason::schema()).expect("RefusalReason has a schema");
+        let description = arm(&schema)
+            .and_then(|a| a["description"].as_str())
+            .expect("`column_not_a_property` is published with a description");
+        for (field, _) in RESOURCE_COLUMN_FIELDS {
+            assert!(
+                description.contains(&format!("`{field}`")),
+                "`{field}` is refused but not named in the published description: {description}"
+            );
+        }
+    }
+
     /// The node cap, the text budget, and the search door's caps are published as the numbers
     /// enforced: in `PropertyOp`'s and `RefusalReason`'s descriptions, and as `maxLength` /
     /// `maxItems` on `SearchParams`, which `reject_oversized_search` holds to these constants.
@@ -3402,6 +3435,103 @@ mod tests {
             1,
             "the facet value was not counted toward the composition budget"
         );
+    }
+
+    /// **A resource predicate on `created` or `updated` is refused by name, never answered.**
+    ///
+    /// Both are columns, never property rows, so a predicate on either matched nothing and the
+    /// door answered `empty`: a caller asking "created after X" was told "none" for a question
+    /// never asked. Every operator is refused, in both the full pass and `validate_shape`, which
+    /// is what `temper query --check` runs.
+    #[test]
+    fn a_resource_predicate_on_a_column_is_refused_naming_the_field() {
+        let ops = || {
+            [
+                PropertyOp::Compare {
+                    direction: crate::types::query::filter::OrdOp::Gte,
+                    value: serde_json::json!("2026-07-01"),
+                },
+                PropertyOp::HasKey,
+                PropertyOp::Contains {
+                    values: vec![serde_json::json!("2026-07-01")],
+                },
+            ]
+        };
+        for field in ["created", "updated", "temper-created", "temper-updated"] {
+            for op in ops() {
+                let c = selection_with_properties(vec![PropertyPredicate {
+                    key: field.to_string(),
+                    op: op.clone(),
+                }]);
+                for (pass, errs) in [
+                    ("validate", validate(&c).expect_err("must refuse")),
+                    ("validate_shape", super::validate_shape(&c)),
+                ] {
+                    let hit: Vec<_> = errs
+                        .iter()
+                        .filter(|e| e.reason == RefusalReason::ColumnNotAProperty)
+                        .collect();
+                    assert_eq!(hit.len(), 1, "{pass}, `{field}` {op:?}: got {errs:?}");
+                    assert!(
+                        hit[0].detail.starts_with(&format!(
+                            "`{field}` is read as a property here, but it is"
+                        )),
+                        "{pass}: the detail names the field and where it lives: {}",
+                        hit[0].detail
+                    );
+                    assert!(
+                        hit[0].detail.contains("a column of every resource"),
+                        "{pass}: {}",
+                        hit[0].detail
+                    );
+                }
+            }
+        }
+
+        // Two predicates on one field are one refusal, counted; two fields are two.
+        let c = selection_with_properties(
+            ["created", "created", "updated"]
+                .into_iter()
+                .map(|k| PropertyPredicate {
+                    key: k.to_string(),
+                    op: PropertyOp::HasKey,
+                })
+                .collect(),
+        );
+        assert_eq!(count_refusals(&c, RefusalReason::ColumnNotAProperty), 2);
+        let errs = validate(&c).expect_err("must refuse");
+        let created = errs
+            .iter()
+            .find(|e| e.detail.starts_with("`created`"))
+            .expect("a refusal for `created`");
+        assert!(
+            created.detail.contains(
+                "2 in `resource_filter.properties` name it, the first \
+                 `resource_filter.properties[0]`"
+            ),
+            "the detail counts the predicates and names the first: {}",
+            created.detail
+        );
+
+        // Controls: the fields left alone still validate — `title`, `status` and `date` are live
+        // open keys, `doc_type` is a property row, and a near-miss key is just an open key.
+        for key in [
+            "title",
+            "doc_type",
+            "status",
+            "date",
+            "temper-stage",
+            "created_at",
+        ] {
+            assert!(
+                validate(&selection_with_properties(vec![PropertyPredicate {
+                    key: key.to_string(),
+                    op: PropertyOp::HasKey,
+                }]))
+                .is_ok(),
+                "`{key}` must stay a property predicate"
+            );
+        }
     }
 
     #[test]

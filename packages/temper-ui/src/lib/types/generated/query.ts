@@ -872,7 +872,7 @@ trace: CompositionTrace, };
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "order_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "stage_not_pipeable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
+export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "order_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "stage_not_pipeable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "column_not_a_property" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
 
 /**
  * One region a `survey` stage matched, and the score it matched at.
@@ -984,6 +984,10 @@ facets?: Array<FacetPredicate>,
  * against an exploded element, and a `[]`-valued key is a row in the one and no rows in the
  * other. The element view continues to serve `tags` and `facets`, whose semantics genuinely
  * are AND-containment over elements.
+ *
+ * **A key naming a resource column is refused `column_not_a_property`:** `created`,
+ * `updated`, `temper-created` and `temper-updated`. Those are columns, never property rows,
+ * so a predicate on one could only answer empty.
  */
 properties?: Array<PropertyPredicate>, stage?: string | null, status?: string | null, owner?: string | null, title_contains?: string | null, };
 
