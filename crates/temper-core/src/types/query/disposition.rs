@@ -401,6 +401,11 @@ pub enum RefusalReason {
     /// in it, and its empty answer would look exactly like an honest "none". The detail names the
     /// range.
     InvertedRange,
+    /// A `resource_filter.created` or `resource_filter.updated` range end is earlier than
+    /// `-4713-11-24T00:00:00Z` (4714-11-24 BC), the earliest instant a resource timestamp can be
+    /// stored at. No resource can lie there, and the store cannot compare against it. The detail
+    /// names the range and the end.
+    TimestampOutOfRange,
     /// A property-predicate value — a `contains` value, a `compare` bound or a facet value — is
     /// larger than 16384 bytes, or carries more than 256 nested array elements or object members.
     ///
@@ -677,6 +682,7 @@ mod tests {
             RefusalReason::EmptyContains,
             RefusalReason::ColumnNotAProperty,
             RefusalReason::InvertedRange,
+            RefusalReason::TimestampOutOfRange,
             RefusalReason::PropertyValueTooLarge,
             RefusalReason::PropertyValueBudgetExceeded,
             RefusalReason::FilterStringTooLong,

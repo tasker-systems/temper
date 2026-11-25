@@ -68,7 +68,8 @@ fields AND together: `doc_type`, `tags`, `facets`, `properties`, `stage`, `statu
 
 Each end is an RFC 3339 timestamp with an offset, read as UTC to the microsecond. `from` is
 inclusive and `until` exclusive, so adjacent windows neither overlap nor leave a gap; either end
-may be left out. A range whose `from` is not before its `until` is refused `inverted_range`. A
+may be left out. A range whose `from` is not before its `until` is refused `inverted_range`, and
+an end before `-4713-11-24T00:00:00Z`, the earliest the store holds, `timestamp_out_of_range`. A
 bare date or a timestamp without an offset does not parse, and the plan is answered
 `UNREADABLE_PLAN`. The stage's `narrowed_by` echoes each end it applied (`created_from`,
 `updated_until`, …): read it to confirm a range ran, since an unknown field in `resource_filter`

@@ -140,6 +140,27 @@ async fn a_time_range_narrows_at_either_end_and_an_inverted_one_is_refused(pool:
         "{body}"
     );
 
+    // An end the store cannot hold is refused by name, never left to fail as the plan runs; the
+    // earliest storable instant runs.
+    let (status, body) = post(plan(
+        ctx,
+        json!({ "created": { "from": "-4713-11-23T23:59:59Z" } }),
+    ))
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], temper_core::error::PLAN_REFUSED_CODE);
+    assert_eq!(
+        body["error"]["details"]["refusals"][0]["reason"], "timestamp_out_of_range",
+        "{body}"
+    );
+    let (status, body) = post(plan(
+        ctx,
+        json!({ "created": { "from": "-4713-11-24T00:00:00Z" } }),
+    ))
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(titles(&body), vec!["first", "second", "third"], "{body}");
+
     // A bare date and an offset-less timestamp do not parse: the plan is unreadable, never run.
     for unparsed in ["2026-11-02", "2026-11-02T00:00:00"] {
         let (status, body) = post(plan(ctx, json!({ "created": { "from": unparsed } }))).await;

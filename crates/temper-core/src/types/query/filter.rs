@@ -180,6 +180,9 @@ pub struct ResourceFilter {
 /// parse. **Each end is read to the microsecond**, the store's precision: a finer fraction is
 /// truncated before the range is checked, applied or echoed ([`TimeRange::at_store_precision`]).
 ///
+/// **An end earlier than the store can hold is refused** `timestamp_out_of_range`
+/// ([`earliest_storable_timestamp`], 4714-11-24 BC), never left to fail when the plan runs.
+///
 /// **A range whose `from` is not before its `until` is refused** `inverted_range`, never answered:
 /// no timestamp lies in it, so its empty answer would look exactly like an honest "none". The
 /// comparison is of the ends as the store reads them.
@@ -200,6 +203,22 @@ pub struct TimeRange {
     /// The exclusive upper end: a resource whose time is before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<DateTime<Utc>>,
+}
+
+/// The earliest instant `timestamptz` stores: 4714-11-24 BC, 00:00 UTC, which RFC 3339 writes as
+/// `-4713-11-24T00:00:00Z`. An earlier range end is refused
+/// [`super::disposition::RefusalReason::TimestampOutOfRange`].
+///
+/// # Only the lower end needs a bound
+///
+/// `timestamptz` stores up to 294276-12-31 AD. chrono's latest instant is in the year 262142, and a
+/// later timestamp does not parse, so no end that reaches the shape pass can lie above the store's
+/// range.
+pub fn earliest_storable_timestamp() -> DateTime<Utc> {
+    chrono::NaiveDate::from_ymd_opt(-4713, 11, 24)
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|t| t.and_utc())
+        .unwrap_or(DateTime::<Utc>::MIN_UTC)
 }
 
 impl TimeRange {

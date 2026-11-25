@@ -1,4 +1,4 @@
-title    = "A selection narrows by created and updated: resource_filter takes created and updated ranges, and an inverted range is refused as inverted_range"
+title    = "A selection narrows by created and updated: resource_filter takes created and updated ranges; an inverted range is refused as inverted_range and an end the store cannot hold as timestamp_out_of_range"
 pr       = "self"
 classes  = ["additive"]
 surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
@@ -17,22 +17,27 @@ applied end is echoed in the stage's `narrowed_by` (`created_from`, `created_unt
 on `created`, `updated`, `temper-created` or `temper-updated` now names the range that narrows by
 that column.
 
-Each end is read to the microsecond, the store's precision. A bare date or an offset-less
+An end earlier than -4713-11-24T00:00:00Z (4714-11-24 BC), the earliest instant timestamptz
+stores, is refused by the shape pass with the new RefusalReason `timestamp_out_of_range` rather
+than failing as the plan runs. No upper check exists, because chrono's latest instant (year 262142)
+is below timestamptz's (294276 AD) and a later timestamp does not parse. Each end is read to the
+microsecond, the store's precision. A bare date or an offset-less
 timestamp does not parse and is answered 422 UNREADABLE_PLAN, as any mistyped stage field is.
 
 Who observes: any caller of POST /api/query, the MCP query tool, and `temper query`. A plan that
 does not send the new fields answers exactly as before. A server built before this ignores the two
 fields (`resource_filter` admits unknown fields) and answers unnarrowed; `narrowed_by` is how a
-caller confirms a range was applied. A client built before this parses
-`inverted_range` as an unknown reason (RefusalReason is open) and degrades.
+caller confirms a range was applied. A client built before this parses `inverted_range` and
+`timestamp_out_of_range` as unknown reasons (RefusalReason is open) and degrades.
 
-Why additive: two new optional fields on `ResourceFilter`, a new `TimeRange` type, one new value
+Why additive: two new optional fields on `ResourceFilter`, a new `TimeRange` type, two new values
 in the open RefusalReason enum and a changed refusal detail (openapi.json, the three SDKs, the ts-rs
 tree, the query JSON-Schema snapshots, the MCP declarations). The store side is four new SQL
 function overloads (migration 20261203000040), each calling the existing function of its name
 unchanged; nothing existing is replaced or dropped. Witnesses:
 `a_time_range_narrows_at_either_end_and_an_inverted_one_is_refused`
-(crates/temper-api/tests/query_time_range_test.rs) and
+(crates/temper-api/tests/query_time_range_test.rs, which also refuses an end before the store's
+range), `a_range_end_the_store_cannot_hold_is_refused_naming_the_end` (temper-core) and
 `a_time_range_narrows_beneath_the_page_and_the_limit_still_holds`
 (crates/temper-substrate/tests/list_resources_with.rs).
 Release relevance: signal-only.

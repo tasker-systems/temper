@@ -9780,7 +9780,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "order_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "stage_not_pipeable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "column_not_a_property" | "inverted_range" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "order_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "stage_not_pipeable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "column_not_a_property" | "inverted_range" | "timestamp_out_of_range" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
         /**
          * @description What a refusal teaches, as data an agent reads without parsing English (spec §3.5).
          *
@@ -12703,6 +12703,9 @@ export interface components {
          *     `2026-11-01T09:00:00+09:00`) and is read as UTC. A bare date is not a timestamp and does not
          *     parse. **Each end is read to the microsecond**, the store's precision: a finer fraction is
          *     truncated before the range is checked, applied or echoed ([`TimeRange::at_store_precision`]).
+         *
+         *     **An end earlier than the store can hold is refused** `timestamp_out_of_range`
+         *     ([`earliest_storable_timestamp`], 4714-11-24 BC), never left to fail when the plan runs.
          *
          *     **A range whose `from` is not before its `until` is refused** `inverted_range`, never answered:
          *     no timestamp lies in it, so its empty answer would look exactly like an honest "none". The

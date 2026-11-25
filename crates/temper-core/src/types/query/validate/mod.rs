@@ -3599,6 +3599,67 @@ mod tests {
         );
     }
 
+    /// **A range end earlier than the store can hold is refused by name**, at 4714-11-24 BC minus
+    /// one microsecond, by both passes, and read from the wire as a caller writes it. The earliest
+    /// storable instant itself is admitted, and chrono's latest instant is below the store's upper
+    /// bound, so no upper check is needed.
+    #[test]
+    fn a_range_end_the_store_cannot_hold_is_refused_naming_the_end() {
+        let before: TimeRange = serde_json::from_value(serde_json::json!({
+            "from": "-4713-11-23T23:59:59.999999Z",
+            "until": "-5000-01-01T00:00:00Z",
+        }))
+        .expect("a negative year parses from the wire");
+        let c = selection_plan(ResourceFilter {
+            updated: Some(before),
+            ..Default::default()
+        });
+        for (pass, errs) in [
+            ("validate", validate(&c).expect_err("must refuse")),
+            ("validate_shape", super::validate_shape(&c)),
+        ] {
+            let hit: Vec<_> = errs
+                .iter()
+                .filter(|e| e.reason == RefusalReason::TimestampOutOfRange)
+                .collect();
+            assert_eq!(hit.len(), 2, "{pass}: one per end: {errs:?}");
+            assert!(
+                hit[0]
+                    .detail
+                    .starts_with("`resource_filter.updated.from` is -4713-11-23T23:59:59.999999"),
+                "{pass}: {}",
+                hit[0].detail
+            );
+            assert!(
+                hit[1]
+                    .detail
+                    .starts_with("`resource_filter.updated.until` is -5000-01-01"),
+                "{pass}: {}",
+                hit[1].detail
+            );
+        }
+
+        // The earliest storable instant is admitted.
+        let c = selection_plan(ResourceFilter {
+            created: Some(TimeRange {
+                from: Some(crate::types::query::filter::earliest_storable_timestamp()),
+                until: None,
+            }),
+            ..Default::default()
+        });
+        assert!(validate(&c).is_ok(), "{:?}", validate(&c).err());
+        assert_eq!(
+            crate::types::query::filter::earliest_storable_timestamp().to_rfc3339(),
+            "-4713-11-24T00:00:00+00:00"
+        );
+        // timestamptz stores through 294276 AD; chrono's latest instant is earlier.
+        assert!(chrono::Datelike::year(&chrono::DateTime::<chrono::Utc>::MAX_UTC) < 294_276);
+        assert_eq!(
+            serde_json::to_value(RefusalReason::TimestampOutOfRange).unwrap(),
+            serde_json::json!("timestamp_out_of_range")
+        );
+    }
+
     /// **A resource predicate on `created` or `updated` is refused by name, never answered.**
     ///
     /// Both are columns, never property rows, so a predicate on either matched nothing and the

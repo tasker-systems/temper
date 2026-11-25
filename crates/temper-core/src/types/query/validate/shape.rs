@@ -46,8 +46,8 @@ use crate::types::query::composition::{
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
 use crate::types::query::filter::{
-    json_string_bytes, property_value_bytes, property_value_nodes, worst_case_string_bytes,
-    worst_case_value_bytes, PropertyOp, PropertyPredicate, TimeRange,
+    earliest_storable_timestamp, json_string_bytes, property_value_bytes, property_value_nodes,
+    worst_case_string_bytes, worst_case_value_bytes, PropertyOp, PropertyPredicate, TimeRange,
     MAX_COMPOSITION_PROPERTY_VALUE_BYTES, MAX_COMPOSITION_TEXT_BYTES, MAX_FILTER_STRING_BYTES,
     MAX_FILTER_VALUES, MAX_PROPERTY_VALUE_BYTES, MAX_PROPERTY_VALUE_NODES,
     MAX_TITLE_CONTAINS_BYTES, RESOURCE_COLUMN_FIELDS,
@@ -1068,6 +1068,32 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
                         named.len()
                     ),
                 ));
+            }
+        }
+    }
+
+    // **A range end the store cannot hold.** `earliest_storable_timestamp` says why only the lower
+    // bound is checked. Shape, not capability: the bound is the store's type, the same on every
+    // server, and so `--check` refuses it too. One refusal per end, naming it.
+    if let Some(f) = &inv.resource_filter {
+        let earliest = earliest_storable_timestamp();
+        for (field, range) in [("created", &f.created), ("updated", &f.updated)] {
+            let Some(r) = range.as_ref().map(TimeRange::at_store_precision) else {
+                continue;
+            };
+            for (end, t) in [("from", r.from), ("until", r.until)] {
+                if let Some(t) = t.filter(|t| *t < earliest) {
+                    errs.push(refusal(
+                        Some(name),
+                        RefusalReason::TimestampOutOfRange,
+                        format!(
+                            "`resource_filter.{field}.{end}` is {}, earlier than {}, the earliest \
+                             instant a resource timestamp can be stored at",
+                            t.to_rfc3339(),
+                            earliest.to_rfc3339()
+                        ),
+                    ));
+                }
             }
         }
     }

@@ -26645,6 +26645,13 @@
           },
           {
             "type": "string",
+            "description": "A `resource_filter.created` or `resource_filter.updated` range end is earlier than\n`-4713-11-24T00:00:00Z` (4714-11-24 BC), the earliest instant a resource timestamp can be\nstored at. No resource can lie there, and the store cannot compare against it. The detail\nnames the range and the end.",
+            "enum": [
+              "timestamp_out_of_range"
+            ]
+          },
+          {
+            "type": "string",
             "description": "A property-predicate value — a `contains` value, a `compare` bound or a facet value — is\nlarger than 16384 bytes, or carries more than 256 nested array elements or object members.\n\nThe probe cap counts values, not bytes, so without this one value of any size validated.\nThe refusal names the predicate's position and the limit, never the value: echoing a value\nrefused for its size would return the oversized payload in the error body.",
             "enum": [
               "property_value_too_large"
@@ -30889,7 +30896,7 @@
       },
       "TimeRange": {
         "type": "object",
-        "description": "A range over one of a resource's timestamp columns: `from <= t < until`.\n\n**`from` is inclusive and `until` exclusive**, so two windows that share an end tile the line\nwith neither an overlap nor a gap: `{until: X}` and `{from: X}` together are every resource,\nonce. Either end may be absent, and an absent end is unbounded.\n\n**Each end is an RFC 3339 timestamp with an offset** (`2026-11-01T00:00:00Z`,\n`2026-11-01T09:00:00+09:00`) and is read as UTC. A bare date is not a timestamp and does not\nparse. **Each end is read to the microsecond**, the store's precision: a finer fraction is\ntruncated before the range is checked, applied or echoed ([`TimeRange::at_store_precision`]).\n\n**A range whose `from` is not before its `until` is refused** `inverted_range`, never answered:\nno timestamp lies in it, so its empty answer would look exactly like an honest \"none\". The\ncomparison is of the ends as the store reads them.\n\nApplied in the store, as a conjunct of the selection's `WHERE`, so the stage's page and its\n`total` are counted over the narrowed set.",
+        "description": "A range over one of a resource's timestamp columns: `from <= t < until`.\n\n**`from` is inclusive and `until` exclusive**, so two windows that share an end tile the line\nwith neither an overlap nor a gap: `{until: X}` and `{from: X}` together are every resource,\nonce. Either end may be absent, and an absent end is unbounded.\n\n**Each end is an RFC 3339 timestamp with an offset** (`2026-11-01T00:00:00Z`,\n`2026-11-01T09:00:00+09:00`) and is read as UTC. A bare date is not a timestamp and does not\nparse. **Each end is read to the microsecond**, the store's precision: a finer fraction is\ntruncated before the range is checked, applied or echoed ([`TimeRange::at_store_precision`]).\n\n**An end earlier than the store can hold is refused** `timestamp_out_of_range`\n([`earliest_storable_timestamp`], 4714-11-24 BC), never left to fail when the plan runs.\n\n**A range whose `from` is not before its `until` is refused** `inverted_range`, never answered:\nno timestamp lies in it, so its empty answer would look exactly like an honest \"none\". The\ncomparison is of the ends as the store reads them.\n\nApplied in the store, as a conjunct of the selection's `WHERE`, so the stage's page and its\n`total` are counted over the narrowed set.",
         "properties": {
           "from": {
             "type": [
