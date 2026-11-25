@@ -57,8 +57,8 @@ newest first, paged by `limit` and `offset`, with a `total` — and feeds no lat
 `data-artifacts.md` carries the ask's semantics and refusals.
 
 **Narrowing by what a resource is.** `resource_filter` applies on `find-resources-with` and
-`list-resources-with`; the three ranked find acts refuse each of its fields and point there. Its fields AND
-together: `doc_type`, `tags`, `facets`, `properties`, `stage`, `status`, `owner`,
+`list-resources-with`; the three ranked find acts refuse each of its fields and point there. Its
+fields AND together: `doc_type`, `tags`, `facets`, `properties`, `stage`, `status`, `owner`,
 `title_contains`, and two time ranges, `created` and `updated`:
 
 ```json
@@ -72,9 +72,8 @@ may be left out. A range whose `from` is not before its `until` is refused `inve
 bare date or a timestamp without an offset does not parse, and the plan is answered
 `UNREADABLE_PLAN`. The stage's `narrowed_by` echoes each end it applied (`created_from`,
 `updated_until`, …): read it to confirm a range ran, since an unknown field in `resource_filter`
-is ignored. `created` and `updated`
-are columns, not properties: a `properties` predicate on either is refused
-`column_not_a_property`, so use the range.
+is ignored. `created` and `updated` are columns, not properties: a `properties` predicate on
+either is refused `column_not_a_property`, so use the range.
 
 ## Read the trace, not just the hits
 

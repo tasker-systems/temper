@@ -205,7 +205,8 @@ pub struct TimeRange {
 impl TimeRange {
     /// The range as the store reads it: each end truncated to the microsecond, `timestamptz`'s
     /// precision. The shape pass compares these ends, the compiler binds them and the trace echoes
-    /// them, so all three agree with what runs.
+    /// them, so all three agree with what runs. Binding the truncated end is what leaves the
+    /// encoder nothing to round.
     pub fn at_store_precision(&self) -> TimeRange {
         use chrono::SubsecRound;
         TimeRange {

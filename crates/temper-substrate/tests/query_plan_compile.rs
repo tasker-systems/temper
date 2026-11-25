@@ -2055,6 +2055,41 @@ fn the_selection_narrowings_bind_in_signature_order() {
     );
 }
 
+/// **Each end binds at the store's precision**: a nanosecond fraction binds truncated to the
+/// microsecond, on either side of the encoder's 2000-01-01 epoch, so the bound value is the one the
+/// shape pass compared and the trace echoes. Bites dropping `at_store_precision` from
+/// `time_ranges_for`.
+#[test]
+fn a_time_range_end_binds_truncated_to_the_microsecond() {
+    let mut stage = selection("sel");
+    if let StageNode::Act(inv) = &mut stage {
+        let f = inv.resource_filter.as_mut().expect("the fixture filters");
+        f.created = Some(temper_core::types::query::TimeRange {
+            from: Some(instant("1999-12-31T23:59:59.0000005Z")),
+            until: Some(instant("2026-07-01T00:00:00.123456789Z")),
+        });
+        f.updated = None;
+    }
+    let v = build(vec![stage, find_from("hits", "sel")], vec!["hits"]);
+    let q = compile(&v, test_profile()).expect("selection compiles");
+    let bound: Vec<String> = q
+        .binds
+        .iter()
+        .filter_map(|b| match b {
+            QueryBind::Timestamp(t) => Some(t.to_rfc3339()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        bound,
+        [
+            "1999-12-31T23:59:59+00:00",
+            "2026-07-01T00:00:00.123456+00:00"
+        ],
+        "each end binds truncated to the microsecond"
+    );
+}
+
 /// **The two time ranges bind `created` then `updated`, each end where its range reads it.**
 ///
 /// Both slots are `tstzrange`, so a transposition would typecheck and answer a different question;
