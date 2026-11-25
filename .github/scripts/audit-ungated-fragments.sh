@@ -694,6 +694,15 @@ sql_relations_current() {
 #   counted set to delegate to it. The review is the SQL_BASELINE entry of the same date.
 # Reviewed 2026-11-14, migration 20261128000010: it DEFINES the list core over the selection core.
 #   The review is the SQL_BASELINE entry of the same date.
+# Reviewed 2026-11-25, migration 20261203000040: it DEFINES a 16-argument
+#   `__temper_ungated_find_resources_with` and a 17-argument `__temper_ungated_list_resources_with`,
+#   new arities of existing names, which `SQL_BASELINE` does not see. Each selects from the existing
+#   function of its name with `p_visible_ids` passed through unchanged, so every row has passed that
+#   core's verdict, and narrows by `p_created` and `p_updated`, `tstzrange` narrowings whose NULL
+#   narrows nothing, the opposite polarity from the verdict. The two gated wrappers compute
+#   `resources_visible_to(p_principal)` once, as their narrower forms do. The emitter's
+#   `CoreCall::Selection` and `CoreCall::List` arms still write `VISIBLE_IDS` first and
+#   `PRINCIPAL_BIND` as the reader; the ranges follow `properties`.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -716,6 +725,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20261106000000_artifact_ask_batch_read.sql
 20261119000010_follow_from_home_gate.sql
 20261128000010_list_resources_with.sql
+20261203000040_selection_time_ranges.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──

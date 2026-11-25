@@ -6,6 +6,7 @@
 //! language would be more expressive and would immediately re-open every conflation this contract
 //! exists to close.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // The four members of the DDL's `edge_kind` enum
@@ -134,7 +135,8 @@ pub struct ResourceFilter {
     ///
     /// **A key naming a resource column is refused `column_not_a_property`:** `created`,
     /// `updated`, `temper-created` and `temper-updated`. Those are columns, never property rows,
-    /// so a predicate on one could only answer empty.
+    /// so a predicate on one could only answer empty. The ranges `created` and `updated` below
+    /// narrow by them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyPredicate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,6 +155,84 @@ pub struct ResourceFilter {
     #[cfg_attr(feature = "web-api", schema(max_length = 4096))]
     #[cfg_attr(feature = "mcp", schemars(length(max = 4096)))]
     pub title_contains: Option<String>,
+    /// The resource's creation time (`kb_resources.created`) lies in this range: at or after
+    /// `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to
+    /// the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows
+    /// nothing. A range whose `from` is not before its `until` is refused `inverted_range`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<TimeRange>,
+    /// The resource's last-update time (`kb_resources.updated`) lies in this range: at or after
+    /// `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to
+    /// the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows
+    /// nothing. A range whose `from` is not before its `until` is refused `inverted_range`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<TimeRange>,
+}
+
+/// A range over one of a resource's timestamp columns: `from <= t < until`.
+///
+/// **`from` is inclusive and `until` exclusive**, so two windows that share an end tile the line
+/// with neither an overlap nor a gap: `{until: X}` and `{from: X}` together are every resource,
+/// once. Either end may be absent, and an absent end is unbounded.
+///
+/// **Each end is an RFC 3339 timestamp with an offset** (`2026-11-01T00:00:00Z`,
+/// `2026-11-01T09:00:00+09:00`) and is read as UTC. A bare date is not a timestamp and does not
+/// parse. **Each end is read to the microsecond**, the store's precision: a finer fraction is
+/// truncated before the range is checked, applied or echoed ([`TimeRange::at_store_precision`]).
+///
+/// **An end earlier than the store can hold is refused** `timestamp_out_of_range`
+/// ([`earliest_storable_timestamp`], 4714-11-24 BC), never left to fail when the plan runs.
+///
+/// **A range whose `from` is not before its `until` is refused** `inverted_range`, never answered:
+/// no timestamp lies in it, so its empty answer would look exactly like an honest "none". The
+/// comparison is of the ends as the store reads them.
+///
+/// Applied in the store, as a conjunct of the selection's `WHERE`, so the stage's page and its
+/// `total` are counted over the narrowed set.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
+#[serde(deny_unknown_fields)]
+pub struct TimeRange {
+    /// The inclusive lower end: a resource whose time is at or after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<DateTime<Utc>>,
+    /// The exclusive upper end: a resource whose time is before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<DateTime<Utc>>,
+}
+
+/// The earliest instant `timestamptz` stores: 4714-11-24 BC, 00:00 UTC, which RFC 3339 writes as
+/// `-4713-11-24T00:00:00Z`. An earlier range end is refused
+/// [`super::disposition::RefusalReason::TimestampOutOfRange`].
+///
+/// # Only the lower end needs a bound
+///
+/// `timestamptz` stores up to 294276-12-31 AD. chrono's latest instant is in the year 262142, and a
+/// later timestamp does not parse, so no end that reaches the shape pass can lie above the store's
+/// range.
+pub fn earliest_storable_timestamp() -> DateTime<Utc> {
+    chrono::NaiveDate::from_ymd_opt(-4713, 11, 24)
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|t| t.and_utc())
+        .unwrap_or(DateTime::<Utc>::MIN_UTC)
+}
+
+impl TimeRange {
+    /// The range as the store reads it: each end truncated to the microsecond, `timestamptz`'s
+    /// precision. The shape pass compares these ends, the compiler binds them and the trace echoes
+    /// them, so all three agree with what runs. Binding the truncated end is what leaves the
+    /// encoder nothing to round.
+    pub fn at_store_precision(&self) -> TimeRange {
+        use chrono::SubsecRound;
+        TimeRange {
+            from: self.from.map(|t| t.trunc_subsecs(6)),
+            until: self.until.map(|t| t.trunc_subsecs(6)),
+        }
+    }
 }
 
 /// Which filter slot an act admits. An unadmitted filter is DECLINED, never ignored.
@@ -297,7 +377,8 @@ pub struct PropertyPredicate {
 /// A property predicate reads `kb_properties` rows and nothing else, so a key that is a column
 /// and never a property row can only answer empty, and the empty looks like an honest "none".
 /// `created` and `updated` are the columns a caller reaches for: every resource view shows them
-/// at top level, and no filter narrows by them. `temper-created` and `temper-updated` are the same
+/// at top level, and the filter's own ranges, [`ResourceFilter::created`] and
+/// [`ResourceFilter::updated`], narrow by them. `temper-created` and `temper-updated` are the same
 /// two columns under the names a resource's frontmatter shows them by, next to `temper-stage`,
 /// which is a property row and answers. Frontmatter routes every `temper-` key to managed meta,
 /// and the write path strips these two there (`TIER1_SYSTEM_FIELDS`), so ingest never stores
@@ -323,22 +404,25 @@ pub struct PropertyPredicate {
 pub const RESOURCE_COLUMN_FIELDS: &[(&str, &str)] = &[
     (
         "created",
-        "a column of every resource, its creation time. No filter narrows by it; a \
-         `list-resources-with` stage orders by it (`order`)",
+        "a column of every resource, its creation time. Narrow by it with the range \
+         `resource_filter.created` (`{from?, until?}`); a `list-resources-with` stage orders by it \
+         (`order`)",
     ),
     (
         "updated",
-        "a column of every resource, its last-update time. No filter narrows by it",
+        "a column of every resource, its last-update time. Narrow by it with the range \
+         `resource_filter.updated` (`{from?, until?}`)",
     ),
     (
         "temper-created",
-        "the frontmatter name of `created`, a column of every resource, its creation time. No \
-         filter narrows by it; a `list-resources-with` stage orders by it (`order`)",
+        "the frontmatter name of `created`, a column of every resource, its creation time. Narrow \
+         by it with the range `resource_filter.created` (`{from?, until?}`); a \
+         `list-resources-with` stage orders by it (`order`)",
     ),
     (
         "temper-updated",
-        "the frontmatter name of `updated`, a column of every resource, its last-update time. No \
-         filter narrows by it",
+        "the frontmatter name of `updated`, a column of every resource, its last-update time. \
+         Narrow by it with the range `resource_filter.updated` (`{from?, until?}`)",
     ),
 ];
 

@@ -1728,11 +1728,28 @@ fn selection(name: &str) -> StageNode {
                     values: vec![serde_json::json!("spec-a")],
                 },
             }],
+            // The two time ranges (`20261203000040`), rendered after the open-key slot: one with
+            // both ends, one open below.
+            created: Some(temper_core::types::query::TimeRange {
+                from: Some(instant("2026-01-01T00:00:00Z")),
+                until: Some(instant("2026-07-01T00:00:00Z")),
+            }),
+            updated: Some(temper_core::types::query::TimeRange {
+                from: None,
+                until: Some(instant("2026-11-01T00:00:00Z")),
+            }),
         }),
         edge_filter: None,
         properties: vec![],
         artifact_filter: vec![],
     })
+}
+
+/// An RFC 3339 instant, for the time-range fixtures.
+fn instant(s: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .expect("a fixed timestamp")
+        .with_timezone(&chrono::Utc)
 }
 
 /// The shape [`asking_selection`]'s ask names.
@@ -1818,7 +1835,8 @@ fn a_selection_binds_its_sealed_asks_once_between_the_narrowings_and_the_anchor(
         .expect("the selection stage emits the selection core");
     let expected = "__temper_ungated_find_resources_with((SELECT ids FROM __temper_vis), \
                     NULL::text[], NULL::text[], NULL::jsonb, NULL::text, NULL::text, NULL::uuid, \
-                    NULL::text, NULL::text, $2::jsonb, NULL, NULL, $1, NULL::jsonb)";
+                    NULL::text, NULL::text, $2::jsonb, NULL, NULL, $1, NULL::jsonb, \
+                    NULL::tstzrange, NULL::tstzrange)";
     assert!(
         call.contains(expected),
         "the asks slot sits after the narrowings and before the anchor pair.\n  expected: \
@@ -1991,10 +2009,12 @@ fn the_selection_narrowings_bind_in_signature_order() {
 
     // Signature order: doc_types, tags, facets, stage, status, owner_profile, owner_handle,
     // title_contains — then the artifact asks (typed NULL, since this stage asks nothing), then the
-    // anchor pair, then the principal, then the OPEN-KEY slot last.
+    // anchor pair, then the principal, then the OPEN-KEY slot, then the two time ranges.
     let expected = "__temper_ungated_find_resources_with((SELECT ids FROM __temper_vis), \
                     $2::text[], $3::text[], $4::jsonb, $5::text, NULL::text, NULL::uuid, \
-                    $6::text, $7::text, NULL::jsonb, NULL, NULL, $1, $8::jsonb)";
+                    $6::text, $7::text, NULL::jsonb, NULL, NULL, $1, $8::jsonb, \
+                    tstzrange($9::timestamptz, $10::timestamptz, '[)'), \
+                    tstzrange(NULL::timestamptz, $11::timestamptz, '[)'))";
     assert!(
         call.contains(expected),
         "narrowings must render in signature order.\n  expected: {expected}\n  got: {call}"
@@ -2033,6 +2053,77 @@ fn the_selection_narrowings_bind_in_signature_order() {
         "a selection ranks nothing, so its stage-contract quantity is NULL: {}",
         q.sql
     );
+}
+
+/// **Each end binds at the store's precision**: a nanosecond fraction binds truncated to the
+/// microsecond, on either side of the encoder's 2000-01-01 epoch, so the bound value is the one the
+/// shape pass compared and the trace echoes. Bites dropping `at_store_precision` from
+/// `time_ranges_for`.
+#[test]
+fn a_time_range_end_binds_truncated_to_the_microsecond() {
+    let mut stage = selection("sel");
+    if let StageNode::Act(inv) = &mut stage {
+        let f = inv.resource_filter.as_mut().expect("the fixture filters");
+        f.created = Some(temper_core::types::query::TimeRange {
+            from: Some(instant("1999-12-31T23:59:59.0000005Z")),
+            until: Some(instant("2026-07-01T00:00:00.123456789Z")),
+        });
+        f.updated = None;
+    }
+    let v = build(vec![stage, find_from("hits", "sel")], vec!["hits"]);
+    let q = compile(&v, test_profile()).expect("selection compiles");
+    let bound: Vec<String> = q
+        .binds
+        .iter()
+        .filter_map(|b| match b {
+            QueryBind::Timestamp(t) => Some(t.to_rfc3339()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        bound,
+        [
+            "1999-12-31T23:59:59+00:00",
+            "2026-07-01T00:00:00.123456+00:00"
+        ],
+        "each end binds truncated to the microsecond"
+    );
+}
+
+/// **The two time ranges bind `created` then `updated`, each end where its range reads it.**
+///
+/// Both slots are `tstzrange`, so a transposition would typecheck and answer a different question;
+/// only this assertion sees it. The fixture's `created` has both ends and its `updated` only an
+/// upper one, so the three timestamp binds are distinguishable by position and by value.
+///
+/// Bites swapping the two ranges in `time_ranges_for` (the `updated` range renders first, with its
+/// typed-NULL lower end in the first range), swapping an end within a range, and dropping `'[)'`.
+#[test]
+fn the_time_ranges_bind_created_then_updated() {
+    let v = build(
+        vec![selection("sel"), find_from("hits", "sel")],
+        vec!["hits"],
+    );
+    let q = compile(&v, test_profile()).expect("selection compiles");
+    let call = q
+        .sql
+        .lines()
+        .find(|l| l.contains("FROM __temper_ungated_find_resources_with("))
+        .expect("the selection stage emits the selection core");
+    assert!(
+        call.ends_with(
+            "$8::jsonb, tstzrange($9::timestamptz, $10::timestamptz, '[)'), \
+             tstzrange(NULL::timestamptz, $11::timestamptz, '[)'))"
+        ),
+        "created's range, then updated's, after the open-key slot: {call}"
+    );
+    let at = |n: usize| match &q.binds[n - 1] {
+        QueryBind::Timestamp(t) => t.to_rfc3339(),
+        other => panic!("${n} binds a timestamp, got {other:?}"),
+    };
+    assert_eq!(at(9), "2026-01-01T00:00:00+00:00", "created.from");
+    assert_eq!(at(10), "2026-07-01T00:00:00+00:00", "created.until");
+    assert_eq!(at(11), "2026-11-01T00:00:00+00:00", "updated.until");
 }
 
 // ── Difference ─────────────────────────────────────────────────────────────────────────────────
@@ -2591,8 +2682,8 @@ fn a_list_stage_emits_its_unpaged_match_set_and_a_page_over_it() {
     let args = split_top_level(&args);
     assert_eq!(
         args.len(),
-        15,
-        "the list core takes fifteen arguments: {args:?}"
+        17,
+        "the list core takes seventeen arguments: {args:?}"
     );
     assert_eq!(
         args[0], "(SELECT ids FROM __temper_vis)",
@@ -2600,7 +2691,12 @@ fn a_list_stage_emits_its_unpaged_match_set_and_a_page_over_it() {
     );
     assert_eq!(args[12], "$1", "the principal reads the anchor, thirteenth");
     assert_eq!(
-        args[14], "$2::uuid[]",
+        &args[14..16],
+        ["NULL::tstzrange", "NULL::tstzrange"],
+        "no range narrows nothing, after the open-key slot"
+    );
+    assert_eq!(
+        args[16], "$2::uuid[]",
         "the caller's ids are the bound, last"
     );
     assert!(
@@ -2676,7 +2772,7 @@ fn a_list_stage_pages_in_its_order_and_defaults_to_the_ceiling() {
             "__temper_ungated_list_resources_with",
         );
         assert_eq!(
-            split_top_level(&args)[14],
+            split_top_level(&args)[16],
             "NULL::uuid[]",
             "no bound is unbounded"
         );
@@ -2751,7 +2847,7 @@ fn a_list_stage_bounded_by_a_refused_stage_is_bounded_to_nothing() {
         "__temper_ungated_list_resources_with",
     );
     assert_eq!(
-        split_top_level(&args)[14],
+        split_top_level(&args)[16],
         r#"ARRAY(SELECT id FROM "wide")"#,
         "the bound is the refused stage's empty set, never NULL"
     );

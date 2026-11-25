@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
 from temper.generated.models.facet_predicate import FacetPredicate
 from temper.generated.models.property_predicate import PropertyPredicate
+from temper.generated.models.time_range import TimeRange
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -30,15 +31,17 @@ class ResourceFilter(BaseModel):
     """
     Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.  **No field here has a closed vocabulary, and none is checked against one.** `[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed vocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three is: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as `FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value for. `[2026-08-15]` `UnknownFilterValue` used to be raised here for exactly one thing — an unrecognized `PropertySubject` — and **that reason is now gone with the type**, so nothing on this struct raises it.  The rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal, because it can never match; *a string that may be perfectly legitimate and matches nothing in the scope you asked about* is an honest empty. `doc_type` is the second kind.
     """ # noqa: E501
+    created: Optional[TimeRange] = Field(default=None, description="The resource's creation time (`kb_resources.created`) lies in this range: at or after `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows nothing. A range whose `from` is not before its `until` is refused `inverted_range`.")
     doc_type: Optional[Annotated[List[StrictStr], Field(max_length=256)]] = Field(default=None, description="`kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes.")
     facets: Optional[List[FacetPredicate]] = Field(default=None, description="`kb_properties` where `property_key = 'facet'`.")
     owner: Optional[Annotated[str, Field(strict=True, max_length=256)]] = None
-    properties: Optional[List[PropertyPredicate]] = Field(default=None, description="`kb_properties` rows owned by the resource itself: open key space, closed operator set. AND across the list, OR within a [`PropertyOp::Contains`].  **The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of the seventy live property keys were narrowable by nothing on any act `[measured on prod — 2026-08-14]`.  **The container is the point, and it is the same container `EdgeFilter` has.** This is where a resource property predicate lives; it moved off `ActInvocation::properties`, where the same field meant different things depending on which act carried it. Given a container the subject tag has no job, which is why the tag no longer exists.  **`Contains` reads the value WHOLE — `kb_resource_properties`, never `kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly what [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently narrow the operator: an array-shaped probe matches the whole value and matches *nothing* against an exploded element, and a `[]`-valued key is a row in the one and no rows in the other. The element view continues to serve `tags` and `facets`, whose semantics genuinely are AND-containment over elements.  **A key naming a resource column is refused `column_not_a_property`:** `created`, `updated`, `temper-created` and `temper-updated`. Those are columns, never property rows, so a predicate on one could only answer empty.")
+    properties: Optional[List[PropertyPredicate]] = Field(default=None, description="`kb_properties` rows owned by the resource itself: open key space, closed operator set. AND across the list, OR within a [`PropertyOp::Contains`].  **The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of the seventy live property keys were narrowable by nothing on any act `[measured on prod — 2026-08-14]`.  **The container is the point, and it is the same container `EdgeFilter` has.** This is where a resource property predicate lives; it moved off `ActInvocation::properties`, where the same field meant different things depending on which act carried it. Given a container the subject tag has no job, which is why the tag no longer exists.  **`Contains` reads the value WHOLE — `kb_resource_properties`, never `kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly what [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently narrow the operator: an array-shaped probe matches the whole value and matches *nothing* against an exploded element, and a `[]`-valued key is a row in the one and no rows in the other. The element view continues to serve `tags` and `facets`, whose semantics genuinely are AND-containment over elements.  **A key naming a resource column is refused `column_not_a_property`:** `created`, `updated`, `temper-created` and `temper-updated`. Those are columns, never property rows, so a predicate on one could only answer empty. The ranges `created` and `updated` below narrow by them.")
     stage: Optional[Annotated[str, Field(strict=True, max_length=256)]] = None
     status: Optional[Annotated[str, Field(strict=True, max_length=256)]] = None
     tags: Optional[Annotated[List[StrictStr], Field(max_length=256)]] = Field(default=None, description="`kb_properties` where `property_key = 'tags'`. AND-containment. Each tag is at most 256 bytes.")
     title_contains: Optional[Annotated[str, Field(strict=True, max_length=4096)]] = None
-    __properties: ClassVar[List[str]] = ["doc_type", "facets", "owner", "properties", "stage", "status", "tags", "title_contains"]
+    updated: Optional[TimeRange] = Field(default=None, description="The resource's last-update time (`kb_resources.updated`) lies in this range: at or after `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows nothing. A range whose `from` is not before its `until` is refused `inverted_range`.")
+    __properties: ClassVar[List[str]] = ["created", "doc_type", "facets", "owner", "properties", "stage", "status", "tags", "title_contains", "updated"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -79,6 +82,9 @@ class ResourceFilter(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of created
+        if self.created:
+            _dict['created'] = self.created.to_dict()
         # override the default output from pydantic by calling `to_dict()` of each item in facets (list)
         _items = []
         if self.facets:
@@ -93,6 +99,14 @@ class ResourceFilter(BaseModel):
                 if _item_properties:
                     _items.append(_item_properties.to_dict())
             _dict['properties'] = _items
+        # override the default output from pydantic by calling `to_dict()` of updated
+        if self.updated:
+            _dict['updated'] = self.updated.to_dict()
+        # set to None if created (nullable) is None
+        # and model_fields_set contains the field
+        if self.created is None and "created" in self.model_fields_set:
+            _dict['created'] = None
+
         # set to None if owner (nullable) is None
         # and model_fields_set contains the field
         if self.owner is None and "owner" in self.model_fields_set:
@@ -113,6 +127,11 @@ class ResourceFilter(BaseModel):
         if self.title_contains is None and "title_contains" in self.model_fields_set:
             _dict['title_contains'] = None
 
+        # set to None if updated (nullable) is None
+        # and model_fields_set contains the field
+        if self.updated is None and "updated" in self.model_fields_set:
+            _dict['updated'] = None
+
         return _dict
 
     @classmethod
@@ -125,6 +144,7 @@ class ResourceFilter(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
+            "created": TimeRange.from_dict(obj["created"]) if obj.get("created") is not None else None,
             "doc_type": obj.get("doc_type"),
             "facets": [FacetPredicate.from_dict(_item) for _item in obj["facets"]] if obj.get("facets") is not None else None,
             "owner": obj.get("owner"),
@@ -132,7 +152,8 @@ class ResourceFilter(BaseModel):
             "stage": obj.get("stage"),
             "status": obj.get("status"),
             "tags": obj.get("tags"),
-            "title_contains": obj.get("title_contains")
+            "title_contains": obj.get("title_contains"),
+            "updated": TimeRange.from_dict(obj["updated"]) if obj.get("updated") is not None else None
         })
         return _obj
 

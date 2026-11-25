@@ -393,8 +393,19 @@ pub enum RefusalReason {
     ///
     /// A property predicate reads only `kb_properties` rows, so it could match nothing, and the
     /// empty answer it would give looks exactly like an honest "none". The detail names the field
-    /// and says where it lives. The list is `filter::RESOURCE_COLUMN_FIELDS`.
+    /// and the range that narrows by it, `resource_filter.created` or `resource_filter.updated`.
+    /// The list is `filter::RESOURCE_COLUMN_FIELDS`.
     ColumnNotAProperty,
+    /// A `resource_filter.created` or `resource_filter.updated` range has both ends and its `from`
+    /// is not before its `until`. `from` is inclusive and `until` exclusive, so no timestamp lies
+    /// in it, and its empty answer would look exactly like an honest "none". The detail names the
+    /// range.
+    InvertedRange,
+    /// A `resource_filter.created` or `resource_filter.updated` range end is earlier than
+    /// `-4713-11-24T00:00:00Z` (4714-11-24 BC), the earliest instant a resource timestamp can be
+    /// stored at. No resource can lie there, and the store cannot compare against it. The detail
+    /// names the range and the end.
+    TimestampOutOfRange,
     /// A property-predicate value — a `contains` value, a `compare` bound or a facet value — is
     /// larger than 16384 bytes, or carries more than 256 nested array elements or object members.
     ///
@@ -670,6 +681,8 @@ mod tests {
             RefusalReason::EmptyPropertyKey,
             RefusalReason::EmptyContains,
             RefusalReason::ColumnNotAProperty,
+            RefusalReason::InvertedRange,
+            RefusalReason::TimestampOutOfRange,
             RefusalReason::PropertyValueTooLarge,
             RefusalReason::PropertyValueBudgetExceeded,
             RefusalReason::FilterStringTooLong,

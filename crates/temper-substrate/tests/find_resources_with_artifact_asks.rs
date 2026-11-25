@@ -995,6 +995,7 @@ async fn run_compiled(conn: &mut PgConnection, q: &CompiledQuery) -> BTreeSet<Uu
             QueryBind::Texts(t) => query.bind(t.clone()),
             QueryBind::Id(u) => query.bind(*u),
             QueryBind::Json(j) => query.bind(j.clone()),
+            QueryBind::Timestamp(t) => query.bind(*t),
             QueryBind::Embedding(_) => panic!("the fixture plan binds no vector"),
         };
     }

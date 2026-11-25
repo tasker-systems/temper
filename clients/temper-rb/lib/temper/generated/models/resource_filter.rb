@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.  **No field here has a closed vocabulary, and none is checked against one.** `[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed vocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three is: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as `FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value for. `[2026-08-15]` `UnknownFilterValue` used to be raised here for exactly one thing — an unrecognized `PropertySubject` — and **that reason is now gone with the type**, so nothing on this struct raises it.  The rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal, because it can never match; *a string that may be perfectly legitimate and matches nothing in the scope you asked about* is an honest empty. `doc_type` is the second kind.
   class ResourceFilter < ApiModelBase
+    # The resource's creation time (`kb_resources.created`) lies in this range: at or after `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows nothing. A range whose `from` is not before its `until` is refused `inverted_range`.
+    attr_accessor :created
+
     # `kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes.
     attr_accessor :doc_type
 
@@ -24,7 +27,7 @@ module Temper::Generated
 
     attr_accessor :owner
 
-    # `kb_properties` rows owned by the resource itself: open key space, closed operator set. AND across the list, OR within a [`PropertyOp::Contains`].  **The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of the seventy live property keys were narrowable by nothing on any act `[measured on prod — 2026-08-14]`.  **The container is the point, and it is the same container `EdgeFilter` has.** This is where a resource property predicate lives; it moved off `ActInvocation::properties`, where the same field meant different things depending on which act carried it. Given a container the subject tag has no job, which is why the tag no longer exists.  **`Contains` reads the value WHOLE — `kb_resource_properties`, never `kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly what [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently narrow the operator: an array-shaped probe matches the whole value and matches *nothing* against an exploded element, and a `[]`-valued key is a row in the one and no rows in the other. The element view continues to serve `tags` and `facets`, whose semantics genuinely are AND-containment over elements.  **A key naming a resource column is refused `column_not_a_property`:** `created`, `updated`, `temper-created` and `temper-updated`. Those are columns, never property rows, so a predicate on one could only answer empty.
+    # `kb_properties` rows owned by the resource itself: open key space, closed operator set. AND across the list, OR within a [`PropertyOp::Contains`].  **The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of the seventy live property keys were narrowable by nothing on any act `[measured on prod — 2026-08-14]`.  **The container is the point, and it is the same container `EdgeFilter` has.** This is where a resource property predicate lives; it moved off `ActInvocation::properties`, where the same field meant different things depending on which act carried it. Given a container the subject tag has no job, which is why the tag no longer exists.  **`Contains` reads the value WHOLE — `kb_resource_properties`, never `kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly what [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently narrow the operator: an array-shaped probe matches the whole value and matches *nothing* against an exploded element, and a `[]`-valued key is a row in the one and no rows in the other. The element view continues to serve `tags` and `facets`, whose semantics genuinely are AND-containment over elements.  **A key naming a resource column is refused `column_not_a_property`:** `created`, `updated`, `temper-created` and `temper-updated`. Those are columns, never property rows, so a predicate on one could only answer empty. The ranges `created` and `updated` below narrow by them.
     attr_accessor :properties
 
     attr_accessor :stage
@@ -36,9 +39,13 @@ module Temper::Generated
 
     attr_accessor :title_contains
 
+    # The resource's last-update time (`kb_resources.updated`) lies in this range: at or after `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows nothing. A range whose `from` is not before its `until` is refused `inverted_range`.
+    attr_accessor :updated
+
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'created' => :'created',
         :'doc_type' => :'doc_type',
         :'facets' => :'facets',
         :'owner' => :'owner',
@@ -46,7 +53,8 @@ module Temper::Generated
         :'stage' => :'stage',
         :'status' => :'status',
         :'tags' => :'tags',
-        :'title_contains' => :'title_contains'
+        :'title_contains' => :'title_contains',
+        :'updated' => :'updated'
       }
     end
 
@@ -63,6 +71,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'created' => :'TimeRange',
         :'doc_type' => :'Array<String>',
         :'facets' => :'Array<FacetPredicate>',
         :'owner' => :'String',
@@ -70,17 +79,20 @@ module Temper::Generated
         :'stage' => :'String',
         :'status' => :'String',
         :'tags' => :'Array<String>',
-        :'title_contains' => :'String'
+        :'title_contains' => :'String',
+        :'updated' => :'TimeRange'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'created',
         :'owner',
         :'stage',
         :'status',
-        :'title_contains'
+        :'title_contains',
+        :'updated'
       ])
     end
 
@@ -99,6 +111,10 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'created')
+        self.created = attributes[:'created']
+      end
 
       if attributes.key?(:'doc_type')
         if (value = attributes[:'doc_type']).is_a?(Array)
@@ -138,6 +154,10 @@ module Temper::Generated
 
       if attributes.key?(:'title_contains')
         self.title_contains = attributes[:'title_contains']
+      end
+
+      if attributes.key?(:'updated')
+        self.updated = attributes[:'updated']
       end
     end
 
@@ -259,6 +279,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          created == o.created &&
           doc_type == o.doc_type &&
           facets == o.facets &&
           owner == o.owner &&
@@ -266,7 +287,8 @@ module Temper::Generated
           stage == o.stage &&
           status == o.status &&
           tags == o.tags &&
-          title_contains == o.title_contains
+          title_contains == o.title_contains &&
+          updated == o.updated
     end
 
     # @see the `==` method
@@ -278,7 +300,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [doc_type, facets, owner, properties, stage, status, tags, title_contains].hash
+      [created, doc_type, facets, owner, properties, stage, status, tags, title_contains, updated].hash
     end
 
     # Builds the object from hash

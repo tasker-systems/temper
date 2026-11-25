@@ -872,7 +872,7 @@ trace: CompositionTrace, };
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "order_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "stage_not_pipeable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "column_not_a_property" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
+export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "order_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "stage_not_pipeable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "column_not_a_property" | "inverted_range" | "timestamp_out_of_range" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
 
 /**
  * One region a `survey` stage matched, and the score it matched at.
@@ -987,9 +987,24 @@ facets?: Array<FacetPredicate>,
  *
  * **A key naming a resource column is refused `column_not_a_property`:** `created`,
  * `updated`, `temper-created` and `temper-updated`. Those are columns, never property rows,
- * so a predicate on one could only answer empty.
+ * so a predicate on one could only answer empty. The ranges `created` and `updated` below
+ * narrow by them.
  */
-properties?: Array<PropertyPredicate>, stage?: string | null, status?: string | null, owner?: string | null, title_contains?: string | null, };
+properties?: Array<PropertyPredicate>, stage?: string | null, status?: string | null, owner?: string | null, title_contains?: string | null, 
+/**
+ * The resource's creation time (`kb_resources.created`) lies in this range: at or after
+ * `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to
+ * the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows
+ * nothing. A range whose `from` is not before its `until` is refused `inverted_range`.
+ */
+created?: TimeRange | null, 
+/**
+ * The resource's last-update time (`kb_resources.updated`) lies in this range: at or after
+ * `from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to
+ * the microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows
+ * nothing. A range whose `from` is not before its `until` is refused `inverted_range`.
+ */
+updated?: TimeRange | null, };
 
 /**
  * One resource that matched, however it matched.
@@ -1500,6 +1515,38 @@ disclosed_regions: Array<RegionDisclosure>,
  * of a refusal carries them like any other, because its counts never read its input.
  */
 artifact_asks?: Array<ArtifactAskTrace>, };
+
+/**
+ * A range over one of a resource's timestamp columns: `from <= t < until`.
+ *
+ * **`from` is inclusive and `until` exclusive**, so two windows that share an end tile the line
+ * with neither an overlap nor a gap: `{until: X}` and `{from: X}` together are every resource,
+ * once. Either end may be absent, and an absent end is unbounded.
+ *
+ * **Each end is an RFC 3339 timestamp with an offset** (`2026-11-01T00:00:00Z`,
+ * `2026-11-01T09:00:00+09:00`) and is read as UTC. A bare date is not a timestamp and does not
+ * parse. **Each end is read to the microsecond**, the store's precision: a finer fraction is
+ * truncated before the range is checked, applied or echoed ([`TimeRange::at_store_precision`]).
+ *
+ * **An end earlier than the store can hold is refused** `timestamp_out_of_range`
+ * ([`earliest_storable_timestamp`], 4714-11-24 BC), never left to fail when the plan runs.
+ *
+ * **A range whose `from` is not before its `until` is refused** `inverted_range`, never answered:
+ * no timestamp lies in it, so its empty answer would look exactly like an honest "none". The
+ * comparison is of the ends as the store reads them.
+ *
+ * Applied in the store, as a conjunct of the selection's `WHERE`, so the stage's page and its
+ * `total` are counted over the narrowed set.
+ */
+export type TimeRange = { 
+/**
+ * The inclusive lower end: a resource whose time is at or after it.
+ */
+from?: string | null, 
+/**
+ * The exclusive upper end: a resource whose time is before it.
+ */
+until?: string | null, };
 
 /**
  * What a composition WOULD return, derived from the act declarations without running anything.

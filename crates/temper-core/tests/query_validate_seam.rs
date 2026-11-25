@@ -119,6 +119,17 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // holds the two together). A property predicate on a column matches nothing on any
         // server, so `--check` refusing it is right.
         ("ColumnNotAProperty", 1),
+        // `InvertedRange` `[added — 2026-11-25]`: a `resource_filter.created` or `.updated` range
+        // whose `from` is not before its `until`. Reads no declaration, only the range's two ends,
+        // and clears the bar through the variant's published description, which states the rule
+        // (`from` inclusive, `until` exclusive). No timestamp lies in such a range on any server,
+        // so `--check` refusing it is right.
+        ("InvertedRange", 1),
+        // `TimestampOutOfRange` `[added — 2026-11-25]`: a range end earlier than `timestamptz`
+        // stores. Reads no declaration, only the end and the store type's bound, which the
+        // variant's published description states; every server's store has the same bound, so
+        // `--check` refusing it is right.
+        ("TimestampOutOfRange", 1),
         ("StageNotReturnable", 1),
         // `StageNotPipeable` `[added — 2026-11-14]`, the mirror of `StageNotReturnable` and decided
         // the same way: by act NAME, consulting no declaration, so a client raises it against a

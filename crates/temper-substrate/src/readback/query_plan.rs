@@ -97,6 +97,9 @@ pub enum QueryBind {
     Id(Uuid),
     /// `jsonb` — the selection core's `p_facets`, a list of `{key, value}` objects.
     Json(serde_json::Value),
+    /// `timestamptz` — one end of a `ResourceFilter` time range, bound as `$n::timestamptz` inside
+    /// the `tstzrange(…)` the selection core's `p_created` and `p_updated` take.
+    Timestamp(chrono::DateTime<chrono::Utc>),
 }
 
 /// The placeholder function name the fallback act body targets — not any act body: the three find
@@ -688,6 +691,7 @@ fn emit_act_body(
                 anchor_table: &anchor_table,
                 anchor_id: &anchor_id,
                 properties: args.properties,
+                ranges: args.ranges,
             });
             // The asks' `$n` travels out with the body, so each population arm reads its ask from
             // this one bind rather than binding the list a second time.
@@ -720,6 +724,7 @@ fn emit_act_body(
                 anchor_table: &anchor_table,
                 anchor_id: &anchor_id,
                 properties: args.properties,
+                ranges: args.ranges,
                 bound: &bound,
             });
             // **The direction is one of two literals this compiler chooses between, never a
@@ -1033,6 +1038,10 @@ enum CoreCall<'a> {
         /// reached by ARITY, and an untyped NULL in the thirteenth position cannot be resolved
         /// against a name that also has a twelve-parameter form.
         properties: String,
+        /// `ResourceFilter`'s two time ranges (`20261203000040`), `p_created` then `p_updated`:
+        /// each a `tstzrange(…, '[)')` over bound ends, or `NULL::tstzrange`. Rendered after
+        /// `properties`, which is where the signature puts them.
+        ranges: String,
     },
     /// The list core: the selection core's arguments in their order, then a resource bound.
     ///
@@ -1048,6 +1057,8 @@ enum CoreCall<'a> {
         anchor_table: &'a str,
         anchor_id: &'a str,
         properties: String,
+        /// The two time ranges, as on [`CoreCall::Selection`].
+        ranges: String,
         /// The stage's `p_bound_ids` — `NULL::uuid[]` unbounded, `'{}'` for a refused upstream.
         bound: &'a str,
     },
@@ -1143,9 +1154,10 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
             anchor_table,
             anchor_id,
             properties,
+            ranges,
         } => format!(
             "{core}({VISIBLE_IDS}, {narrowings}, {artifact_asks}, {anchor_table}, {anchor_id}, \
-             {PRINCIPAL_BIND}, {properties})"
+             {PRINCIPAL_BIND}, {properties}, {ranges})"
         ),
         // The selection's arguments with the same two authorization inputs in the same two
         // roles, then the bound — which is a scope, never the verdict.
@@ -1156,10 +1168,11 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
             anchor_table,
             anchor_id,
             properties,
+            ranges,
             bound,
         } => format!(
             "{core}({VISIBLE_IDS}, {narrowings}, {artifact_asks}, {anchor_table}, {anchor_id}, \
-             {PRINCIPAL_BIND}, {properties}, {bound})"
+             {PRINCIPAL_BIND}, {properties}, {ranges}, {bound})"
         ),
         // The visible set is the first argument, and `PRINCIPAL_BIND` the last (`p_anchor_reader`):
         // the walk admits an edge only if its HOME anchor is readable too (`20261119000010`),
@@ -1603,11 +1616,13 @@ fn selection_args(
     let narrowings = selection_narrowings_for(inv, binds);
     let (artifact_asks, asks_bound_at) = artifact_asks_slot(asks, binds);
     let properties = resource_properties_for(inv, binds);
+    let ranges = time_ranges_for(inv, binds);
     Ok(SelectionArgs {
         narrowings,
         artifact_asks,
         asks_bound_at,
         properties,
+        ranges,
     })
 }
 
@@ -1617,6 +1632,7 @@ struct SelectionArgs {
     artifact_asks: String,
     asks_bound_at: Option<usize>,
     properties: String,
+    ranges: String,
 }
 
 /// The selection core's eight narrowing arguments, in signature order, each bound or a typed `NULL`.
@@ -1785,6 +1801,47 @@ fn resource_properties_for(
         return "NULL::jsonb".to_string();
     };
     properties_slot(&f.properties, binds)
+}
+
+/// `ResourceFilter`'s two time ranges, `created` then `updated` — the selection core's `p_created`
+/// and `p_updated`, in signature order, joined for the call.
+///
+/// An absent range is `NULL::tstzrange`, which narrows nothing. A present one is
+/// `tstzrange(from, until, '[)')`: `from` inclusive and `until` exclusive, which is the wire's
+/// contract, and an absent end a typed `NULL`, which `tstzrange` reads as unbounded. Each end binds
+/// as a `timestamptz` at the store's precision (`TimeRange::at_store_precision`), never as range
+/// text this function would have to spell.
+///
+/// **Both slots are `tstzrange`, so a transposition would typecheck.** The order is held by
+/// `the_time_ranges_bind_created_then_updated` rather than by the signature.
+fn time_ranges_for(
+    inv: &temper_core::types::query::ActInvocation,
+    binds: &mut Vec<QueryBind>,
+) -> String {
+    let f = inv.resource_filter.as_ref();
+    [
+        f.and_then(|f| f.created.as_ref()),
+        f.and_then(|f| f.updated.as_ref()),
+    ]
+    .into_iter()
+    .map(|range| match range {
+        None => "NULL::tstzrange".to_string(),
+        Some(r) => {
+            let r = r.at_store_precision();
+            let mut end = |t: Option<chrono::DateTime<chrono::Utc>>| match t {
+                Some(t) => {
+                    binds.push(QueryBind::Timestamp(t));
+                    format!("${}::timestamptz", binds.len())
+                }
+                None => "NULL::timestamptz".to_string(),
+            };
+            let from = end(r.from);
+            let until = end(r.until);
+            format!("tstzrange({from}, {until}, '[)')")
+        }
+    })
+    .collect::<Vec<_>>()
+    .join(", ")
 }
 
 /// The composition threaded no QUESTION. Static, and the validator refuses it first — this is the

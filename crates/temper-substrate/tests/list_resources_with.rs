@@ -470,3 +470,185 @@ async fn the_bound_applies_beneath_the_page(pool: PgPool) {
     assert!(!page.contains(&sixtieth));
     assert_eq!(total, Some(61));
 }
+
+// ── Time ranges (`20261203000040`) ──────────────────────────────────────────────────────────────
+
+/// Midnight UTC on day `d` of November 2026.
+fn day(d: u32) -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    chrono::Utc
+        .with_ymd_and_hms(2026, 11, d, 0, 0, 0)
+        .single()
+        .expect("a real day")
+}
+
+/// Pin `id`'s two clocks. The projector writes them; this fixture write stands in for resources
+/// written on different days.
+async fn set_clocks(
+    pool: &PgPool,
+    id: Uuid,
+    created: chrono::DateTime<chrono::Utc>,
+    updated: chrono::DateTime<chrono::Utc>,
+) {
+    sqlx::query("UPDATE kb_resources SET created = $2, updated = $3 WHERE id = $1")
+        .bind(id)
+        .bind(created)
+        .bind(updated)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+fn ranged(
+    created: Option<temper_core::types::query::TimeRange>,
+    updated: Option<temper_core::types::query::TimeRange>,
+) -> ResourceFilter {
+    ResourceFilter {
+        created,
+        updated,
+        ..ready_filter()
+    }
+}
+
+fn range(
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    until: Option<chrono::DateTime<chrono::Utc>>,
+) -> temper_core::types::query::TimeRange {
+    temper_core::types::query::TimeRange { from, until }
+}
+
+/// **A `created` or `updated` range narrows at either end or both, `from` inclusive and `until`
+/// exclusive, each over its own column** — on `list-resources-with` through the compiler, and on
+/// the `find-resources-with` selection through its gated wrapper.
+///
+/// Five rows, `created` on days 1–5 and `updated` on days 5–1, so the two columns order the rows
+/// oppositely and a range applied to the wrong column selects a different set. Each boundary row
+/// sits exactly on an end, so an inclusive `until` or an exclusive `from` moves the answer.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_time_range_narrows_at_either_end_or_both_over_its_own_column(pool: PgPool) {
+    let w = world(&pool).await;
+    let ids = ready_rows(&pool, &w, 5).await;
+    for (i, id) in ids.iter().enumerate() {
+        let i = i as u32;
+        set_clocks(&pool, *id, day(1 + i), day(5 - i)).await;
+    }
+    // Row k (0-based) was created on day k+1 and updated on day 5-k.
+    let rows_at = |ks: &[usize]| ks.iter().map(|&k| ids[k]).collect::<BTreeSet<_>>();
+
+    let cases = [
+        (
+            "created, from only",
+            ranged(Some(range(Some(day(2)), None)), None),
+            rows_at(&[1, 2, 3, 4]),
+        ),
+        (
+            "created, until only",
+            ranged(Some(range(None, Some(day(4)))), None),
+            rows_at(&[0, 1, 2]),
+        ),
+        (
+            "created, both",
+            ranged(Some(range(Some(day(2)), Some(day(4)))), None),
+            rows_at(&[1, 2]),
+        ),
+        (
+            "updated, from only",
+            ranged(None, Some(range(Some(day(4)), None))),
+            rows_at(&[0, 1]),
+        ),
+        (
+            "updated, until only",
+            ranged(None, Some(range(None, Some(day(2))))),
+            rows_at(&[4]),
+        ),
+        (
+            "updated, both",
+            ranged(None, Some(range(Some(day(2)), Some(day(4))))),
+            rows_at(&[2, 3]),
+        ),
+        (
+            "both ranges",
+            ranged(
+                Some(range(Some(day(2)), None)),
+                Some(range(Some(day(3)), None)),
+            ),
+            rows_at(&[1, 2]),
+        ),
+        (
+            "an empty range",
+            ranged(Some(range(None, None)), None),
+            rows_at(&[0, 1, 2, 3, 4]),
+        ),
+    ];
+    for (case, filter, expected) in cases {
+        let rows = run(
+            &pool,
+            w.owner,
+            &list_plan(anchored(&w), Some(filter.clone()), &[], None),
+        )
+        .await;
+        let (page, _, total) = page_of(&rows);
+        assert_eq!(
+            page.iter().copied().collect::<BTreeSet<_>>(),
+            expected,
+            "list-resources-with, {case}"
+        );
+        assert_eq!(total, Some(expected.len() as i64), "{case}: the total");
+
+        // The selection's own door, over the same two ranges.
+        let as_range = |r: &Option<temper_core::types::query::TimeRange>| {
+            r.as_ref().map(|r| (r.from, r.until))
+        };
+        let (c, u) = (as_range(&filter.created), as_range(&filter.updated));
+        let selected: BTreeSet<Uuid> = sqlx::query_scalar(
+            "SELECT resource_id FROM query_find_resources_with($1, NULL::text[], NULL::text[], \
+             NULL::jsonb, NULL::text, NULL::text, NULL::uuid, NULL::text, NULL::text, \
+             NULL::jsonb, 'kb_contexts'::varchar, $2::uuid, NULL::jsonb, \
+             CASE WHEN $3 THEN tstzrange($4, $5, '[)') END, \
+             CASE WHEN $6 THEN tstzrange($7, $8, '[)') END)",
+        )
+        .bind(w.owner.uuid())
+        .bind(w.home.id)
+        .bind(c.is_some())
+        .bind(c.and_then(|c| c.0))
+        .bind(c.and_then(|c| c.1))
+        .bind(u.is_some())
+        .bind(u.and_then(|u| u.0))
+        .bind(u.and_then(|u| u.1))
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+        assert_eq!(selected, expected, "find-resources-with, {case}");
+    }
+}
+
+/// **A range is applied in the store, beneath the page**: the stage's `limit` still cuts the page,
+/// and `total` counts the narrowed set, not the anchor's. Eight rows on days 1–8, a range admitting
+/// days 3–7, `limit 2`: the page is the two newest of the five admitted, never of the eight.
+/// Filtering the page after the read would answer fewer than two rows, or the wrong two, and a
+/// total of eight.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_time_range_narrows_beneath_the_page_and_the_limit_still_holds(pool: PgPool) {
+    let w = world(&pool).await;
+    let ids = ready_rows(&pool, &w, 8).await;
+    for (i, id) in ids.iter().enumerate() {
+        set_clocks(&pool, *id, day(1 + i as u32), day(1 + i as u32)).await;
+    }
+    let filter = ranged(Some(range(Some(day(3)), Some(day(8)))), None);
+    let rows = run(
+        &pool,
+        w.owner,
+        &list_plan(anchored(&w), Some(filter), &[(BoundTerm::Limit, 2)], None),
+    )
+    .await;
+    let (page, produced, total) = page_of(&rows);
+    assert_eq!(
+        page,
+        vec![ids[6], ids[5]],
+        "the two newest admitted rows, newest first"
+    );
+    assert_eq!(produced, 2, "the limit holds");
+    assert_eq!(total, Some(5), "the total counts the narrowed set");
+}

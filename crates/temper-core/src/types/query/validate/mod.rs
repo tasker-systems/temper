@@ -560,7 +560,7 @@ mod tests {
     use crate::types::query::filter::MAX_FILTER_VALUES;
     use crate::types::query::filter::{
         property_value_bytes, property_value_nodes, EdgeFilter, FacetPredicate, OrdOp, PropertyOp,
-        PropertyPredicate, ResourceFilter, MAX_COMPOSITION_PROPERTY_VALUE_BYTES,
+        PropertyPredicate, ResourceFilter, TimeRange, MAX_COMPOSITION_PROPERTY_VALUE_BYTES,
         MAX_COMPOSITION_TEXT_BYTES, MAX_FILTER_STRING_BYTES, MAX_PROPERTY_VALUE_BYTES,
         MAX_PROPERTY_VALUE_NODES, MAX_TITLE_CONTAINS_BYTES,
     };
@@ -2456,6 +2456,32 @@ mod tests {
                 "narrow by `title_contains`",
             ),
             (
+                "created",
+                Box::new(|a: &mut ActInvocation| {
+                    a.resource_filter = Some(ResourceFilter {
+                        created: Some(TimeRange {
+                            from: Some(chrono::Utc::now()),
+                            until: None,
+                        }),
+                        ..Default::default()
+                    })
+                }),
+                "narrow by `created`",
+            ),
+            (
+                "updated",
+                Box::new(|a: &mut ActInvocation| {
+                    a.resource_filter = Some(ResourceFilter {
+                        updated: Some(TimeRange {
+                            from: None,
+                            until: Some(chrono::Utc::now()),
+                        }),
+                        ..Default::default()
+                    })
+                }),
+                "narrow by `updated`",
+            ),
+            (
                 // `[changed — 2026-08-14]` Was "two doc types", expecting *"holds exactly one
                 // value"* — a refusal about the FRAGMENT's single `text` slot, which admitted one
                 // value and refused several. `doc_type` is no longer a modifier at all, so the case
@@ -2501,7 +2527,7 @@ mod tests {
         ];
 
         // The denominator, stated so a shrinking case list is a failure rather than a quieter test.
-        assert_eq!(cases.len(), 9, "nine narrowings a find act drops");
+        assert_eq!(cases.len(), 11, "eleven narrowings a find act drops");
 
         for (label, supply, expected) in cases {
             let mut node = act("hits", ActName::FindExact, None);
@@ -2554,6 +2580,15 @@ mod tests {
                         values: vec![serde_json::json!("spec-a")],
                     },
                 }],
+                // Both time ranges, one with both ends and one open above.
+                created: Some(TimeRange {
+                    from: Some(at("2026-01-01T00:00:00Z")),
+                    until: Some(at("2026-07-01T00:00:00Z")),
+                }),
+                updated: Some(TimeRange {
+                    from: Some(at("2026-06-01T00:00:00Z")),
+                    until: None,
+                }),
             });
         }
         // Returned nowhere: a selection orders nothing, so asking for its rows is
@@ -3437,6 +3472,194 @@ mod tests {
         );
     }
 
+    /// An RFC 3339 instant, for the time-range tests.
+    fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .expect("a fixed timestamp")
+            .with_timezone(&chrono::Utc)
+    }
+
+    /// The three ways a range can be bounded: below only, above only, and both.
+    fn the_three_ranges() -> [(&'static str, TimeRange); 3] {
+        [
+            (
+                "from only",
+                TimeRange {
+                    from: Some(at("2026-01-01T00:00:00Z")),
+                    until: None,
+                },
+            ),
+            (
+                "until only",
+                TimeRange {
+                    from: None,
+                    until: Some(at("2026-07-01T00:00:00+02:00")),
+                },
+            ),
+            (
+                "both",
+                TimeRange {
+                    from: Some(at("2026-01-01T00:00:00Z")),
+                    until: Some(at("2026-07-01T00:00:00Z")),
+                },
+            ),
+        ]
+    }
+
+    /// **A `created` or `updated` range, bounded at either end or both, is admitted on both
+    /// selection-shaped acts, by the full pass and by `validate_shape`** — the second is what
+    /// `temper query --check` runs, so `--check` admits a plan the server answers.
+    #[test]
+    fn a_time_range_bounded_at_either_end_or_both_is_admitted_by_both_passes() {
+        for (case, range) in the_three_ranges() {
+            for field in ["created", "updated"] {
+                let f = match field {
+                    "created" => ResourceFilter {
+                        created: Some(range.clone()),
+                        ..Default::default()
+                    },
+                    _ => ResourceFilter {
+                        updated: Some(range.clone()),
+                        ..Default::default()
+                    },
+                };
+                let mut list = list_stage("rows", None);
+                if let StageNode::Act(inv) = &mut list {
+                    inv.resource_filter = Some(f.clone());
+                }
+                for (act, c) in [
+                    ("find-resources-with", selection_plan(f)),
+                    ("list-resources-with", plan(vec![list], vec!["rows"])),
+                ] {
+                    assert!(
+                        validate(&c).is_ok(),
+                        "{act}, `{field}` {case}: {:?}",
+                        validate(&c).err()
+                    );
+                    assert_eq!(
+                        super::validate_shape(&c),
+                        vec![],
+                        "{act}, `{field}` {case}: `--check` must admit it"
+                    );
+                }
+            }
+        }
+    }
+
+    /// **An inverted range is refused by name, never answered empty** — `from` after `until`, and
+    /// `from` equal to `until` as the store reads them, which `[from, until)` also leaves empty. By both passes, one
+    /// refusal per range, naming the range.
+    #[test]
+    fn an_inverted_time_range_is_refused_naming_the_range() {
+        for (from, until) in [
+            ("2026-07-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+            ("2026-07-01T00:00:00Z", "2026-07-01T02:00:00+02:00"),
+            // Distinct only below the microsecond, so the store reads both ends as one instant.
+            (
+                "2026-07-01T00:00:00.0000005Z",
+                "2026-07-01T00:00:00.0000009Z",
+            ),
+        ] {
+            let inverted = TimeRange {
+                from: Some(at(from)),
+                until: Some(at(until)),
+            };
+            let c = selection_plan(ResourceFilter {
+                created: Some(inverted.clone()),
+                updated: Some(inverted),
+                ..Default::default()
+            });
+            for (pass, errs) in [
+                ("validate", validate(&c).expect_err("must refuse")),
+                ("validate_shape", super::validate_shape(&c)),
+            ] {
+                let hit: Vec<_> = errs
+                    .iter()
+                    .filter(|e| e.reason == RefusalReason::InvertedRange)
+                    .collect();
+                assert_eq!(
+                    hit.len(),
+                    2,
+                    "{pass}, {from}..{until}: one per range: {errs:?}"
+                );
+                for (r, field) in hit.iter().zip(["created", "updated"]) {
+                    assert!(
+                        r.detail
+                            .starts_with(&format!("`resource_filter.{field}` runs from ")),
+                        "{pass}: the detail names the range: {}",
+                        r.detail
+                    );
+                }
+            }
+        }
+        // The wire name a client matches on.
+        assert_eq!(
+            serde_json::to_value(RefusalReason::InvertedRange).unwrap(),
+            serde_json::json!("inverted_range")
+        );
+    }
+
+    /// **A range end earlier than the store can hold is refused by name**, at 4714-11-24 BC minus
+    /// one microsecond, by both passes, and read from the wire as a caller writes it. The earliest
+    /// storable instant itself is admitted, and chrono's latest instant is below the store's upper
+    /// bound, so no upper check is needed.
+    #[test]
+    fn a_range_end_the_store_cannot_hold_is_refused_naming_the_end() {
+        let before: TimeRange = serde_json::from_value(serde_json::json!({
+            "from": "-4713-11-23T23:59:59.999999Z",
+            "until": "-5000-01-01T00:00:00Z",
+        }))
+        .expect("a negative year parses from the wire");
+        let c = selection_plan(ResourceFilter {
+            updated: Some(before),
+            ..Default::default()
+        });
+        for (pass, errs) in [
+            ("validate", validate(&c).expect_err("must refuse")),
+            ("validate_shape", super::validate_shape(&c)),
+        ] {
+            let hit: Vec<_> = errs
+                .iter()
+                .filter(|e| e.reason == RefusalReason::TimestampOutOfRange)
+                .collect();
+            assert_eq!(hit.len(), 2, "{pass}: one per end: {errs:?}");
+            assert!(
+                hit[0]
+                    .detail
+                    .starts_with("`resource_filter.updated.from` is -4713-11-23T23:59:59.999999"),
+                "{pass}: {}",
+                hit[0].detail
+            );
+            assert!(
+                hit[1]
+                    .detail
+                    .starts_with("`resource_filter.updated.until` is -5000-01-01"),
+                "{pass}: {}",
+                hit[1].detail
+            );
+        }
+
+        // The earliest storable instant is admitted.
+        let c = selection_plan(ResourceFilter {
+            created: Some(TimeRange {
+                from: Some(crate::types::query::filter::earliest_storable_timestamp()),
+                until: None,
+            }),
+            ..Default::default()
+        });
+        assert!(validate(&c).is_ok(), "{:?}", validate(&c).err());
+        assert_eq!(
+            crate::types::query::filter::earliest_storable_timestamp().to_rfc3339(),
+            "-4713-11-24T00:00:00+00:00"
+        );
+        // timestamptz stores through 294276 AD; chrono's latest instant is earlier.
+        assert!(chrono::Datelike::year(&chrono::DateTime::<chrono::Utc>::MAX_UTC) < 294_276);
+        assert_eq!(
+            serde_json::to_value(RefusalReason::TimestampOutOfRange).unwrap(),
+            serde_json::json!("timestamp_out_of_range")
+        );
+    }
+
     /// **A resource predicate on `created` or `updated` is refused by name, never answered.**
     ///
     /// Both are columns, never property rows, so a predicate on either matched nothing and the
@@ -3482,6 +3705,19 @@ mod tests {
                     assert!(
                         hit[0].detail.contains("a column of every resource"),
                         "{pass}: {}",
+                        hit[0].detail
+                    );
+                    // The detail points at the range that does narrow by the column.
+                    let range = if field.ends_with("created") {
+                        "`resource_filter.created`"
+                    } else {
+                        "`resource_filter.updated`"
+                    };
+                    assert!(
+                        hit[0]
+                            .detail
+                            .contains(&format!("Narrow by it with the range {range}")),
+                        "{pass}: the detail names {range}: {}",
                         hit[0].detail
                     );
                 }

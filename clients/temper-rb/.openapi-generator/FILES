@@ -527,6 +527,7 @@ lib/temper/generated/models/team_update_request.rb
 lib/temper/generated/models/territory.rb
 lib/temper/generated/models/territory_kind.rb
 lib/temper/generated/models/territory_overview.rb
+lib/temper/generated/models/time_range.rb
 lib/temper/generated/models/unbind_team_outcome.rb
 lib/temper/generated/models/unrecognized_standing.rb
 lib/temper/generated/models/unshare_context_outcome.rb

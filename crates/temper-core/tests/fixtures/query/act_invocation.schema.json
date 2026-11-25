@@ -579,6 +579,32 @@
     "resource_filter": {
       "description": "Narrowing by what a thing IS. At most one slot applies per candidate population; a slot the\nact does not admit is `RefusalReason::FilterNotApplicable`. `resource_filter` and\n`artifact_filter` both narrow the resources a selection considers, and AND together;\n`edge_filter` narrows the edges a walk follows.",
       "properties": {
+        "created": {
+          "additionalProperties": false,
+          "description": "The resource's creation time (`kb_resources.created`) lies in this range: at or after\n`from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to\nthe microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows\nnothing. A range whose `from` is not before its `until` is refused `inverted_range`.",
+          "properties": {
+            "from": {
+              "description": "The inclusive lower end: a resource whose time is at or after it.",
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "until": {
+              "description": "The exclusive upper end: a resource whose time is before it.",
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "doc_type": {
           "description": "`kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes.",
           "items": {
@@ -619,7 +645,7 @@
           ]
         },
         "properties": {
-          "description": "`kb_properties` rows owned by the resource itself: open key space, closed operator set.\nAND across the list, OR within a [`PropertyOp::Contains`].\n\n**The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of\nthe seventy live property keys were narrowable by nothing on any act\n`[measured on prod — 2026-08-14]`.\n\n**The container is the point, and it is the same container `EdgeFilter` has.** This is where\na resource property predicate lives; it moved off `ActInvocation::properties`, where the same\nfield meant different things depending on which act carried it. Given a container the subject\ntag has no job, which is why the tag no longer exists.\n\n**`Contains` reads the value WHOLE — `kb_resource_properties`, never\n`kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly\nwhat [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently\nnarrow the operator: an array-shaped probe matches the whole value and matches *nothing*\nagainst an exploded element, and a `[]`-valued key is a row in the one and no rows in the\nother. The element view continues to serve `tags` and `facets`, whose semantics genuinely\nare AND-containment over elements.\n\n**A key naming a resource column is refused `column_not_a_property`:** `created`,\n`updated`, `temper-created` and `temper-updated`. Those are columns, never property rows,\nso a predicate on one could only answer empty.",
+          "description": "`kb_properties` rows owned by the resource itself: open key space, closed operator set.\nAND across the list, OR within a [`PropertyOp::Contains`].\n\n**The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of\nthe seventy live property keys were narrowable by nothing on any act\n`[measured on prod — 2026-08-14]`.\n\n**The container is the point, and it is the same container `EdgeFilter` has.** This is where\na resource property predicate lives; it moved off `ActInvocation::properties`, where the same\nfield meant different things depending on which act carried it. Given a container the subject\ntag has no job, which is why the tag no longer exists.\n\n**`Contains` reads the value WHOLE — `kb_resource_properties`, never\n`kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly\nwhat [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently\nnarrow the operator: an array-shaped probe matches the whole value and matches *nothing*\nagainst an exploded element, and a `[]`-valued key is a row in the one and no rows in the\nother. The element view continues to serve `tags` and `facets`, whose semantics genuinely\nare AND-containment over elements.\n\n**A key naming a resource column is refused `column_not_a_property`:** `created`,\n`updated`, `temper-created` and `temper-updated`. Those are columns, never property rows,\nso a predicate on one could only answer empty. The ranges `created` and `updated` below\nnarrow by them.",
           "items": {
             "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the\nresource's own, and nothing else has to be said.\n\n`[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the\ninvocation is **deleted**, along with the `PropertySubject` tag it carried and the\n`UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is\n[`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing\nwith a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`\nand removing the field would route a stale caller into a deserializer 400 outside the\n`ErrorBody` shape — a worse answer than the one being replaced.",
             "properties": {
@@ -725,6 +751,32 @@
           "maxLength": 4096,
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "updated": {
+          "additionalProperties": false,
+          "description": "The resource's last-update time (`kb_resources.updated`) lies in this range: at or after\n`from`, before `until`. Each end is an RFC 3339 timestamp with an offset, read as UTC to\nthe microsecond; a bare date does not parse. Either end may be left open, and `{}` narrows\nnothing. A range whose `from` is not before its `until` is refused `inverted_range`.",
+          "properties": {
+            "from": {
+              "description": "The inclusive lower end: a resource whose time is at or after it.",
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "until": {
+              "description": "The exclusive upper end: a resource whose time is before it.",
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": [
+            "object",
             "null"
           ]
         }

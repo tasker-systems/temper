@@ -306,6 +306,7 @@ pub async fn execute(pool: &PgPool, compiled: &CompiledQuery) -> Result<QueryRow
             QueryBind::Texts(t) => q.bind(t.clone()),
             QueryBind::Id(u) => q.bind(*u),
             QueryBind::Json(j) => q.bind(j.clone()),
+            QueryBind::Timestamp(t) => q.bind(*t),
         };
     }
 
