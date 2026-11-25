@@ -52,6 +52,10 @@ url = "2"
 # reason `reqwest-blocking-client` is chosen above. TLS comes from the `reqwest-rustls` feature
 # opentelemetry-otlp already enables on this same reqwest.
 reqwest = { version = "0.13", default-features = false, features = ["blocking"] }
+# Behind `vercel`. 2.4 for `AppState::wait_until`; no features, because the adapter needs only
+# `AppState`, `Request` and the `tower::Service` it is driven through.
+vercel_runtime = { version = "2.4", default-features = false, optional = true }
+tower = { version = "0.5", default-features = false, optional = true }
 # `HttpClient`, the trait `export::observed_client::ObservedClient` implements to time each export and
 # keep a failed export's cause, which the OTLP exporter flattens to "network error". `reqwest-blocking`
 # for the implementation it delegates to. Both crates are already in the graph through
@@ -69,6 +73,11 @@ async-trait = "0.1"
 # something else happened to turn it on. That made `cargo check -p temperkb-telemetry --all-features`
 # fail on an item the feature itself names.
 test-support = ["opentelemetry_sdk/testing"]
+# The Vercel adapter for `after_response::AfterResponse`: `after_response::vercel::AfterResponseLayer`
+# backs it with `vercel_runtime::AppState::wait_until`, so a request's span flush runs after its
+# response instead of holding it. A feature so that a consumer not on Vercel never compiles
+# `vercel_runtime`.
+vercel = ["dep:vercel_runtime", "dep:tower"]
 
 [dev-dependencies]
 # BOTH dev-deps stay PATH-ONLY, and deliberately not workspace-inherited: a

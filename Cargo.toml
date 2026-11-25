@@ -63,7 +63,9 @@ path = "api/internal.rs"
 temper-api = { path = "crates/temper-api" }
 temper-services = { path = "crates/temper-services" }
 temper-mcp-server = { path = "crates/temper-mcp-server" }
-temperkb-telemetry.workspace = true
+# `vercel` for `AfterResponseLayer`: each function hands its span flush to `wait_until` so it runs
+# after the response rather than holding it.
+temperkb-telemetry = { workspace = true, features = ["vercel"] }
 vercel_runtime = { version = "2", features = ["axum"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"

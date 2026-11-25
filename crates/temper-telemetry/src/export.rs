@@ -637,6 +637,27 @@ const FLUSH_BUDGET: Duration = Duration::from_millis(500);
 /// (or, at a freeze, is lost — which is the trade batching already accepts).
 static FLUSHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Flush pending spans after the response has been sent, to completion: the flush a host's
+/// [`AfterResponse`](crate::AfterResponse) runs.
+///
+/// No budget, because nobody is waiting: the host keeps the invocation alive until this settles, so
+/// the flush is bounded only by the SDK's own five-second ceiling, and the instance is not frozen
+/// mid-export. Off the reactor for the same reason as [`flush_within_budget`].
+///
+/// **Not single-flight.** `FLUSHING` lets a concurrent inline flush skip, because a response waiting
+/// on a flush that has nothing of its own to do is the cost it removes. Here a skip would end this
+/// invocation with its span still queued, and the freeze would take it. Concurrent flushes queue on
+/// the processor's one thread instead; one that finds the queue already drained returns as soon as
+/// the processor reaches it.
+pub(crate) async fn flush_after_response() {
+    if PROVIDER.get().is_none() {
+        return;
+    }
+    if let Err(error) = tokio::task::spawn_blocking(force_flush_spans).await {
+        tracing::warn!(%error, "span flush after the response did not complete; some spans may be lost");
+    }
+}
+
 /// Flush pending spans without letting the response wait longer than `FLUSH_BUDGET`.
 ///
 /// Three things this does that [`force_flush_spans`] cannot, all of which only started mattering once

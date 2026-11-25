@@ -79,12 +79,14 @@
 //! merge under one field name, so Vercel's is recorded as `vercel_invocation_id` and never as
 //! `invocation_id`.
 
+pub mod after_response;
 pub mod export;
 pub mod init;
 pub mod link;
 pub mod propagate;
 pub mod request_span;
 
+pub use after_response::AfterResponse;
 pub use export::{force_flush_spans, set_service_name, shutdown_telemetry};
 #[cfg(feature = "test-support")]
 pub use init::init_server_logging_with_writer;
