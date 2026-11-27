@@ -403,6 +403,28 @@ for r in '.component_corrections[0].schema = {}::a {} record beside the real sha
   else bad "component corrections: ${label} is not the derived record and fails" "exit=$rc" "$out"; fi
 done
 
+# Only an OPEN VOCABULARY can be corrected (final review, points 2 and 3). A tagged union published
+# as anyOf under a recorded correction, a closed oneOf of enums, and a component with no top-level
+# oneOf at all (a do-nothing "correction" equal to the pin) are each refused, naming the component.
+NOTOPEN='does not publish as an open vocabulary .*: '
+union_setup() { # $1 = the pinned shape of component Union
+  component_setup "spec-correction"
+  jq -S --argjson u "$1" '.components.schemas.Union = $u' "${PINDIR}/0.5/openapi.json" > "${PINDIR}/0.5/openapi.json.tmp" && mv "${PINDIR}/0.5/openapi.json.tmp" "${PINDIR}/0.5/openapi.json"
+  jq -S --argjson u "$1" '.components.schemas.Union = (if ($u | has("oneOf")) then {anyOf: $u.oneOf} + ($u | del(.oneOf)) else $u end)' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+  jq --arg row "$CROW" --slurpfile h "$EMIT" '.component_corrections += [{component: "Union", register_entry: $row, reason: "fixture", schema: $h[0].components.schemas.Union}]' \
+    "${PINDIR}/0.5/corrections.json" > "${WORK}/c.tmp" && mv "${WORK}/c.tmp" "${PINDIR}/0.5/corrections.json"
+}
+for u in '{"oneOf":[{"type":"object","properties":{"kind":{"type":"string","enum":["a"]}},"required":["kind"]},{"type":"object","properties":{"kind":{"type":"string","enum":["b"]}},"required":["kind"]}]}::a tagged union' \
+         '{"oneOf":[{"type":"string","enum":["a"]},{"type":"string","enum":["b"]}]}::a closed oneOf of enums' \
+         '{"oneOf":[{"type":"string"},{"type":"string","enum":["a"]}]}::an open vocabulary whose catch-all is not last' \
+         '{"type":"object","properties":{"id":{"type":"string"}}}::a component with no oneOf (a do-nothing correction)'; do
+  union_setup "${u%%::*}"
+  out="$(run_gate)"; rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "${NOTOPEN}Union"; then
+    ok "component corrections: correcting ${u##*::} is refused, naming it"
+  else bad "component corrections: correcting ${u##*::} is refused, naming it" "exit=$rc" "$out"; fi
+done
+
 # Nit 6: an id carrying a newline would resolve as two entries; it is refused as one bad token.
 component_setup "spec-correction"
 jq --arg row "${CROW}"$'\n'"${ROW}" '.component_corrections[0].register_entry = $row' "${PINDIR}/0.5/corrections.json" > "${WORK}/c.tmp" && mv "${WORK}/c.tmp" "${PINDIR}/0.5/corrections.json"
@@ -490,6 +512,16 @@ else
     if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'component ActName, component IdKind, component RefusalReason, component ScoreKind'; then
       ok "real tree: the open enums' anyOf publication passes with its component corrections recorded"
     else bad "real tree: the open enums' anyOf publication passes with its component corrections recorded" "exit=$rc" "$out"; fi
+
+    # Final review repro: a do-nothing correction for a real component that is no open vocabulary.
+    cp "$REAL_PIN" "${REAL_PIN}.keep"
+    jq --slurpfile pin "$REAL_PIN_JSON" '.component_corrections += [{component: "AcceptInvitationResponse", register_entry: "open-enums-publish-any-of", reason: "probe", schema: $pin[0].components.schemas.AcceptInvitationResponse}]' \
+      "$REAL_PIN" > "${REAL_PIN}.tmp" && mv "${REAL_PIN}.tmp" "$REAL_PIN"
+    out="$(real_gate)"; rc=$?
+    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'does not publish as an open vocabulary .*: AcceptInvitationResponse'; then
+      ok "real tree: a do-nothing correction for AcceptInvitationResponse is refused, naming it"
+    else bad "real tree: a do-nothing correction for AcceptInvitationResponse is refused, naming it" "exit=$rc" "$out"; fi
+    mv "${REAL_PIN}.keep" "$REAL_PIN"
 
     jq 'del(.component_corrections)' "$REAL_PIN" > "${REAL_PIN}.tmp" && mv "${REAL_PIN}.tmp" "$REAL_PIN"
     out="$(real_gate)"; rc=$?

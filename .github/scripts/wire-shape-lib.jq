@@ -167,9 +167,13 @@ def param_key: "\(.in)|\(.name)";
 # catch-all's index.
 #
 # Growth only: every base arm survives unchanged modulo prose, the catch-all
-# included, and every head-only arm is a plain string `enum`. A removed arm, an edited
-# enum, a constraint gained by the catch-all, a second catch-all, or a closed
-# `oneOf` (no catch-all) all fall through to the fail-closed array arm.
+# included, and every head-only arm is a plain string `enum`. Otherwise this arm does
+# not apply and the node is judged by the arms below. A removed or added arm with no
+# growth reading, an edited enum, a second catch-all or a closed `oneOf` (no catch-all)
+# computes as moved there. But a key an arm or the schema GAINS while the arm count holds — a `pattern` on the catch-all,
+# a sibling `type`, `not` or `oneOf` beside the combinator — is NOT seen: arms are then compared
+# pairwise by `broke_node`, which walks BASE keys only. That is the comparator's general
+# gained-constraint residue (the same on main), and it is open.
 #
 # Strict JSON Schema reads a known member as matching TWO arms, its own and the
 # catch-all, which `oneOf` forbids; that is true of every existing member in base
@@ -199,8 +203,12 @@ def open_vocabulary_grew($b; $h):
 # * the base's named arms survive, modulo prose, in their base ORDER (new arms may sit between
 #   them, never reorder them);
 # * every head-only arm is a plain string `enum`, which `open_vocabulary` already requires.
-# A dropped, edited or reordered named arm, a catch-all moved off the end, or a second catch-all
-# falls through to the index-paired array arm, which reads it as moved.
+# Otherwise the node falls through to the index-paired array arm: a dropped, edited or reordered
+# named arm, a catch-all moved off the end, or a second catch-all reads as moved there. But
+# a key an arm or the schema GAINS while the arm count holds — a `pattern` on the catch-all,
+# a sibling `type`, `not` or `oneOf` beside the combinator — is NOT seen: arms are then compared
+# pairwise by `broke_node`, which walks BASE keys only. That is the comparator's general
+# gained-constraint residue (the same on main), and it is open.
 def is_subsequence($small; $big):
   if ($small | length) == 0 then true
   elif ($big | length) == 0 then false

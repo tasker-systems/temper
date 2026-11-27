@@ -76,9 +76,20 @@
 # nothing can be laundered through one. The pinned component is replaced by the record before the
 # comparison, and the published component is judged against it by the shared comparator like any
 # other schema: an open vocabulary gaining a named arm before its catch-all, existing arms in
-# order, is growth and needs no edit here; a dropped, edited or reordered named arm, a type change
-# or a new `required` is movement and refuses. Every operation that reaches the component through a
-# `$ref` is judged against the corrected shape.
+# order, is growth and needs no edit here; a dropped, edited or reordered named arm, a changed
+# arm type or a new `required` is movement and refuses. Every operation that reaches the component
+# through a `$ref` is judged against the corrected shape.
+#
+# Only an OPEN VOCABULARY can be corrected: the pinned component must carry a top-level `oneOf`
+# whose last arm is the bare-string catch-all and whose other arms are plain string enums (the
+# shape `open_vocabulary` in wire-shape-lib.jq names). Any other component — a tagged union, a
+# component with no top-level `oneOf`, where a "correction" would change nothing — is refused,
+# named.
+#
+# The comparator's open residue reaches corrected components too: a key an arm or the schema GAINS
+# while the arm count holds (a `pattern` on the catch-all; a sibling `type`, `not` or `oneOf` beside
+# the `anyOf`) is not seen, because arms are compared pairwise by `broke_node`, which walks base
+# keys only. That is the same on main and for every uncorrected component; it is not closed here.
 #
 # What one does not admit:
 # * Any other movement. Every other component and every operation is judged exactly as before,
@@ -242,6 +253,16 @@ if [ -f "$CORRECTIONS" ]; then
         # published component is then judged against it by the shared comparator below, like any
         # other schema: open-vocabulary growth (a new named arm before the catch-all, in order)
         # reads as growth and needs no edit here; anything else reads as movement.
+        # Open vocabularies only: see COMPONENT CORRECTIONS above.
+        CNOTOPEN="$(jq -n -r -L "$SCRIPT_DIR" --slurpfile base "$TMP_BASE" --slurpfile head "$TMP_HEAD" --slurpfile c "$CORRECTIONS" '
+            include "wire-shape-lib";
+            $c[0].component_corrections[]
+            | .component as $n
+            | $base[0].components.schemas[$n] as $p
+            | select((($p | type) == "object" and ($p | has("oneOf")) and (($p | has("anyOf")) | not)
+                      and open_vocabulary($p.oneOf) and ($p.oneOf[-1] | is_catch_all)) | not)
+            | $n')" || fail "the component corrections in ${CORRECTIONS} could not be checked against the ${PIN_NAME} pin."
+        [ -z "$CNOTOPEN" ] || fail "${CORRECTIONS} corrects a component the ${PIN_NAME} pin does not publish as an open vocabulary (a top-level \`oneOf\` of plain string enums ending in a bare-string catch-all): ${CNOTOPEN}. Only an open vocabulary's \`oneOf\` → \`anyOf\` can be recorded."
         CMISMATCH="$(jq -n -r --slurpfile base "$TMP_BASE" --slurpfile c "$CORRECTIONS" '
             $c[0].component_corrections[]
             | .component as $n
