@@ -1,0 +1,17 @@
+title    = "Release-attestation failures name the sigstore cause with a lowercase prefix"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+temper-cli verifies release build-provenance attestations offline with sigstore-trust-root,
+sigstore-types and sigstore-verify, which move from 0.16 to 0.17 together. Their published sources
+differ in three places temper reaches. sigstore-verify lowercases four error prefixes ("types
+error:", "crypto error:", "bundle error:", "trust root error:"), and an AttestError carries that
+text in its reason. sigstore-crypto now refuses a non-canonical or small-order Ed25519 key and an
+Ed25519 signature whose R is small-order, and accepts ECDSA P-521; temper's pinned public-good root
+and GitHub's attestations use ECDSA, so no bundle temper verifies changes verdict. sigstore-rekor's
+online-client error changes shape, and temper never calls that client. Who observes it: a user
+whose `temper update` or `temper version` attestation check fails, in the message's wording only.
+No wire change; which bundles verify is unchanged. Release relevance: none beyond that wording.
+'''
