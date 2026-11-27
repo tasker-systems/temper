@@ -1,6 +1,6 @@
 title    = "temper query --check reports this build's capability findings beside its shape refusals, and --strict makes them fatal"
 pr       = "self"
-classes  = ["additive", "behavioral"]
+classes  = ["additive", "behavioral", "spec-correction"]
 surfaces = ["cli-stdout", "http", "mcp"]
 status   = "signal-only"
 body = '''
@@ -32,5 +32,12 @@ capability tier's appearance. Witnesses: `the_capability_pass_admits_exactly_the
 and `the_offline_passes_together_raise_what_the_server_raises` (temper-core validate tests),
 `a_capability_finding_is_reported_and_fails_only_under_strict` (temper-cli), and
 `a_capability_finding_exits_zero_unless_strict` (tests/e2e/tests/query_cli_e2e.rs).
+
+Why spec-correction too (ruling 35, decision 01a21d95-1e3d-70bb-a01f-c3b2d3e9e658): the shape
+movement the declared-class gate charges here is not this PR's. It is #1480's oneOf→anyOf
+correction of RefusalReason (entry `open-enums-publish-any-of`), which the release-relative reading
+re-charges on every operation this PR touches that reaches RefusalReason (COMPAT-1's residue: an
+earlier declared break can be re-charged). This PR's own change stays additive + behavioral.
+
 Release relevance: signal-only.
 '''
