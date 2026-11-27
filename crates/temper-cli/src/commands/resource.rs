@@ -79,6 +79,19 @@ pub(crate) struct UpdateActionResult {
     pub status: &'static str,
     #[serde(flatten)]
     pub resource: temper_core::types::resource_view::ResourceView,
+    /// The edges the reference flags (`--relates-to`, `--depends-on`, …) asserted. Absent when
+    /// no reference flag was given.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub edges_asserted: Vec<AssertedReferenceEdge>,
+}
+
+/// One edge a reference flag on `resource update` asserted.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct AssertedReferenceEdge {
+    /// The relation's label, which is also the open-tier key the flag writes (`relates_to`, …).
+    pub label: &'static str,
+    pub target: temper_core::types::ids::ResourceId,
+    pub edge_handle: uuid::Uuid,
 }
 
 /// Result emitted by `temper resource delete`.
@@ -2505,6 +2518,104 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
     }
 }
 
+/// One edge a reference flag names: the relation and its resolved target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReferenceEdge {
+    relation: temper_workflow::types::graph::EdgeType,
+    target: temper_core::types::ids::ResourceId,
+}
+
+/// The edges `resource update`'s reference flags name, one per distinct (relation, target).
+///
+/// A reference flag used to write only its open-tier key (`relates_to`, …) and exit 0. Nothing
+/// projects those keys into the graph, so `graph traverse` and `resource connections` never saw
+/// the relation the flag's success claimed. Each flag now asserts its edge as
+/// well, and every value must therefore be a resource ref: a value that is not one is refused
+/// here, before anything is written, rather than written as a key no edge stands behind. A
+/// non-resource value (an external URL, a bare slug) still has a door that says what it does:
+/// `--open-meta-add`, which writes the key and asserts nothing.
+fn reference_edge_plan(params: &UpdateParams<'_>) -> Result<Vec<ReferenceEdge>> {
+    use temper_workflow::types::graph::EdgeType;
+    let flags: [(&str, &[String], EdgeType); 6] = [
+        ("--relates-to", params.relates_to, EdgeType::RelatesTo),
+        ("--references", params.references, EdgeType::References),
+        ("--depends-on", params.depends_on, EdgeType::DependsOn),
+        ("--extends", params.extends, EdgeType::Extends),
+        ("--preceded-by", params.preceded_by, EdgeType::PrecededBy),
+        ("--derived-from", params.derived_from, EdgeType::DerivedFrom),
+    ];
+    let mut plan: Vec<ReferenceEdge> = Vec::new();
+    for (flag, values, relation) in flags {
+        for value in values {
+            let target = temper_workflow::operations::parse_ref(value).map_err(|_| {
+                TemperError::BadRequest(format!(
+                    "{flag} takes a resource ref (a UUID or the decorated `slug-<uuid>` form), \
+                     because it asserts a `{relation}` edge to that resource; `{value}` is not \
+                     one. Nothing was written. To record a value that is not a resource without \
+                     an edge, use --open-meta-add '{{\"{relation}\":[\"{value}\"]}}'."
+                ))
+            })?;
+            let edge = ReferenceEdge { relation, target };
+            if !plan.contains(&edge) {
+                plan.push(edge);
+            }
+        }
+    }
+    Ok(plan)
+}
+
+/// Assert each planned reference edge from `source`, after the update has committed.
+///
+/// Every failure is fatal to the command's exit status: a reference flag never exits 0 without
+/// its edge. The update itself has already landed by then, so the edges that did land, and the
+/// one that did not, are named on stderr before the typed error is returned. Re-running the same
+/// command is safe: the open-tier key is a union (a repeat adds nothing) and an assert upserts on
+/// the active-edge invariant.
+fn assert_reference_edges(
+    runtime: &tokio::runtime::Runtime,
+    client: &temper_client::TemperClient,
+    source: temper_core::types::ids::ResourceId,
+    plan: &[ReferenceEdge],
+    act: &temper_core::types::ActInput,
+) -> Result<Vec<AssertedReferenceEdge>> {
+    use temper_core::types::relationship_requests::AssertRelationshipRequest;
+    let mut asserted: Vec<AssertedReferenceEdge> = Vec::with_capacity(plan.len());
+    for edge in plan {
+        let (edge_kind, polarity, label) = edge.relation.legacy_mapping();
+        let req = AssertRelationshipRequest {
+            source,
+            target: edge.target,
+            target_table: Default::default(),
+            edge_kind,
+            polarity,
+            label: label.to_string(),
+            weight: 1.0,
+            act: act.clone(),
+        };
+        match runtime.block_on(client.relationships().assert(&req)) {
+            Ok(ack) => asserted.push(AssertedReferenceEdge {
+                label,
+                target: edge.target,
+                edge_handle: ack.edge_handle,
+            }),
+            Err(e) => {
+                let landed: Vec<String> = asserted
+                    .iter()
+                    .map(|a| format!("{} → {}", a.label, a.target))
+                    .collect();
+                output::warning(format!(
+                    "the update landed, but the `{label}` edge to {} was not asserted. Edges \
+                     asserted before it: [{}]. Re-running this command is safe.",
+                    edge.target,
+                    landed.join(", ")
+                ));
+                return Err(crate::actions::runtime::client_err_to_temper(e));
+            }
+        }
+    }
+    Ok(asserted)
+}
+
 /// Resolve the update target: parse the ref to an id and read the current server row. The read
 /// is the existence check, so an erased or unreadable resource answers here (and drops its
 /// projection) before any write. Neither the resource's doc type nor a `--type-to` target is
@@ -2560,6 +2671,10 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     // error (escalate). Sources or a --content-block without a body are the server's to refuse.
     let resolved_sources = resolve_provenance_sources(params.sources)?;
 
+    // 2b'. The reference flags' edge targets, refused before any write when one is not a
+    //      resource ref (an edge needs a resource at its far end).
+    let edge_plan = reference_edge_plan(params)?;
+
     // 2c. Goal patch: --goal (set/replace, ref resolved via parse_ref) wins; --clear-goal
     // retracts; neither leaves the goal edge untouched. clap's `conflicts_with` guarantees at
     // most one is set, so the ordering here is defensive, not load-bearing.
@@ -2613,11 +2728,16 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         output::warning(format!("could not rewrite projection file: {e}"));
     }
 
+    // 6b. The reference flags' edges. The open-tier key the update just wrote is a soft
+    //     declaration that nothing projects into the graph, so the edge is asserted here.
+    let edges_asserted = assert_reference_edges(&runtime, &client, id, &edge_plan, &params.act)?;
+
     // 7. Emit the flat UpdateActionResult to stdout (Task 9: replaces the
     //    bespoke { "temper-slug", "content_hash" } shape).
     let result = UpdateActionResult {
         status: "ok",
         resource: updated_row,
+        edges_asserted,
     };
     let rendered = render_action_result_with_ref(&result, params.format)?;
     crate::output::plain(rendered);
@@ -2815,6 +2935,7 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
     let result = UpdateActionResult {
         status: "ok",
         resource: annotated,
+        edges_asserted: Vec::new(),
     };
     let rendered = render_action_result_with_ref(&result, params.format)?;
     crate::output::plain(rendered);
@@ -3601,6 +3722,61 @@ mod build_helpers_tests {
         }
     }
 
+    /// Each reference flag plans the edge of its own relation, to the resource its value names.
+    /// That the plan is then asserted against a live API is witnessed by
+    /// `each_reference_flag_asserts_its_edge` (`tests/e2e/tests/cli_reference_flags_e2e.rs`).
+    #[test]
+    fn each_reference_flag_plans_the_edge_of_its_relation() {
+        use temper_workflow::types::graph::EdgeType;
+        type Set = for<'a> fn(&mut UpdateParams<'a>, &'a [String]);
+        let cases: [(Set, EdgeType); 6] = [
+            (|p, v| p.relates_to = v, EdgeType::RelatesTo),
+            (|p, v| p.references = v, EdgeType::References),
+            (|p, v| p.depends_on = v, EdgeType::DependsOn),
+            (|p, v| p.extends = v, EdgeType::Extends),
+            (|p, v| p.preceded_by = v, EdgeType::PrecededBy),
+            (|p, v| p.derived_from = v, EdgeType::DerivedFrom),
+        ];
+        let uuid = "01a1d4a2-080b-77cf-840f-ab72e634bc8f";
+        // The bare UUID and the decorated form name one target, so they plan one edge.
+        let value = vec![uuid.to_string(), format!("some-title-{uuid}")];
+        let target =
+            temper_core::types::ids::ResourceId::from(uuid::Uuid::parse_str(uuid).expect("uuid"));
+        for (set, relation) in cases {
+            let mut params = empty_update_params("foo");
+            set(&mut params, &value);
+            assert_eq!(
+                reference_edge_plan(&params).expect("plans"),
+                vec![ReferenceEdge { relation, target }],
+                "the flag for `{relation}`"
+            );
+        }
+        assert!(reference_edge_plan(&empty_update_params("foo"))
+            .expect("plans")
+            .is_empty());
+    }
+
+    /// A value that is not a resource ref is refused, naming the flag, before any write: the
+    /// flag can no longer write a key that no edge stands behind.
+    #[test]
+    fn a_reference_flag_refuses_a_value_that_is_not_a_resource() {
+        for bad in ["https://example.com/x", "just-a-slug", ""] {
+            let value = vec![bad.to_string()];
+            let mut params = empty_update_params("foo");
+            params.depends_on = &value;
+            match reference_edge_plan(&params) {
+                Err(TemperError::BadRequest(m)) => {
+                    assert!(m.contains("--depends-on"), "names the flag: {m}");
+                    assert!(
+                        m.contains("--open-meta-add"),
+                        "names the edgeless door: {m}"
+                    );
+                }
+                other => panic!("`{bad}` must be refused as a bad request, got {other:?}"),
+            }
+        }
+    }
+
     /// A key none of the eight repeatable flags names still reaches the ADD channel,
     /// and reaches ONLY it.
     ///
@@ -3843,6 +4019,7 @@ mod action_result_tests {
         let result = UpdateActionResult {
             status: "ok",
             resource: row,
+            edges_asserted: Vec::new(),
         };
         let out = render_action_result_with_ref(&result, crate::format::OutputFormat::Json)
             .expect("json render");
@@ -3936,6 +4113,7 @@ mod action_result_tests {
         let result = UpdateActionResult {
             status: "ok",
             resource: row,
+            edges_asserted: Vec::new(),
         };
         let out =
             crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");

@@ -1,6 +1,8 @@
 #![cfg(feature = "test-db")]
 //! Witnesses for migration 20261117000030: a re-assertion of an active edge records the id of the
 //! edge it updated, and the edge's trail reaches the re-assertions recorded before that migration.
+//! And for 20261204000010: a re-assertion with the other polarity is refused before anything is
+//! recorded, naming the live edge, while the projector still collapses the historical ones.
 //!
 //! Before it, `fire` minted a fresh `edge_id` for every assertion. `_project_relationship_asserted`'s
 //! ON CONFLICT then reweighted the existing edge and answered with ITS id, so the recorded event named
@@ -97,11 +99,20 @@ async fn world(pool: &PgPool) -> World {
 }
 
 fn assert_action(w: &World, kind: EdgeKind, weight: f64) -> SeedAction<'static> {
+    polar_action(w, kind, EdgePolarity::Forward, weight)
+}
+
+fn polar_action(
+    w: &World,
+    kind: EdgeKind,
+    polarity: EdgePolarity,
+    weight: f64,
+) -> SeedAction<'static> {
     SeedAction::RelationshipAssert {
         src: AnchorRef::resource(w.task),
         tgt: AnchorRef::resource(w.goal),
         kind,
-        polarity: EdgePolarity::Forward,
+        polarity,
         label: Some("advances"),
         weight,
         home: EdgeHome::Context(w.home),
@@ -167,12 +178,23 @@ async fn asserted_edge_ids(pool: &PgPool) -> Vec<Uuid> {
 /// `edge_id`, appended as written, then projected. The projector is unchanged, so its ON CONFLICT
 /// still answers with the existing edge, and the event names an id with no row.
 async fn historical_reassertion(pool: &PgPool, w: &World, kind: EdgeKind) -> (Uuid, Uuid) {
+    historical_polar_reassertion(pool, w, kind, EdgePolarity::Forward).await
+}
+
+/// [`historical_reassertion`] with a chosen polarity: how a re-assertion with the other polarity
+/// was recorded before 20261204000010 refused it.
+async fn historical_polar_reassertion(
+    pool: &PgPool,
+    w: &World,
+    kind: EdgeKind,
+    polarity: EdgePolarity,
+) -> (Uuid, Uuid) {
     let payload = payloads::RelationshipAsserted {
         edge_id: EdgeId::from(Uuid::now_v7()),
         source: AnchorRef::resource(w.task),
         target: AnchorRef::resource(w.goal),
         edge_kind: kind,
-        polarity: EdgePolarity::Forward,
+        polarity,
         label: Some("advances".into()),
         weight: 0.25,
         home: AnchorRef::context(w.home),
@@ -367,4 +389,156 @@ async fn a_historical_reassertion_is_on_its_edges_trail(pool: PgPool) {
         vec![&p4],
         "e3's trail holds its own re-assertion and none of the others"
     );
+}
+
+/// How many `relationship_asserted` events the ledger holds.
+async fn asserted_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
+          WHERE et.name = 'relationship_asserted'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// The id, polarity and weight of the one live edge between the task and the goal.
+async fn the_edge(pool: &PgPool, w: &World) -> (Uuid, String, f64) {
+    sqlx::query_as(
+        "SELECT id, polarity::text, weight FROM kb_edges
+          WHERE source_id = $1 AND target_id = $2 AND NOT is_folded",
+    )
+    .bind(w.task.uuid())
+    .bind(w.goal.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Asserting the other polarity of a live edge is refused, typed, naming the live edge, and
+/// records nothing: no event, and the edge keeps its polarity and weight. Both directions.
+///
+/// FAILS IF: `relationship_assert` does not compare the live edge's polarity before the append
+/// (the inverse assertion then answers with the forward edge and records an `inverse` event the
+/// row never took, the bug), or the refusal is not decoded into `EdgePolarityConflict`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_reassertion_with_the_other_polarity_is_refused_naming_the_live_edge(pool: PgPool) {
+    let w = world(&pool).await;
+    for (live, other) in [
+        (EdgePolarity::Forward, EdgePolarity::Inverse),
+        (EdgePolarity::Inverse, EdgePolarity::Forward),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        let edge = fire(&mut tx, polar_action(&w, EdgeKind::Contains, live, 1.0))
+            .await
+            .expect("assert the edge")
+            .relationship()
+            .unwrap();
+        tx.commit().await.unwrap();
+        let events_before = asserted_count(&pool).await;
+        let row_before = the_edge(&pool, &w).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        let err = fire(&mut tx, polar_action(&w, EdgeKind::Contains, other, 0.5))
+            .await
+            .expect_err("the other polarity of a live edge is refused");
+        drop(tx);
+        let conflict = err
+            .downcast_ref::<writes::EdgePolarityConflict>()
+            .unwrap_or_else(|| panic!("the refusal is typed, got: {err:#}"));
+        assert_eq!(
+            *conflict,
+            writes::EdgePolarityConflict {
+                live_edge: edge,
+                live,
+                asked: other,
+            }
+        );
+        assert!(
+            err.to_string().contains(&edge.uuid().to_string()),
+            "the refusal names the live edge: {err}"
+        );
+        assert_eq!(
+            asserted_count(&pool).await,
+            events_before,
+            "nothing is recorded"
+        );
+        assert_eq!(
+            the_edge(&pool, &w).await,
+            row_before,
+            "the edge keeps its polarity and weight"
+        );
+
+        fold(&pool, &w, edge).await;
+    }
+}
+
+/// A re-assertion with the same polarity stays idempotent: it answers with the live edge and
+/// reweights it, under both polarities.
+///
+/// FAILS IF: the polarity check refuses a same-polarity re-assertion (an inverse edge compared
+/// against the payload's default, say).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_reassertion_with_the_same_polarity_stays_idempotent(pool: PgPool) {
+    let w = world(&pool).await;
+    for polarity in [EdgePolarity::Forward, EdgePolarity::Inverse] {
+        let mut ids = Vec::new();
+        for weight in [1.0, 0.5] {
+            let mut tx = pool.begin().await.unwrap();
+            ids.push(
+                fire(
+                    &mut tx,
+                    polar_action(&w, EdgeKind::Contains, polarity, weight),
+                )
+                .await
+                .expect("a same-polarity re-assertion is admitted")
+                .relationship()
+                .unwrap(),
+            );
+            tx.commit().await.unwrap();
+        }
+        assert_eq!(
+            ids[0], ids[1],
+            "the re-assertion answers with the live edge"
+        );
+        let (id, _, weight) = the_edge(&pool, &w).await;
+        assert_eq!((id, weight), (ids[0].uuid(), 0.5), "one edge, reweighted");
+        fold(&pool, &w, ids[0]).await;
+    }
+}
+
+/// The ledger's historical re-assertions with the other polarity, recorded before the refusal
+/// existed, replay exactly as they projected: one row, keeping the first polarity, every
+/// projection table byte-identical.
+///
+/// FAILS IF: the polarity check is moved into `_project_relationship_asserted` (replay then
+/// refuses the historical event) or the projector's conflict handling changes (replay then
+/// projects a second row or retypes the first).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn historical_reassertions_with_the_other_polarity_replay_as_they_projected(pool: PgPool) {
+    use temper_substrate::replay;
+
+    let w = world(&pool).await;
+    let edge = assert_edge(&pool, &w, EdgeKind::Contains, 1.0).await;
+    let (_, answered) =
+        historical_polar_reassertion(&pool, &w, EdgeKind::Contains, EdgePolarity::Inverse).await;
+    assert_eq!(answered, edge.uuid(), "it collapsed into the live edge");
+    let (_, polarity, weight) = the_edge(&pool, &w).await;
+    assert_eq!(
+        (polarity.as_str(), weight),
+        ("forward", 0.25),
+        "setup: the row kept its polarity and took the weight"
+    );
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+    for ((ta, a), (tb, b)) in before.iter().zip(after.iter()) {
+        assert_eq!(ta, tb);
+        assert_eq!(a, b, "projection table {ta} diverged under replay");
+    }
+    let (id, polarity, _) = the_edge(&pool, &w).await;
+    assert_eq!((id, polarity.as_str()), (edge.uuid(), "forward"));
 }

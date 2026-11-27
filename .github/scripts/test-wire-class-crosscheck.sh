@@ -530,6 +530,36 @@ vocab_probe '.components.schemas.Reason.oneOf |= (.[0:2] + [{"type":"string","en
 vocab_probe '.components.schemas.Reason.oneOf |= ([.[0] | .enum = ["alpha_renamed"]] + .[1:2] + [{"type":"string","enum":["gamma"]}] + .[2:])' \
   moved "open-vocabulary growth beside a renamed member computes as moved"
 
+# 15pa–15pf — the same open vocabulary under `anyOf` (2026-11-27): the four open string enums
+# moved from `oneOf` to `anyOf`, so the next new reason, act, id kind or score kind must still
+# read as growth. `anyOf` is ORDERED (a client may take the first matching arm), so the rule is
+# narrower than 15p's: the catch-all stays last and the named arms keep their order.
+jq -S '.components.schemas.Reason |= ({anyOf: .oneOf} + del(.oneOf))' "${WORK}/vocab_base.json" > "${WORK}/vocab_any_base.json"
+any_probe() { # $1 = jq mutation, $2 = expected verdict, $3 = label
+  jq -S "$1" "${WORK}/vocab_any_base.json" > "${WORK}/vocab_any_head.json"
+  v="$(derive_with "${WORK}/vocab_any_base.json" "${WORK}/vocab_any_head.json")"
+  if [ "$v" = "$2" ]; then ok "derivation: $3"; else bad "derivation: $3" "verdict=$v (want $2)"; fi
+}
+# 15pa — an enum arm inserted before the catch-all: grew. BITE-PROVEN: without the anyOf arm in
+# wire-shape-lib.jq this computes `moved` (index-paired, the catch-all's index shifts).
+any_probe '.components.schemas.Reason.anyOf |= .[0:2] + [{"type":"string","description":"new","enum":["gamma"]}] + .[2:]' \
+  grew "an anyOf open vocabulary gaining an enum arm before its catch-all computes as grew"
+# 15pb — inserted between two named arms, order of the survivors kept: grew.
+any_probe '.components.schemas.Reason.anyOf |= .[0:1] + [{"type":"string","enum":["gamma"]}] + .[1:]' \
+  grew "an anyOf open vocabulary gaining an arm between named arms computes as grew"
+# 15pc — losing a named arm: moved.
+any_probe '.components.schemas.Reason.anyOf |= ([.[0]] + .[2:])' \
+  moved "an anyOf open vocabulary losing a named arm computes as moved"
+# 15pd — reordering two named arms, nothing gained: moved (order is observable under anyOf).
+any_probe '.components.schemas.Reason.anyOf |= ([.[1], .[0]] + .[2:])' \
+  moved "an anyOf open vocabulary reordering its named arms computes as moved"
+# 15pe — growing while reordering: moved, the growth does not launder the reorder.
+any_probe '.components.schemas.Reason.anyOf |= ([.[1], .[0]] + [{"type":"string","enum":["gamma"]}] + .[2:])' \
+  moved "an anyOf open vocabulary growing while reordering computes as moved"
+# 15pf — the new arm placed AFTER the catch-all: moved — a first-match client never reaches it.
+any_probe '.components.schemas.Reason.anyOf += [{"type":"string","enum":["gamma"]}]' \
+  moved "an anyOf open vocabulary gaining an arm after its catch-all computes as moved"
+
 # 15v–15z — the UNORDERED-oneOf arm (2026-10-17): a `oneOf` is a set, so its arm order is not
 # shape. utoipa 6 emits a nullable reference as `[$ref, {type: null}]` where 5 emitted
 # `[{type: null}, $ref]`. Response-reachable, so the input-side tolerance cannot pass it.

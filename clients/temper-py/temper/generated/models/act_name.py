@@ -13,48 +13,53 @@
 
 
 from __future__ import annotations
+from inspect import getfullargspec
 import json
 import pprint
+import re  # noqa: F401
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
-from typing import Any, List, Optional
-from pydantic import StrictStr, Field
-from typing import Union, List, Set, Optional, Dict
+from typing import Optional
+from typing import Union, Any, List, Set, TYPE_CHECKING, Optional, Dict
 from typing_extensions import Literal, Self
+from pydantic import Field
 
-ACTNAME_ONE_OF_SCHEMAS = ["str"]
+ACTNAME_ANY_OF_SCHEMAS = ["str"]
 
 class ActName(BaseModel):
     """
     The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and the mechanic currently serving it is evidence rather than identity.  OPEN discriminator — adding an act is additive.
     """
-    # data type: str
-    oneof_schema_1_validator: Optional[StrictStr] = Field(default=None, description="*I can quote the exact words.*")
-    # data type: str
-    oneof_schema_2_validator: Optional[StrictStr] = Field(default=None, description="*A concept, no exact words; search everything I can see.*")
-    # data type: str
-    oneof_schema_3_validator: Optional[StrictStr] = Field(default=None, description="*A concept, plus a set to search inside.*")
-    # data type: str
-    oneof_schema_4_validator: Optional[StrictStr] = Field(default=None, description="*I can say what these things ARE; I have no question about what they mean.*  An act with no intention — a pure selection (`list-resources-with`, which returns its rows, asks none either). It narrows by what is known about a resource and orders nothing, so it SELECTS without SCORING, which is the distinction [`ActDeclaration::orders_by`] carries and which the registry's invariants had folded together under `produces.is_some()` until this act arrived.  Its output is a set to pipe, never rows to read: a stage running it cannot appear in `returns`, for the same reason a combinator cannot — rows with no ordering quantity have nothing to score them, and the assembler would drop every one while reporting `disposition: answered`. The rows themselves come back through [`ActName::ListResourcesWith`].")
-    # data type: str
-    oneof_schema_5_validator: Optional[StrictStr] = Field(default=None, description="*I can say what these things ARE, and I want them back as rows.*  `find-resources-with`'s mechanic under a returning asker: the same filters and anchors, plus a resource bound, ordered by `created` (newest first unless the stage's `order` says otherwise) and paged. It **returns and feeds nothing**: its output is a page, and a page piped into a later stage would look like the set it is a sample of, so naming it as any stage's input is refused `stage_not_pipeable`.")
-    # data type: str
-    oneof_schema_6_validator: Optional[StrictStr] = Field(default=None, description="*A found thing; I want its neighbours.*")
-    # data type: str
-    oneof_schema_7_validator: Optional[StrictStr] = Field(default=None, description="*A question about what a scope knows.*")
-    # data type: str
-    oneof_schema_8_validator: Optional[StrictStr] = Field(default=None, description="*A claim; I want its defensibility.*")
-    # data type: str
-    oneof_schema_9_validator: Optional[StrictStr] = Field(default=None, description="The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that promoting it to a real act requires DELETING an explicit refusal.")
-    # data type: str
-    oneof_schema_10_validator: Optional[StrictStr] = None
-    actual_instance: Optional[Union[str]] = None
-    one_of_schemas: Set[str] = { "str" }
 
-    model_config = ConfigDict(
-        validate_assignment=True,
-        protected_namespaces=(),
-    )
+    # data type: str
+    anyof_schema_1_validator: Optional[StrictStr] = Field(default=None, description="*I can quote the exact words.*")
+    # data type: str
+    anyof_schema_2_validator: Optional[StrictStr] = Field(default=None, description="*A concept, no exact words; search everything I can see.*")
+    # data type: str
+    anyof_schema_3_validator: Optional[StrictStr] = Field(default=None, description="*A concept, plus a set to search inside.*")
+    # data type: str
+    anyof_schema_4_validator: Optional[StrictStr] = Field(default=None, description="*I can say what these things ARE; I have no question about what they mean.*  An act with no intention — a pure selection (`list-resources-with`, which returns its rows, asks none either). It narrows by what is known about a resource and orders nothing, so it SELECTS without SCORING, which is the distinction [`ActDeclaration::orders_by`] carries and which the registry's invariants had folded together under `produces.is_some()` until this act arrived.  Its output is a set to pipe, never rows to read: a stage running it cannot appear in `returns`, for the same reason a combinator cannot — rows with no ordering quantity have nothing to score them, and the assembler would drop every one while reporting `disposition: answered`. The rows themselves come back through [`ActName::ListResourcesWith`].")
+    # data type: str
+    anyof_schema_5_validator: Optional[StrictStr] = Field(default=None, description="*I can say what these things ARE, and I want them back as rows.*  `find-resources-with`'s mechanic under a returning asker: the same filters and anchors, plus a resource bound, ordered by `created` (newest first unless the stage's `order` says otherwise) and paged. It **returns and feeds nothing**: its output is a page, and a page piped into a later stage would look like the set it is a sample of, so naming it as any stage's input is refused `stage_not_pipeable`.")
+    # data type: str
+    anyof_schema_6_validator: Optional[StrictStr] = Field(default=None, description="*A found thing; I want its neighbours.*")
+    # data type: str
+    anyof_schema_7_validator: Optional[StrictStr] = Field(default=None, description="*A question about what a scope knows.*")
+    # data type: str
+    anyof_schema_8_validator: Optional[StrictStr] = Field(default=None, description="*A claim; I want its defensibility.*")
+    # data type: str
+    anyof_schema_9_validator: Optional[StrictStr] = Field(default=None, description="The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that promoting it to a real act requires DELETING an explicit refusal.")
+    # data type: str
+    anyof_schema_10_validator: Optional[StrictStr] = None
+    if TYPE_CHECKING:
+        actual_instance: Optional[Union[str]] = None
+    else:
+        actual_instance: Any = None
+    any_of_schemas: Set[str] = { "str" }
 
+    model_config = {
+        "validate_assignment": True,
+        "protected_namespaces": (),
+    }
 
     def __init__(self, *args, **kwargs) -> None:
         if args:
@@ -67,81 +72,77 @@ class ActName(BaseModel):
             super().__init__(**kwargs)
 
     @field_validator('actual_instance')
-    def actual_instance_must_validate_oneof(cls, v):
+    def actual_instance_must_validate_anyof(cls, v):
         instance = ActName.model_construct()
         error_messages = []
-        match = 0
         # validate data type: str
         try:
-            instance.oneof_schema_1_validator = v
-            match += 1
+            instance.anyof_schema_1_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_2_validator = v
-            match += 1
+            instance.anyof_schema_2_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_3_validator = v
-            match += 1
+            instance.anyof_schema_3_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_4_validator = v
-            match += 1
+            instance.anyof_schema_4_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_5_validator = v
-            match += 1
+            instance.anyof_schema_5_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_6_validator = v
-            match += 1
+            instance.anyof_schema_6_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_7_validator = v
-            match += 1
+            instance.anyof_schema_7_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_8_validator = v
-            match += 1
+            instance.anyof_schema_8_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_9_validator = v
-            match += 1
+            instance.anyof_schema_9_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_10_validator = v
-            match += 1
+            instance.anyof_schema_10_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
-        if match > 1:
-            # more than 1 match
-            raise ValueError("Multiple matches found when setting `actual_instance` in ActName with oneOf schemas: str. Details: " + ", ".join(error_messages))
-        elif match == 0:
+        if error_messages:
             # no match
-            raise ValueError("No match found when setting `actual_instance` in ActName with oneOf schemas: str. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when setting the actual_instance in ActName with anyOf schemas: str. Details: " + ", ".join(error_messages))
         else:
             return v
 
     @classmethod
-    def from_dict(cls, obj: Union[str, Dict[str, Any]]) -> Self:
+    def from_dict(cls, obj: Dict[str, Any]) -> Self:
         return cls.from_json(json.dumps(obj))
 
     @classmethod
@@ -149,105 +150,100 @@ class ActName(BaseModel):
         """Returns the object represented by the json string"""
         instance = cls.model_construct()
         error_messages = []
-        match = 0
-
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_1_validator = json.loads(json_str)
+            instance.anyof_schema_1_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_1_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_1_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_2_validator = json.loads(json_str)
+            instance.anyof_schema_2_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_2_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_2_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_3_validator = json.loads(json_str)
+            instance.anyof_schema_3_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_3_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_3_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_4_validator = json.loads(json_str)
+            instance.anyof_schema_4_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_4_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_4_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_5_validator = json.loads(json_str)
+            instance.anyof_schema_5_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_5_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_5_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_6_validator = json.loads(json_str)
+            instance.anyof_schema_6_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_6_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_6_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_7_validator = json.loads(json_str)
+            instance.anyof_schema_7_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_7_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_7_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_8_validator = json.loads(json_str)
+            instance.anyof_schema_8_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_8_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_8_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_9_validator = json.loads(json_str)
+            instance.anyof_schema_9_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_9_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_9_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_10_validator = json.loads(json_str)
+            instance.anyof_schema_10_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_10_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_10_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
 
-        if match > 1:
-            # more than 1 match
-            raise ValueError("Multiple matches found when deserializing the JSON string into ActName with oneOf schemas: str. Details: " + ", ".join(error_messages))
-        elif match == 0:
+        if error_messages:
             # no match
-            raise ValueError("No match found when deserializing the JSON string into ActName with oneOf schemas: str. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when deserializing the JSON string into ActName with anyOf schemas: str. Details: " + ", ".join(error_messages))
         else:
             return instance
 
@@ -269,7 +265,6 @@ class ActName(BaseModel):
         if hasattr(self.actual_instance, "to_dict") and callable(self.actual_instance.to_dict):
             return self.actual_instance.to_dict()
         else:
-            # primitive type
             return self.actual_instance
 
     def to_str(self) -> str:

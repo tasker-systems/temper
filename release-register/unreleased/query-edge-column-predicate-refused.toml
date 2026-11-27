@@ -1,6 +1,6 @@
 title    = "An edge property predicate on created, edge_kind, label, polarity or weight is refused as column_not_a_property, not answered empty"
 pr       = "self"
-classes  = ["additive", "behavioral"]
+classes  = ["additive", "behavioral", "spec-correction"]
 surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
 status   = "signal-only"
 body = '''
@@ -28,5 +28,13 @@ that used to answer being refused. Witnesses: `an_edge_predicate_on_an_edge_colu
 (crates/temper-api/tests/query_edge_column_predicate_test.rs) and
 `an_edge_predicate_on_an_edge_column_is_refused_naming_the_field` (temper-core validate tests,
 shown to fail with the edge list emptied); `the_published_column_fields_are_the_refused_ones` now
-holds the edge list to the published description. Release relevance: signal-only.
+holds the edge list to the published description.
+
+Why spec-correction too (ruling 35, decision 01a21d95-1e3d-70bb-a01f-c3b2d3e9e658): the shape
+movement the declared-class gate charges here is not this PR's. It is #1480's oneOf→anyOf
+correction of RefusalReason (entry `open-enums-publish-any-of`), which the release-relative reading
+re-charges on every operation this PR touches that reaches RefusalReason (COMPAT-1's residue: an
+earlier declared break can be re-charged). This PR's own change stays additive + behavioral.
+
+Release relevance: signal-only.
 '''

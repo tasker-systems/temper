@@ -1,0 +1,25 @@
+title    = "A re-assertion of a live edge with the other polarity is refused as a conflict naming the live edge"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout"]
+status   = "signal-only"
+body = '''
+An edge's live identity is its source, target, kind, label and home; polarity is not part of it.
+Asserting an existing live edge again with the other polarity used to answer 200 with the live
+edge's handle while leaving its polarity unchanged, and recorded an event whose polarity the row
+never took. relationship_assert now refuses it before anything is recorded (SQLSTATE TF005,
+migration 20261204000010): HTTP answers 409 CONFLICT, the CLI reports it as a conflict and MCP as
+invalid_params, each with a sentence naming the live edge's handle to retype or fold. Re-asserting
+with the same polarity is unchanged: 200, the same handle, reweighted. A cognitive-map reconcile
+that asks for the other direction of a live edge rolls back as a whole with the same 409.
+
+The projector is unchanged, so replay of earlier contradictory re-assertions projects as it did.
+The migration replaces one function and touches no row. No schema or response shape change.
+
+Who observes: a caller asserting the opposite direction of an edge it already holds. Skew: an
+older binary against the new database renders the refusal as an internal error (500) and still
+records nothing; a newer binary against an older database sees the old behaviour. Witnesses:
+reassertion_edge_id.rs (refused naming the edge, same polarity idempotent, historical
+contradictions replay identically), relationship_handler_test.rs (the 409), and the MCP map_err
+test. Release relevance: signal-only.
+'''

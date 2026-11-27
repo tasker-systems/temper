@@ -206,6 +206,19 @@ pub(crate) fn erased_edge_refused(e: &anyhow::Error) -> Option<uuid::Uuid> {
     })
 }
 
+/// The refusal of a re-assertion with the other polarity
+/// ([`temper_substrate::writes::EdgePolarityConflict`], SQLSTATE `TF005`), when it is anywhere in
+/// `e`'s chain: its sentence, which names the live edge. Every bridge a relationship assert reaches
+/// (`api_err`, [`ApiError::from_write`], the blob relation door) renders it as the caller's
+/// `409 CONFLICT`, so it keeps that kind through every door and is never a `500`.
+pub(crate) fn edge_polarity_conflict(e: &anyhow::Error) -> Option<String> {
+    e.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<temper_substrate::writes::EdgePolarityConflict>()
+            .map(ToString::to_string)
+    })
+}
+
 pub type ApiResult<T> = Result<T, ApiError>;
 
 impl ApiError {
@@ -217,13 +230,16 @@ impl ApiError {
     /// the wire: the caller sees the generic internal-error message, and the context
     /// string is log-only — the log line's prefix that routes the failure to an operator.
     /// A write's failure inside its transaction: [`ApiError::ResourceBusy`] when it is a lock wait
-    /// past the write-side bound (`55P03` anywhere in the chain), else [`ApiError::Internal`]
-    /// carrying the message. For a service that bridges a substrate `anyhow` error itself.
+    /// past the write-side bound (`55P03` anywhere in the chain), [`ApiError::Conflict`] for a
+    /// re-assertion with the other polarity (`edge_polarity_conflict`), else
+    /// [`ApiError::Internal`] carrying the message. For a service that bridges a substrate `anyhow` error itself.
     pub fn from_write(err: anyhow::Error) -> Self {
         if crate::backend::write_floor::hit_lock_bound(&err) {
             ApiError::ResourceBusy
         } else if exceeded_program_limit(&err) {
             ApiError::BadRequest(VALUE_TOO_LARGE_MESSAGE.to_string())
+        } else if let Some(conflict) = edge_polarity_conflict(&err) {
+            ApiError::Conflict(conflict)
         } else {
             ApiError::Internal(err.to_string())
         }

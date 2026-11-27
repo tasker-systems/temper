@@ -1,6 +1,6 @@
 title    = "A resource_filter field the server does not declare is refused as unknown_filter_field, naming it, not ignored"
 pr       = "self"
-classes  = ["additive", "behavioral"]
+classes  = ["additive", "behavioral", "spec-correction"]
 surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
 status   = "signal-only"
 body = '''
@@ -47,5 +47,12 @@ is a body that used to answer being refused, the class `query-column-predicate-r
 `many_unknown_resource_filter_fields_are_one_bounded_refusal` and
 `an_unknown_resource_filter_field_survives_a_round_trip` (temper-core validate tests), and
 `every_declared_field_is_named_and_no_other` (temper-core filter tests).
+
+Why spec-correction too (ruling 35, decision 01a21d95-1e3d-70bb-a01f-c3b2d3e9e658): the shape
+movement the declared-class gate charges here is not this PR's. It is #1480's oneOf→anyOf
+correction of RefusalReason (entry `open-enums-publish-any-of`), which the release-relative reading
+re-charges on every operation this PR touches that reaches RefusalReason (COMPAT-1's residue: an
+earlier declared break can be re-charged). This PR's own change stays additive + behavioral.
+
 Release relevance: signal-only.
 '''
