@@ -159,7 +159,10 @@ def param_key: "\(.in)|\(.name)";
 # a new `enum` arm NAMES a member without narrowing or widening what is accepted,
 # and is tolerant in both skew directions. This is how utoipa renders a serde enum
 # with an `#[serde(untagged)] Other(String)` arm — `RefusalReason`, open by recorded
-# decision so that a new way to decline is not a breaking change. Positional
+# decision so that a new way to decline is not a breaking change. (Since 2026-11-27
+# `OpenStringEnumAddon` republishes the four such enums as `anyOf`, judged by the ordered
+# rule below; this `oneOf` rule still governs the pins cut before that, and any other
+# `oneOf` of this shape.) Positional
 # comparison read every such addition as moved, because the new arm shifts the
 # catch-all's index.
 #
@@ -186,6 +189,29 @@ def open_vocabulary_grew($b; $h):
   and (($h | length) > ($b | length))
   and ([ $h[] | sans_prose ] as $hs
        | [ $b[] | sans_prose ] | all(. as $x | any($hs[]; . == $x)));
+
+# The same open vocabulary under `anyOf` (added 2026-11-27, with the four open string enums'
+# move from `oneOf` to `anyOf`, task 01a113c1-f576-7a02-894d-6208a5b42f90). The accepted set is
+# the same argument as above: every string, base and head alike. What `anyOf` adds is ORDER: a
+# generated client may take the FIRST matching arm (temper-rb's does), so the growth admitted
+# here is narrower than `oneOf`'s:
+# * the catch-all is the LAST arm on both sides, so a named value is always tried before it;
+# * the base's named arms survive, modulo prose, in their base ORDER (new arms may sit between
+#   them, never reorder them);
+# * every head-only arm is a plain string `enum`, which `open_vocabulary` already requires.
+# A dropped, edited or reordered named arm, a catch-all moved off the end, or a second catch-all
+# falls through to the index-paired array arm, which reads it as moved.
+def is_subsequence($small; $big):
+  if ($small | length) == 0 then true
+  elif ($big | length) == 0 then false
+  elif $small[0] == $big[0] then is_subsequence($small[1:]; $big[1:])
+  else is_subsequence($small; $big[1:])
+  end;
+def open_vocabulary_grew_ordered($b; $h):
+  open_vocabulary($b) and open_vocabulary($h)
+  and (($h | length) > ($b | length))
+  and ($b[-1] | is_catch_all) and ($h[-1] | is_catch_all)
+  and is_subsequence([ $b[:-1][] | sans_prose ]; [ $h[:-1][] | sans_prose ]);
 
 def broke_node($b; $h; $side):
   if ($b | type) != ($h | type) then true
@@ -255,6 +281,8 @@ def broke_node($b; $h; $side):
           elif $k == "required" and (($b[$k] | type) == "array")
           then ($h[$k] != $b[$k])
           elif $k == "oneOf" and open_vocabulary_grew($b[$k]; $h[$k])
+          then false
+          elif $k == "anyOf" and open_vocabulary_grew_ordered($b[$k]; $h[$k])
           then false
           # A `oneOf` is a set: exactly one arm must match, so arm ORDER means nothing to a
           # validator or to any generated client. utoipa 6 emits a nullable reference as
