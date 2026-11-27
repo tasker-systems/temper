@@ -22,13 +22,17 @@ output. What makes it cheaper is a predicate the act can push into its own scan:
 owner, an anchor, a stage or status.
 
 ```
-slow:  find-resources-with { }                    → limit 50
-fast:  find-resources-with { doc_type, anchor }   → limit 50
+slow:  list-resources-with  bound: a context                                     limit 50
+fast:  list-resources-with  bound: a context  resource_filter: { doc_type, stage }  limit 50
 ```
 
-Both return at most 50 rows. Only the second one *looks at* a bounded set. When you are handing
-one stage's output into another as a bound, this matters twice over — the consumer's limit prunes
-what the consumer emits, never what the producer had to walk.
+Both return at most 50 rows. Only the second one *looks at* a narrowed set: its filter is applied
+in the scan, beneath the page. `limit` and `offset` belong to `list-resources-with`, the act that
+returns rows. Its sibling `find-resources-with` takes the same `resource_filter` and the same
+context or cogmap bound, but admits no `limit` at all: it is a selection, and its whole matching set
+is what a later stage receives. So the filter is the only thing that narrows it. When you are
+handing one stage's output into another as a bound, this matters twice over — the consumer's limit
+prunes what the consumer emits, never what the producer had to walk.
 
 ## Every stage you declare executes
 
