@@ -86,8 +86,11 @@ made, and that the movement brings the contract to what the server always did.
   is still `additive`'s.
 - **The pin's record.** The pin gate judges the tree rather than the PR, so each corrected operation
   is also recorded in `corrections.json` beside the current pin (`schemas/versions/<M.m>/`), with
-  its corrected shape and this entry's **id** as `register_entry`. The pin gate resolves that id
-  across every window and checks the entry declares `spec-correction`.
+  its corrected shape and this entry's **id** as `register_entry`. A correction to a `$ref`'d
+  component is recorded once, under `component_corrections`, rather than once per operation that
+  reaches it. The pin gate resolves that id across every window and checks the entry declares
+  `spec-correction`. A component correction changes what every reaching operation is compared
+  against, so its entry names what the server always did for all of them.
 
 ## What the gate measures against
 

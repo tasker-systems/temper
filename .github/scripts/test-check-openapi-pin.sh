@@ -283,6 +283,129 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'more than once'; then
   ok "corrections: correcting one operation twice fails"
 else bad "corrections: correcting one operation twice fails" "exit=$rc" "$out"; fi
 
+# ── 14. COMPONENT CORRECTIONS — a `$ref`'d component's recorded shape is the baseline ───────────
+# The fixture mirrors the first real instance: an open string enum pinned as a `oneOf` whose bare
+# string arm overlaps its named arm (so no value validates against exactly one), corrected to
+# `anyOf`. The pinned operation reaches it only through a `$ref`, so an OPERATION correction cannot
+# record it without restating the operation; the component correction records it once.
+CROW='open-enums-publish-any-of'
+OPEN_ENUM_ONE_OF='{"oneOf":[{"type":"string","enum":["known"]},{"type":"string"}],"description":"An open reason."}'
+with_open_enum() { # $1 = file: add the open enum (as pinned) and a $ref to it from the GET answer
+  jq -S --argjson e "$OPEN_ENUM_ONE_OF" \
+    '.components.schemas.OpenReason = $e
+     | .paths["/api/blobs/{id}"].get.responses["200"].content["application/json"].schema.properties.reason = {"$ref":"#/components/schemas/OpenReason"}' \
+    "$1" > "${1}.tmp" && mv "${1}.tmp" "$1"
+}
+any_of_head() { # the corrected publication: the same arms under anyOf
+  jq -S '.components.schemas.OpenReason |= ({anyOf: .oneOf} + del(.oneOf))' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+}
+write_component_register() { # $1 = classes for the component entry
+  rm -rf "$REGISTER"
+  mkdir -p "${REGISTER}/unreleased"
+  cp "${REPO}/release-register/vocabulary.toml" "${REGISTER}/vocabulary.toml"
+  entry_toml "Open enums publish anyOf" "$1" > "${REGISTER}/unreleased/${CROW}.toml"
+  entry_toml "Blob reads document what the server always returned" "behavioral, spec-correction" > "${REGISTER}/unreleased/${ROW}.toml"
+}
+write_component_corrections() { # $1 = register entry id, $2 = component name
+  jq -n --arg row "$1" --arg c "$2" --slurpfile h "$EMIT" \
+    '{component_corrections: [{component: $c, register_entry: $row, reason: "fixture", schema: $h[0].components.schemas.OpenReason}]}' \
+    > "${PINDIR}/0.5/corrections.json"
+}
+component_setup() { # $1 = classes for the component entry
+  reset_fixtures
+  with_open_enum "${PINDIR}/0.5/openapi.json"
+  with_open_enum "$EMIT"
+  any_of_head
+  write_component_register "$1"
+  write_component_corrections "$CROW" "OpenReason"
+}
+
+# (a) the anyOf change passes with the component correction recorded, and the pass names it.
+component_setup "spec-correction"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '1 recorded correction(s) applied: component OpenReason'; then
+  ok "component corrections: oneOf→anyOf on a \$ref'd component passes with the record, and the pass names it"
+else bad "component corrections: oneOf→anyOf on a \$ref'd component passes with the record, and the pass names it" "exit=$rc" "$out"; fi
+
+# (b) the same change with the record removed fails, naming the component.
+component_setup "spec-correction"
+rm "${PINDIR}/0.5/corrections.json"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'schema changed: OpenReason'; then
+  ok "component corrections: the same change with no record fails, naming the component"
+else bad "component corrections: the same change with no record fails, naming the component" "exit=$rc" "$out"; fi
+
+# (c) a component correction whose register entry is not spec-correction, or is missing, fails.
+component_setup "behavioral"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'not spec-correction'; then
+  ok "component corrections: an entry not declared spec-correction fails"
+else bad "component corrections: an entry not declared spec-correction fails" "exit=$rc" "$out"; fi
+
+component_setup "spec-correction"
+write_component_corrections "an-entry-nobody-wrote" "OpenReason"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'does not carry'; then
+  ok "component corrections: a register entry that does not exist fails"
+else bad "component corrections: a register entry that does not exist fails" "exit=$rc" "$out"; fi
+
+# Not a waiver for the component: moving it again is judged against the RECORDED shape.
+component_setup "spec-correction"
+jq -S '.components.schemas.OpenReason.anyOf[0].enum = ["renamed"]' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'schema changed: OpenReason'; then
+  ok "component corrections: a corrected component that moves again fails"
+else bad "component corrections: a corrected component that moves again fails" "exit=$rc" "$out"; fi
+
+# Not a waiver for anything else: other movement beside the correction still fails.
+component_setup "spec-correction"
+jq -S 'del(.components.schemas.Example)' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'schema removed: Example'; then
+  ok "component corrections: movement elsewhere still fails beside an applied component correction"
+else bad "component corrections: movement elsewhere still fails beside an applied component correction" "exit=$rc" "$out"; fi
+
+component_setup "spec-correction"
+write_component_corrections "$CROW" "NoSuchComponent"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'corrects a component the 0.5 pin does not have: NoSuchComponent'; then
+  ok "component corrections: correcting a component the pin lacks fails"
+else bad "component corrections: correcting a component the pin lacks fails" "exit=$rc" "$out"; fi
+
+component_setup "spec-correction"
+jq '.component_corrections += .component_corrections' "${PINDIR}/0.5/corrections.json" > "${WORK}/c.tmp" && mv "${WORK}/c.tmp" "${PINDIR}/0.5/corrections.json"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'same component more than once'; then
+  ok "component corrections: correcting one component twice fails"
+else bad "component corrections: correcting one component twice fails" "exit=$rc" "$out"; fi
+
+# Removal is not a correction: the recorded schema must be an object.
+component_setup "spec-correction"
+jq '.component_corrections[0].schema = null' "${PINDIR}/0.5/corrections.json" > "${WORK}/c.tmp" && mv "${WORK}/c.tmp" "${PINDIR}/0.5/corrections.json"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'an object schema'; then
+  ok "component corrections: a null schema (a removal) is refused"
+else bad "component corrections: a null schema (a removal) is refused" "exit=$rc" "$out"; fi
+
+# A misspelled array name refuses rather than silently applying nothing.
+component_setup "spec-correction"
+jq '{component_correction: .component_corrections}' "${PINDIR}/0.5/corrections.json" > "${WORK}/c.tmp" && mv "${WORK}/c.tmp" "${PINDIR}/0.5/corrections.json"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'does not read: component_correction'; then
+  ok "component corrections: an unknown top-level key fails, naming it"
+else bad "component corrections: an unknown top-level key fails, naming it" "exit=$rc" "$out"; fi
+
+# (d) operation and component corrections together: both apply, and the pass names both.
+component_setup "spec-correction"
+corrected_head > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+jq --arg row "$ROW" --slurpfile h "$EMIT" \
+  '.corrections = [{path: "/api/blobs/{id}", method: "get", register_entry: $row, reason: "fixture", operation: $h[0].paths["/api/blobs/{id}"].get}]' \
+  "${PINDIR}/0.5/corrections.json" > "${WORK}/c.tmp" && mv "${WORK}/c.tmp" "${PINDIR}/0.5/corrections.json"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '2 recorded correction(s) applied: GET /api/blobs/{id}, component OpenReason'; then
+  ok "corrections: operation and component corrections apply together, and the pass names both"
+else bad "corrections: operation and component corrections apply together, and the pass names both" "exit=$rc" "$out"; fi
+
 echo
 echo "  ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

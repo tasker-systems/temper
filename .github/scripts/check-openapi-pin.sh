@@ -55,6 +55,37 @@
 # that names an operation the pin does not have, names an operation twice, or names a register entry
 # that is missing or not declared `spec-correction` fails the gate.
 #
+# COMPONENT CORRECTIONS
+# ---------------------
+# `corrections.json` may also carry `component_corrections`: entries that correct one pinned
+# `components.schemas` member rather than one operation, each with `component` (the schema's
+# name), `schema` (its corrected shape), `register_entry` and `reason`. They exist because a
+# shape defect can live in a `$ref`'d component that dozens of operations reach, and recording it
+# operation by operation would mean restating every one of them — a record nobody could review.
+# (The first instance: the four open string enums, `ActName`, `IdKind`, `RefusalReason` and
+# `ScoreKind`, pinned as a `oneOf` whose bare-string arm overlaps every named arm, so no value
+# validated against exactly one arm; corrected to `anyOf`.)
+#
+# What one admits: the named pinned component is replaced by the recorded `schema` before the
+# comparison, so every operation that reaches it through a `$ref` is judged against the corrected
+# shape. That is the same corrected-baseline rule as an operation correction, at component grain.
+#
+# What one does not admit:
+# * Any other movement. Every other component and every operation is judged exactly as before,
+#   and a later change to the corrected component is judged against the RECORDED shape.
+# * A component the pin does not have — that is growth, which needs no record — or one named twice.
+# * Removal. The recorded `schema` must be an object, so a component cannot be corrected out of
+#   existence; deleting a pinned component is still movement.
+# * An entry that is not declared `spec-correction`, or that the register does not carry — the
+#   same resolution, through the same reader, as an operation correction.
+# * A file with any top-level key other than `$comment`, `corrections` and
+#   `component_corrections`, so a misspelled array name refuses rather than silently applying
+#   nothing.
+#
+# The breadth is the risk, and it is stated rather than hidden: because a component correction
+# changes what every reaching operation is compared against, the pass line names each corrected
+# component, and its register entry must say what the server always did for all of them.
+#
 # ACCEPTED RESIDUE
 # ----------------
 # * The pin records the HTTP contract only. MCP output and CLI stdout are contract
@@ -161,15 +192,40 @@ PIN_NAME="$(basename "$(dirname "$CURRENT_PIN")")"
 CORRECTIONS="$(dirname "$CURRENT_PIN")/corrections.json"
 CORRECTED_NOTE=""
 if [ -f "$CORRECTIONS" ]; then
-    jq -e '.corrections | type == "array" and length > 0 and all(.[];
-            (.path | type) == "string" and (.method | type) == "string"
-            and (.register_entry | type) == "string" and (.reason | type) == "string"
-            and (.operation | type) == "object")' "$CORRECTIONS" >/dev/null 2>&1 \
-        || fail "${CORRECTIONS} is not a non-empty \`corrections\` array whose every entry carries path, method, register_entry, reason and operation."
-    DUPES="$(jq -r '[.corrections[] | "\(.method | ascii_upcase) \(.path)"] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$CORRECTIONS")"
-    [ -z "$DUPES" ] || fail "${CORRECTIONS} corrects the same operation more than once: ${DUPES}"
-    UNKNOWN="$(jq -r --slurpfile pin "$TMP_BASE" '.corrections[] | select($pin[0].paths[.path][.method] == null) | "\(.method | ascii_upcase) \(.path)"' "$CORRECTIONS")"
-    [ -z "$UNKNOWN" ] || fail "${CORRECTIONS} corrects an operation the ${PIN_NAME} pin does not have: ${UNKNOWN}. A correction amends a pinned shape; growth needs no record."
+    jq -e 'type == "object"' "$CORRECTIONS" >/dev/null 2>&1 \
+        || fail "${CORRECTIONS} is not a JSON object."
+    STRAY_KEYS="$(jq -r 'keys - ["$comment", "corrections", "component_corrections"] | join(", ")' "$CORRECTIONS")"
+    [ -z "$STRAY_KEYS" ] || fail "${CORRECTIONS} carries top-level key(s) the gate does not read: ${STRAY_KEYS}. Only \`corrections\` and \`component_corrections\` record anything; a misspelled one would apply nothing."
+    jq -e 'has("corrections") or has("component_corrections")' "$CORRECTIONS" >/dev/null 2>&1 \
+        || fail "${CORRECTIONS} records nothing: it carries neither \`corrections\` nor \`component_corrections\`."
+
+    # Operation corrections — unchanged in meaning; the array is optional now that a file may hold
+    # component corrections alone, and non-empty whenever it is present.
+    if jq -e 'has("corrections")' "$CORRECTIONS" >/dev/null 2>&1; then
+        jq -e '.corrections | type == "array" and length > 0 and all(.[];
+                (.path | type) == "string" and (.method | type) == "string"
+                and (.register_entry | type) == "string" and (.reason | type) == "string"
+                and (.operation | type) == "object")' "$CORRECTIONS" >/dev/null 2>&1 \
+            || fail "${CORRECTIONS} is not a non-empty \`corrections\` array whose every entry carries path, method, register_entry, reason and operation."
+        DUPES="$(jq -r '[.corrections[] | "\(.method | ascii_upcase) \(.path)"] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$CORRECTIONS")"
+        [ -z "$DUPES" ] || fail "${CORRECTIONS} corrects the same operation more than once: ${DUPES}"
+        UNKNOWN="$(jq -r --slurpfile pin "$TMP_BASE" '.corrections[] | select($pin[0].paths[.path][.method] == null) | "\(.method | ascii_upcase) \(.path)"' "$CORRECTIONS")"
+        [ -z "$UNKNOWN" ] || fail "${CORRECTIONS} corrects an operation the ${PIN_NAME} pin does not have: ${UNKNOWN}. A correction amends a pinned shape; growth needs no record."
+    fi
+
+    # Component corrections — see COMPONENT CORRECTIONS above.
+    if jq -e 'has("component_corrections")' "$CORRECTIONS" >/dev/null 2>&1; then
+        jq -e '.component_corrections | type == "array" and length > 0 and all(.[];
+                (.component | type) == "string" and (.component | length) > 0
+                and (.register_entry | type) == "string" and (.reason | type) == "string"
+                and (.schema | type) == "object")' "$CORRECTIONS" >/dev/null 2>&1 \
+            || fail "${CORRECTIONS} is not a non-empty \`component_corrections\` array whose every entry carries component, register_entry, reason and an object schema."
+        CDUPES="$(jq -r '[.component_corrections[].component] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$CORRECTIONS")"
+        [ -z "$CDUPES" ] || fail "${CORRECTIONS} corrects the same component more than once: ${CDUPES}"
+        CUNKNOWN="$(jq -r --slurpfile pin "$TMP_BASE" '.component_corrections[] | select($pin[0].components.schemas[.component] == null) | .component' "$CORRECTIONS")"
+        [ -z "$CUNKNOWN" ] || fail "${CORRECTIONS} corrects a component the ${PIN_NAME} pin does not have: ${CUNKNOWN}. A correction amends a pinned shape; growth needs no record."
+    fi
+
     REGISTER="${REGISTER_ARG:-release-register}"
     [ -d "$REGISTER" ] || fail "${CORRECTIONS} names register entries, but there is no register at ${REGISTER} to check them against."
     while IFS= read -r ENTRY; do
@@ -180,12 +236,14 @@ if [ -f "$CORRECTIONS" ]; then
             *", spec-correction,"*) : ;;
             *) fail "register entry \"${ENTRY}\" is named by ${CORRECTIONS} but declares ${CLASSES}, not spec-correction." ;;
         esac
-    done < <(jq -r '.corrections[].register_entry' "$CORRECTIONS" | LC_ALL=C sort -u)
+    done < <(jq -r '((.corrections // []) + (.component_corrections // []))[].register_entry' "$CORRECTIONS" | LC_ALL=C sort -u)
+
     jq -S --slurpfile c "$CORRECTIONS" \
-        'reduce $c[0].corrections[] as $x (.; .paths[$x.path][$x.method] = $x.operation)' \
+        'reduce ($c[0].corrections // [])[] as $x (.; .paths[$x.path][$x.method] = $x.operation)
+         | reduce ($c[0].component_corrections // [])[] as $x (.; .components.schemas[$x.component] = $x.schema)' \
         "$TMP_BASE" > "${TMP_BASE}.c" && mv "${TMP_BASE}.c" "$TMP_BASE" \
         || fail "the corrections in ${CORRECTIONS} could not be applied to the pin."
-    CORRECTED_NOTE=" (with $(jq '.corrections | length' "$CORRECTIONS") recorded correction(s) applied: $(jq -r '[.corrections[] | "\(.method | ascii_upcase) \(.path)"] | join(", ")' "$CORRECTIONS"))"
+    CORRECTED_NOTE=" (with $(jq '(.corrections // []) + (.component_corrections // []) | length' "$CORRECTIONS") recorded correction(s) applied: $(jq -r '[((.corrections // [])[] | "\(.method | ascii_upcase) \(.path)"), ((.component_corrections // [])[] | "component \(.component)")] | join(", ")' "$CORRECTIONS"))"
 fi
 
 if cmp -s "$TMP_BASE" "$TMP_HEAD"; then
