@@ -123,8 +123,13 @@ walk instead when you wanted a neighbourhood, not an enumeration.
   `find-resources-with` is the one to know. Its rows come back through `list-resources-with`, whose
   `total` counts the whole match set on every page.
 - **A clean `--check` is not a promise the query runs.** It is local (no network, no token), reports
-  every refusal at once with a non-zero exit, and answers expressibility against the published
-  contract only. It loads no shape, so it lists artifact asks under `shapes_not_checked`.
+  every shape refusal at once with a non-zero exit, and answers expressibility against the published
+  contract. It loads no shape, so it lists artifact asks under `shapes_not_checked`.
+- **`--check` also lists `capability_findings`: what this client's build would refuse beyond the
+  shape**, with the reasons the server gives (`filter_not_applicable`, `unknown_filter_field`, …).
+  They are only as current as this client: a newer server may admit them, an older one may refuse
+  more. They are not refusals and exit zero; add `--strict` to fail on them when you know the client
+  matches the server.
 - **Do not keep a list of what refuses** — ask `--check`; the reachable acts and per-stage
   capabilities move as the surface grows.
 - **A refusal is an answer, not a crash.** The server returns every refusal at once, each naming its

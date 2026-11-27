@@ -49,6 +49,6 @@ pub use trace::{
 // module path, while every sibling has a short one, reads as an oversight rather than as a choice.
 pub use validate::{
     asked_shape_ids, emitted_fragment_for, shapes_to_load, text_to_embed, texts_to_embed, validate,
-    validate_shape, wants_a_vector, PlanRefusal, ValidatedComposition, ValidationOutcome,
-    WillReturn, MAX_ASKED_SHAPES, MAX_ASKS_PER_REQUEST,
+    validate_capability, validate_shape, wants_a_vector, PlanRefusal, ValidatedComposition,
+    ValidationOutcome, WillReturn, MAX_ASKED_SHAPES, MAX_ASKS_PER_REQUEST,
 };
