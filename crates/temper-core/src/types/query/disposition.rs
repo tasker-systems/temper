@@ -396,6 +396,12 @@ pub enum RefusalReason {
     /// and the range that narrows by it, `resource_filter.created` or `resource_filter.updated`.
     /// The list is `filter::RESOURCE_COLUMN_FIELDS`.
     ColumnNotAProperty,
+    /// A `resource_filter` carries a field it does not declare, such as `created_at` for
+    /// `created`. An unknown field would narrow nothing, so the stage would answer a wider question
+    /// than the one asked and say nothing of it. The detail names the field (cut to 64 bytes) and
+    /// lists the fields `resource_filter` declares. Raised by the server, which knows its own field
+    /// set, so a plan sent to a newer server that declares the field is not refused.
+    UnknownFilterField,
     /// A `resource_filter.created` or `resource_filter.updated` range has both ends and its `from`
     /// is not before its `until`. `from` is inclusive and `until` exclusive, so no timestamp lies
     /// in it, and its empty answer would look exactly like an honest "none". The detail names the
@@ -681,6 +687,7 @@ mod tests {
             RefusalReason::EmptyPropertyKey,
             RefusalReason::EmptyContains,
             RefusalReason::ColumnNotAProperty,
+            RefusalReason::UnknownFilterField,
             RefusalReason::InvertedRange,
             RefusalReason::TimestampOutOfRange,
             RefusalReason::PropertyValueTooLarge,

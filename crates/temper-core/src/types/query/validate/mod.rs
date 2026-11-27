@@ -2589,6 +2589,7 @@ mod tests {
                     from: Some(at("2026-06-01T00:00:00Z")),
                     until: None,
                 }),
+                unrecognized: Default::default(),
             });
         }
         // Returned nowhere: a selection orders nothing, so asking for its rows is
@@ -2845,6 +2846,139 @@ mod tests {
         let v = serde_json::json!("x".repeat(bytes - 2));
         assert_eq!(property_value_bytes(&v), bytes);
         v
+    }
+
+    /// One `list-resources-with` stage over a context, carrying `resource_filter` exactly as given,
+    /// parsed from the wire the way every door reads a plan.
+    fn wire_selection(resource_filter: serde_json::Value) -> Composition {
+        serde_json::from_value(serde_json::json!({
+            "stages": [{
+                "name": "work",
+                "act": "list-resources-with",
+                "inputs": [{"from": "caller", "as": "bound",
+                            "ids": {"kind": "context",
+                                    "ids": ["019fbb77-72a3-72e1-bbbd-13eb6aa64982"]}}],
+                "resource_filter": resource_filter,
+            }],
+            "outcome": {"returns": [{"stage": "work"}]},
+        }))
+        .unwrap_or_else(|e| panic!("the plan parses: {e}"))
+    }
+
+    /// **A `resource_filter` field this server does not declare is refused by name, never
+    /// ignored.** `created_at` for `created` used to parse and narrow nothing, so the stage answered
+    /// every resource in the bound and said nothing of why.
+    ///
+    /// FAILS IF: `ResourceFilter` stops capturing unknown keys (the plan validates), or the check
+    /// moves into the shape pass (`validate_shape` raises it, and a stale `--check` would refuse a
+    /// field a newer server declares).
+    #[test]
+    fn an_unknown_resource_filter_field_is_refused_naming_it() {
+        let typo = wire_selection(serde_json::json!({
+            "created_at": {"from": "2026-11-01T00:00:00Z"},
+        }));
+        let errs = validate(&typo).expect_err("an unknown field must not narrow nothing");
+        let hit: Vec<_> = errs
+            .iter()
+            .filter(|e| e.reason == RefusalReason::UnknownFilterField)
+            .collect();
+        assert_eq!(hit.len(), 1, "one refusal: {errs:?}");
+        assert_eq!(
+            errs.len(),
+            1,
+            "and nothing else is wrong with the plan: {errs:?}"
+        );
+        assert_eq!(hit[0].stage.as_ref().map(|s| s.as_str()), Some("work"));
+        assert!(
+            hit[0]
+                .detail
+                .starts_with("`resource_filter` has no field named \"created_at\";"),
+            "the detail names the field: {}",
+            hit[0].detail
+        );
+        assert!(
+            hit[0].detail.contains("`created`") && hit[0].detail.contains("`updated`"),
+            "the detail lists the declared fields, so the caller can find the one they meant: {}",
+            hit[0].detail
+        );
+        assert!(
+            super::validate_shape(&typo)
+                .iter()
+                .all(|e| e.reason != RefusalReason::UnknownFilterField),
+            "the field set is this server's: the shape pass, which clients run, must not raise it"
+        );
+
+        // Control: the field spelled as declared validates, so the refusal is about the name.
+        let spelled = wire_selection(serde_json::json!({
+            "created": {"from": "2026-11-01T00:00:00Z"},
+        }));
+        assert!(validate(&spelled).is_ok(), "{:?}", validate(&spelled).err());
+
+        // On an act that admits no resource filter the unknown key is still named, beside the
+        // redirect for the declared field it also carries.
+        let mut on_find: serde_json::Value = serde_json::to_value(&typo).expect("serializes");
+        on_find["stages"][0]["resource_filter"] =
+            serde_json::json!({"update": {}, "doc_type": ["task"]});
+        on_find["stages"][0]["act"] = serde_json::json!("follow-from");
+        let on_find: Composition = serde_json::from_value(on_find).expect("parses");
+        let errs = validate(&on_find).expect_err("must refuse");
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::UnknownFilterField
+                    && e.detail.contains("\"update\"")),
+            "{errs:?}"
+        );
+    }
+
+    /// Many unknown keys are ONE refusal naming the first eight, each cut to 64 bytes and
+    /// JSON-escaped, so a body of keys never becomes a larger refusal list or echoes a payload.
+    #[test]
+    fn many_unknown_resource_filter_fields_are_one_bounded_refusal() {
+        let mut filter = serde_json::Map::new();
+        for i in 0..20 {
+            filter.insert(format!("k{i:02}"), serde_json::json!(1));
+        }
+        let long = format!("{}`\n", "z".repeat(200));
+        filter.insert(long, serde_json::json!(1));
+        let c = wire_selection(serde_json::Value::Object(filter));
+        let errs = validate(&c).expect_err("must refuse");
+        let hit: Vec<_> = errs
+            .iter()
+            .filter(|e| e.reason == RefusalReason::UnknownFilterField)
+            .collect();
+        assert_eq!(hit.len(), 1, "{errs:?}");
+        let d = &hit[0].detail;
+        assert!(d.contains("\"k00\"") && d.contains("\"k07\""), "{d}");
+        assert!(!d.contains("\"k08\""), "only eight are named: {d}");
+        assert!(d.contains(" and 13 more;"), "the rest are counted: {d}");
+        assert!(!d.contains(&"z".repeat(65)), "a long key is cut: {d}");
+
+        // The long key alone, to see the cut and the escaping.
+        let mut alone = serde_json::Map::new();
+        alone.insert(format!("{}`\n", "z".repeat(200)), serde_json::json!(1));
+        let errs = validate(&wire_selection(serde_json::Value::Object(alone))).expect_err("refuse");
+        let d = &errs[0].detail;
+        assert!(d.contains("(cut to 64 bytes)"), "{d}");
+        assert!(
+            !d.contains('\n'),
+            "no raw control character reaches the detail: {d}"
+        );
+    }
+
+    /// **The unknown key survives a parse and a re-serialization**, which is the CLI door: it reads
+    /// the plan into a `Composition` and sends that. Dropped here, a typo would vanish before the
+    /// server could refuse it, and the stage would answer unnarrowed.
+    #[test]
+    fn an_unknown_resource_filter_field_survives_a_round_trip() {
+        let typo = wire_selection(serde_json::json!({"created_at": {"from": "x"}, "tags": ["a"]}));
+        let sent = serde_json::to_value(&typo).expect("serializes");
+        assert_eq!(
+            sent["stages"][0]["resource_filter"],
+            serde_json::json!({"tags": ["a"], "created_at": {"from": "x"}}),
+            "the CLI relays exactly what its caller wrote"
+        );
+        let reread: Composition = serde_json::from_value(sent).expect("re-parses");
+        assert_eq!(reread, typo);
     }
 
     fn count_refusals(c: &Composition, reason: RefusalReason) -> usize {

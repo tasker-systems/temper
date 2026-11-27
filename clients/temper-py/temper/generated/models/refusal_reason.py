@@ -101,45 +101,47 @@ class RefusalReason(BaseModel):
     # data type: str
     anyof_schema_35_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter.properties` predicate names a field every resource carries as a column, never as a property row: `created` or `updated`, or their frontmatter names `temper-created` and `temper-updated`.  A property predicate reads only `kb_properties` rows, so it could match nothing, and the empty answer it would give looks exactly like an honest \"none\". The detail names the field and the range that narrows by it, `resource_filter.created` or `resource_filter.updated`. The list is `filter::RESOURCE_COLUMN_FIELDS`.")
     # data type: str
-    anyof_schema_36_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter.created` or `resource_filter.updated` range has both ends and its `from` is not before its `until`. `from` is inclusive and `until` exclusive, so no timestamp lies in it, and its empty answer would look exactly like an honest \"none\". The detail names the range.")
+    anyof_schema_36_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter` carries a field it does not declare, such as `created_at` for `created`. An unknown field would narrow nothing, so the stage would answer a wider question than the one asked and say nothing of it. The detail names the field (cut to 64 bytes) and lists the fields `resource_filter` declares. Raised by the server, which knows its own field set, so a plan sent to a newer server that declares the field is not refused.")
     # data type: str
-    anyof_schema_37_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter.created` or `resource_filter.updated` range end is earlier than `-4713-11-24T00:00:00Z` (4714-11-24 BC), the earliest instant a resource timestamp can be stored at. No resource can lie there, and the store cannot compare against it. The detail names the range and the end.")
+    anyof_schema_37_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter.created` or `resource_filter.updated` range has both ends and its `from` is not before its `until`. `from` is inclusive and `until` exclusive, so no timestamp lies in it, and its empty answer would look exactly like an honest \"none\". The detail names the range.")
     # data type: str
-    anyof_schema_38_validator: Optional[StrictStr] = Field(default=None, description="A property-predicate value — a `contains` value, a `compare` bound or a facet value — is larger than 16384 bytes, or carries more than 256 nested array elements or object members.  The probe cap counts values, not bytes, so without this one value of any size validated. The refusal names the predicate's position and the limit, never the value: echoing a value refused for its size would return the oversized payload in the error body.")
+    anyof_schema_38_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter.created` or `resource_filter.updated` range end is earlier than `-4713-11-24T00:00:00Z` (4714-11-24 BC), the earliest instant a resource timestamp can be stored at. No resource can lie there, and the store cannot compare against it. The detail names the range and the end.")
     # data type: str
-    anyof_schema_39_validator: Optional[StrictStr] = Field(default=None, description="The property-predicate values across the whole composition sum past 524288 bytes.  Composition-level, like `too_many_stages`. It is what keeps the largest legal composition inside the query door's body limit once each value may be 16 KiB.")
+    anyof_schema_39_validator: Optional[StrictStr] = Field(default=None, description="A property-predicate value — a `contains` value, a `compare` bound or a facet value — is larger than 16384 bytes, or carries more than 256 nested array elements or object members.  The probe cap counts values, not bytes, so without this one value of any size validated. The refusal names the predicate's position and the limit, never the value: echoing a value refused for its size would return the oversized payload in the error body.")
     # data type: str
-    anyof_schema_40_validator: Optional[StrictStr] = Field(default=None, description="A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`, `owner` or `title_contains` — is longer than its published cap: 256 bytes, or 4096 for `title_contains`, counted as JSON-escaped bytes.  The count caps bound how many strings a stage carries, never how long each is; without this a plan inside every count cap could exceed the body limit and meet a bare 413. The refusal names the field and the limit, never the string.")
+    anyof_schema_40_validator: Optional[StrictStr] = Field(default=None, description="The property-predicate values across the whole composition sum past 524288 bytes.  Composition-level, like `too_many_stages`. It is what keeps the largest legal composition inside the query door's body limit once each value may be 16 KiB.")
     # data type: str
-    anyof_schema_41_validator: Optional[StrictStr] = Field(default=None, description="A list whose entries must be distinct carries more than any legal plan can: `returns` or a combine stage's `inputs` past 64, or an act's `inputs` past 2 (one per relation).  Refused once, up front, like `too_many_stages`, so no check runs once per entry: an over-long list would otherwise answer with a refusal list many times its own size.")
+    anyof_schema_41_validator: Optional[StrictStr] = Field(default=None, description="A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`, `owner` or `title_contains` — is longer than its published cap: 256 bytes, or 4096 for `title_contains`, counted as JSON-escaped bytes.  The count caps bound how many strings a stage carries, never how long each is; without this a plan inside every count cap could exceed the body limit and meet a bare 413. The refusal names the field and the limit, never the string.")
     # data type: str
-    anyof_schema_42_validator: Optional[StrictStr] = Field(default=None, description="The composition's caller text — narrowing strings, facet and predicate values, questions — exceeds 786432 bytes counted as the most expansive encoder that escapes per character would send it.  What makes a legal plan fit the body limit under any encoder that escapes per character.")
+    anyof_schema_42_validator: Optional[StrictStr] = Field(default=None, description="A list whose entries must be distinct carries more than any legal plan can: `returns` or a combine stage's `inputs` past 64, or an act's `inputs` past 2 (one per relation).  Refused once, up front, like `too_many_stages`, so no check runs once per entry: an over-long list would otherwise answer with a refusal list many times its own size.")
     # data type: str
-    anyof_schema_43_validator: Optional[StrictStr] = Field(default=None, description="The ask names a shape that does not exist or that the asker cannot read. One reason and one fixed detail for both, so a refusal is never an existence oracle.")
+    anyof_schema_43_validator: Optional[StrictStr] = Field(default=None, description="The composition's caller text — narrowing strings, facet and predicate values, questions — exceeds 786432 bytes counted as the most expansive encoder that escapes per character would send it.  What makes a legal plan fit the body limit under any encoder that escapes per character.")
     # data type: str
-    anyof_schema_44_validator: Optional[StrictStr] = Field(default=None, description="The ask names a folded shape version. It is never re-pointed at the successor: the predicates were written against a schema that no longer governs. `teaches` carries the version now in force, when there is one.")
+    anyof_schema_44_validator: Optional[StrictStr] = Field(default=None, description="The ask names a shape that does not exist or that the asker cannot read. One reason and one fixed detail for both, so a refusal is never an existence oracle.")
     # data type: str
-    anyof_schema_45_validator: Optional[StrictStr] = Field(default=None, description="The shape's schema does not compile under the no-fetch compiler, or is larger than the walk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The detail is a fixed sentence, naming for an uncompilable schema the first keyword or cap the compile refused and its schema path — schema text the asker can already read; the compiler's text is never echoed.")
+    anyof_schema_45_validator: Optional[StrictStr] = Field(default=None, description="The ask names a folded shape version. It is never re-pointed at the successor: the predicates were written against a schema that no longer governs. `teaches` carries the version now in force, when there is one.")
     # data type: str
-    anyof_schema_46_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate's path has no segments, so it would address the whole document.")
+    anyof_schema_46_validator: Optional[StrictStr] = Field(default=None, description="The shape's schema does not compile under the no-fetch compiler, or is larger than the walk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The detail is a fixed sentence, naming for an uncompilable schema the first keyword or cap the compile refused and its schema path — schema text the asker can already read; the compiler's text is never echoed.")
     # data type: str
-    anyof_schema_47_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate's path is not one the shape declares, or lies beyond a bound of the schema walk. `teaches` carries the askable paths, and the bound when one was met.")
+    anyof_schema_47_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate's path has no segments, so it would address the whole document.")
     # data type: str
-    anyof_schema_48_validator: Optional[StrictStr] = Field(default=None, description="The operator is not feasible at the path — `compare` where the path declares no orderable type, or with a bound of a type not declared there. `teaches` carries the path's facts and feasible operators.")
+    anyof_schema_48_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate's path is not one the shape declares, or lies beyond a bound of the schema walk. `teaches` carries the askable paths, and the bound when one was met.")
     # data type: str
-    anyof_schema_49_validator: Optional[StrictStr] = Field(default=None, description="A value lies outside what the shape declares at its path: not of a declared type, not an enum member, or not an admissible array element. `teaches` carries the declared values and says that stored content is not closed by its shape, with the route to the rest.")
+    anyof_schema_49_validator: Optional[StrictStr] = Field(default=None, description="The operator is not feasible at the path — `compare` where the path declares no orderable type, or with a bound of a type not declared there. `teaches` carries the path's facts and feasible operators.")
     # data type: str
-    anyof_schema_50_validator: Optional[StrictStr] = Field(default=None, description="An ask's `intent` names a term outside `current` / `member` / `pinned`. `teaches` names the set.")
+    anyof_schema_50_validator: Optional[StrictStr] = Field(default=None, description="A value lies outside what the shape declares at its path: not of a declared type, not an enum member, or not an admissible array element. `teaches` carries the declared values and says that stored content is not closed by its shape, with the route to the rest.")
     # data type: str
-    anyof_schema_51_validator: Optional[StrictStr] = Field(default=None, description="An ask's `shape_states` names a term outside the three a live shape admits — including `never_declared`, which no artifact under a live shape can have. `teaches` names the set.")
+    anyof_schema_51_validator: Optional[StrictStr] = Field(default=None, description="An ask's `intent` names a term outside `current` / `member` / `pinned`. `teaches` names the set.")
     # data type: str
-    anyof_schema_52_validator: Optional[StrictStr] = Field(default=None, description="An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or two asks in one filter whose shapes live in different homes. Either is empty by construction, since a resource has exactly one home. `teaches` names the shapes' homes.")
+    anyof_schema_52_validator: Optional[StrictStr] = Field(default=None, description="An ask's `shape_states` names a term outside the three a live shape admits — including `never_declared`, which no artifact under a live shape can have. `teaches` names the set.")
     # data type: str
-    anyof_schema_53_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate value carries U+0000, in a string or an object key. No stored content can hold it — jsonb cannot represent the character — so the value could match nothing, and binding it would be a database error where a refusal belongs.")
+    anyof_schema_53_validator: Optional[StrictStr] = Field(default=None, description="An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or two asks in one filter whose shapes live in different homes. Either is empty by construction, since a resource has exactly one home. `teaches` names the shapes' homes.")
     # data type: str
-    anyof_schema_54_validator: Optional[StrictStr] = Field(default=None, description="A batch read's `limit` is 0, or above the page ceiling `MAX_ARTIFACT_PAGE_ROWS` (200). Refused, never clamped, with no stage, and beside the ask's own refusals: a caller asking for more than a page holds is told so rather than handed a short page it might read as the end. The detail names the body field.")
+    anyof_schema_54_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate value carries U+0000, in a string or an object key. No stored content can hold it — jsonb cannot represent the character — so the value could match nothing, and binding it would be a database error where a refusal belongs.")
     # data type: str
-    anyof_schema_55_validator: Optional[StrictStr] = Field(default=None, description="A reason outside the declared vocabulary.  `[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by deserializing a producer newer than this consumer.\" **That was false at the time**: `validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while every declared variant was snake_case — a client's vocabulary was two conventions at once. Found in review; recorded rather than repaired then, because promoting twelve strings to variants is a wire change and nothing consumed them yet — `/api/query` did not exist, so the change was free and the door was the moment it would stop being free.  `[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants above, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is exactly what its original doc said — a reason from a producer newer than this consumer, one this binary has never been taught to name. Deserializing it never fails; `is_known` answers `false`; a caller degrades gracefully instead of losing the whole response to a parse error.")
+    anyof_schema_55_validator: Optional[StrictStr] = Field(default=None, description="A batch read's `limit` is 0, or above the page ceiling `MAX_ARTIFACT_PAGE_ROWS` (200). Refused, never clamped, with no stage, and beside the ask's own refusals: a caller asking for more than a page holds is told so rather than handed a short page it might read as the end. The detail names the body field.")
+    # data type: str
+    anyof_schema_56_validator: Optional[StrictStr] = Field(default=None, description="A reason outside the declared vocabulary.  `[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by deserializing a producer newer than this consumer.\" **That was false at the time**: `validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while every declared variant was snake_case — a client's vocabulary was two conventions at once. Found in review; recorded rather than repaired then, because promoting twelve strings to variants is a wire change and nothing consumed them yet — `/api/query` did not exist, so the change was free and the door was the moment it would stop being free.  `[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants above, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is exactly what its original doc said — a reason from a producer newer than this consumer, one this binary has never been taught to name. Deserializing it never fails; `is_known` answers `false`; a caller degrades gracefully instead of losing the whole response to a parse error.")
     if TYPE_CHECKING:
         actual_instance: Optional[Union[str]] = None
     else:
@@ -492,6 +494,12 @@ class RefusalReason(BaseModel):
         # validate data type: str
         try:
             instance.anyof_schema_55_validator = v
+            return v
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # validate data type: str
+        try:
+            instance.anyof_schema_56_validator = v
             return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
@@ -1002,6 +1010,15 @@ class RefusalReason(BaseModel):
             instance.anyof_schema_55_validator = json.loads(json_str)
             # assign value to actual_instance
             instance.actual_instance = instance.anyof_schema_55_validator
+            return instance
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into str
+        try:
+            # validation
+            instance.anyof_schema_56_validator = json.loads(json_str)
+            # assign value to actual_instance
+            instance.actual_instance = instance.anyof_schema_56_validator
             return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
