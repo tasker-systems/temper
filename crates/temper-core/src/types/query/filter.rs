@@ -6,6 +6,8 @@
 //! language would be more expressive and would immediately re-open every conflation this contract
 //! exists to close.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -167,7 +169,58 @@ pub struct ResourceFilter {
     /// nothing. A range whose `from` is not before its `until` is refused `inverted_range`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated: Option<TimeRange>,
+    // Every key the caller sent that is none of the fields above, kept whole so the server's
+    // capability pass can refuse it BY NAME (`RefusalReason::UnknownFilterField`) instead of the
+    // filter narrowing nothing by it. A line comment, not a doc comment: the field is published on
+    // no door (every schema derive skips it), because it is not part of the contract. It is the
+    // contract's complement.
+    //
+    // **Why captured, and not `deny_unknown_fields`.** A stage is an untagged enum, so serde
+    // reports an unknown field inside one as "matched no variant" and never names it; the caller
+    // would get a 422 that does not say which key was wrong. Captured, the refusal arrives in the
+    // every-refusal-at-once 400 body like any other, its kind intact on every door, its detail
+    // naming the key.
+    //
+    // **Why the values are kept and serialized back.** The CLI parses a plan into a `Composition`
+    // and sends that, re-serialized. Dropped here, an unknown key would vanish on the CLI door
+    // before the server could refuse it — the silent narrowing this exists to end. Serialized
+    // back, the CLI relays exactly what its caller wrote, and the server, which knows its own
+    // field set, decides. A stale CLI therefore relays a field a NEWER server added, rather than
+    // dropping it.
+    //
+    // **No field has ever been removed from this struct** `[checked — 2026-11-27, against every
+    // revision of `filter.rs` since `f36a9c6f6`]`, so there is no retired name to tolerate the
+    // way `Composition` tolerates `bounds` and `on_stage_refusal`. A field removed later must be
+    // named in `RETIRED_RESOURCE_FILTER_FIELDS` or ruled refused.
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[cfg_attr(feature = "web-api", schema(ignore))]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    #[cfg_attr(feature = "mcp", schemars(skip))]
+    pub unrecognized: BTreeMap<String, serde_json::Value>,
 }
+
+/// Every field [`ResourceFilter`] declares, by its wire name, in declaration order.
+///
+/// The `unknown_filter_field` refusal lists these so the caller can find the name they meant.
+/// `every_declared_field_is_named_and_no_other` holds the list against the struct's own
+/// serialization, so a field added to the struct and not here fails a test rather than being
+/// refused as unknown.
+pub const RESOURCE_FILTER_FIELDS: &[&str] = &[
+    "doc_type",
+    "tags",
+    "facets",
+    "properties",
+    "stage",
+    "status",
+    "owner",
+    "title_contains",
+    "created",
+    "updated",
+];
+
+/// Fields once declared on [`ResourceFilter`] and since removed, which a stale caller may still
+/// send and which are tolerated (ignored) rather than refused. Empty: none has ever been removed.
+pub const RETIRED_RESOURCE_FILTER_FIELDS: &[&str] = &[];
 
 /// A range over one of a resource's timestamp columns: `from <= t < until`.
 ///
@@ -761,6 +814,48 @@ mod tests {
         );
         // An integer within 64 bits prints the same digits everywhere.
         assert_eq!(worst_case_value_bytes(&serde_json::json!(12345)), 5);
+    }
+
+    /// `RESOURCE_FILTER_FIELDS` is exactly the keys a fully populated `ResourceFilter` serializes,
+    /// in declaration order, so a field added to the struct and not to the list fails here instead
+    /// of being refused as unknown on the wire.
+    #[test]
+    fn every_declared_field_is_named_and_no_other() {
+        let full = ResourceFilter {
+            doc_type: vec!["d".into()],
+            tags: vec!["t".into()],
+            facets: vec![FacetPredicate {
+                key: "k".into(),
+                value: "v".into(),
+            }],
+            properties: vec![PropertyPredicate {
+                key: "k".into(),
+                op: PropertyOp::HasKey,
+            }],
+            stage: Some("s".into()),
+            status: Some("s".into()),
+            owner: Some("o".into()),
+            title_contains: Some("t".into()),
+            created: Some(TimeRange::default()),
+            updated: Some(TimeRange::default()),
+            unrecognized: BTreeMap::new(),
+        };
+        let serde_json::Value::Object(map) = serde_json::to_value(&full).expect("serializes")
+        else {
+            panic!("a filter is an object");
+        };
+        let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+        let mut declared = RESOURCE_FILTER_FIELDS.to_vec();
+        keys.sort_unstable();
+        declared.sort_unstable();
+        assert_eq!(keys, declared);
+        // And every declared name parses into its field, never into `unrecognized`.
+        let reread: ResourceFilter = serde_json::from_value(serde_json::Value::Object(map))
+            .expect("the declared fields parse");
+        assert!(reread.unrecognized.is_empty(), "{:?}", reread.unrecognized);
+        assert!(RETIRED_RESOURCE_FILTER_FIELDS
+            .iter()
+            .all(|f| !RESOURCE_FILTER_FIELDS.contains(f)));
     }
 
     #[test]

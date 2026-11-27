@@ -358,6 +358,8 @@ mod tests {
             // server writes.
             created: Some(full_time_range()),
             updated: Some(full_time_range()),
+            // A legal plan carries no undeclared key: one would be refused.
+            unrecognized: Default::default(),
         }
     }
 

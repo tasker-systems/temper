@@ -72,8 +72,9 @@ may be left out. A range whose `from` is not before its `until` is refused `inve
 an end before `-4713-11-24T00:00:00Z`, the earliest the store holds, `timestamp_out_of_range`. A
 bare date or a timestamp without an offset does not parse, and the plan is answered
 `UNREADABLE_PLAN`. The stage's `narrowed_by` echoes each end it applied (`created_from`,
-`updated_until`, …): read it to confirm a range ran, since an unknown field in `resource_filter`
-is ignored. `created` and `updated` are columns, not properties: a `properties` predicate on
+`updated_until`, …): read it to confirm a range ran. A field `resource_filter` does not declare,
+such as `created_at`, is refused `unknown_filter_field`, naming it; a server older than that
+refusal ignores the field, and `narrowed_by` is how you tell. `created` and `updated` are columns, not properties: a `properties` predicate on
 either is refused `column_not_a_property`, so use the range.
 
 ## Read the trace, not just the hits

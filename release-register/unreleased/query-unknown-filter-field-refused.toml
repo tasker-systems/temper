@@ -1,0 +1,44 @@
+title    = "A resource_filter field the server does not declare is refused as unknown_filter_field, naming it, not ignored"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
+status   = "signal-only"
+body = '''
+What changed: a `resource_filter` key that is none of the fields it declares (`doc_type`, `tags`,
+`facets`, `properties`, `stage`, `status`, `owner`, `title_contains`, `created`, `updated`), such as
+`created_at` for `created` or `update` for `updated`, is refused by the server's capability pass
+with the new RefusalReason `unknown_filter_field`, on every act that carries a `resource_filter`.
+One refusal per stage; its detail names up to eight unknown keys (each JSON-escaped and cut to 64
+bytes), counts the rest, and lists the declared fields. Before this the key parsed, narrowed
+nothing, and the stage answered every resource in its bound with no sign of why.
+
+How: `ResourceFilter` captures unknown keys instead of serde dropping them (not
+`deny_unknown_fields`: a stage is an untagged enum, so serde would answer 422 UNREADABLE_PLAN
+without naming the field). The captured keys are serialized back, so the CLI, which parses a plan
+and re-sends it, relays a typo to the server rather than dropping it on its own door; MCP relays
+plans unread. The capture is published on no door: no schema, SDK or ts-rs type gains a field. No
+field has ever been removed from `ResourceFilter`, so no retired name is tolerated
+(`filter::RETIRED_RESOURCE_FILTER_FIELDS` is empty).
+
+Not in the shape pass, so `temper query --check` does not raise it: the field set is the server's,
+and a client older than a server that adds a field must not refuse a plan that server answers.
+
+Who observes: any caller of POST /api/query, the MCP query tool and `temper query` that sends an
+undeclared `resource_filter` key, which now gets 400 PLAN_REFUSED where it got 200 and an
+unnarrowed stage. A plan using only declared fields answers exactly as before. A server built
+before this still ignores the key; `narrowed_by` is how a caller confirms a narrowing ran. A
+client built before this parses the new reason as an unknown one (RefusalReason is open).
+
+Why additive + behavioral, not shape-breaking (D-C2): no declared field, type or answer shape
+changed. The shape change is one new value in the open RefusalReason enum (openapi.json, the three
+SDKs, the ts-rs tree, the query JSON-Schema snapshots, the MCP declarations); the behavioral half
+is a body that used to answer being refused, the class `query-column-predicate-refused` and
+`mcp-refuses-undeclared-tool-arguments` were declared under for the same movement. Witnesses:
+`an_unknown_resource_filter_field_is_refused_by_name`
+(crates/temper-api/tests/query_unknown_filter_field_test.rs),
+`an_unknown_resource_filter_field_is_refused_naming_it`,
+`many_unknown_resource_filter_fields_are_one_bounded_refusal` and
+`an_unknown_resource_filter_field_survives_a_round_trip` (temper-core validate tests), and
+`every_declared_field_is_named_and_no_other` (temper-core filter tests).
+Release relevance: signal-only.
+'''

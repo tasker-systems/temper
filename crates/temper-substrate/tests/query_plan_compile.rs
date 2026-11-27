@@ -1738,6 +1738,7 @@ fn selection(name: &str) -> StageNode {
                 from: None,
                 until: Some(instant("2026-11-01T00:00:00Z")),
             }),
+            unrecognized: Default::default(),
         }),
         edge_filter: None,
         properties: vec![],

@@ -538,6 +538,11 @@
           "type": "string"
         },
         {
+          "const": "unknown_filter_field",
+          "description": "A `resource_filter` carries a field it does not declare, such as `created_at` for\n`created`. An unknown field would narrow nothing, so the stage would answer a wider question\nthan the one asked and say nothing of it. The detail names the field (cut to 64 bytes) and\nlists the fields `resource_filter` declares. Raised by the server, which knows its own field\nset, so a plan sent to a newer server that declares the field is not refused.",
+          "type": "string"
+        },
+        {
           "const": "inverted_range",
           "description": "A `resource_filter.created` or `resource_filter.updated` range has both ends and its `from`\nis not before its `until`. `from` is inclusive and `until` exclusive, so no timestamp lies\nin it, and its empty answer would look exactly like an honest \"none\". The detail names the\nrange.",
           "type": "string"

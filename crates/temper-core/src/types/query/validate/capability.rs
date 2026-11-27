@@ -55,7 +55,8 @@ use crate::types::query::composition::{
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
 use crate::types::query::filter::{
-    json_string_bytes, FilterField, PropertyPredicate, MAX_FILTER_STRING_BYTES,
+    json_string_bytes, FilterField, PropertyPredicate, ResourceFilter, MAX_FILTER_STRING_BYTES,
+    RESOURCE_FILTER_FIELDS, RETIRED_RESOURCE_FILTER_FIELDS,
 };
 use crate::types::query::id_set::IdKind;
 use crate::types::query::registry::declaration;
@@ -407,6 +408,84 @@ fn narrow_by_selecting(field: &str) -> String {
     )
 }
 
+/// The most unknown `resource_filter` keys one refusal names, and the most bytes of each.
+///
+/// One refusal per stage whatever the count, because nothing bounds how many keys a filter
+/// carries, and a refusal each would turn a body of them into a larger refusal list.
+const MAX_NAMED_UNKNOWN_FIELDS: usize = 8;
+const MAX_ECHOED_FIELD_BYTES: usize = 64;
+
+/// A `resource_filter` key that is none of [`RESOURCE_FILTER_FIELDS`] is refused
+/// [`RefusalReason::UnknownFilterField`], on every act: a typo such as `created_at` would
+/// otherwise narrow nothing and the stage would answer a wider question than the one asked.
+///
+/// **Capability, not shape.** The field set is this server's: a newer server may declare a field
+/// an older client does not know, and the shape pass runs in clients (`temper query --check`), so
+/// raising this there would refuse a plan the newer server answers. Only the server that will run
+/// the plan can say a field is unknown to it.
+///
+/// A key in [`RETIRED_RESOURCE_FILTER_FIELDS`] is tolerated and ignored, the way `Composition`
+/// tolerates the fields it retired. That list is empty today.
+fn check_unrecognized_resource_fields(
+    name: &StageName,
+    f: &ResourceFilter,
+    errs: &mut Vec<PlanRefusal>,
+) {
+    let unknown: Vec<&str> = f
+        .unrecognized
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !RETIRED_RESOURCE_FILTER_FIELDS.contains(k))
+        .collect();
+    if unknown.is_empty() {
+        return;
+    }
+    let shown: Vec<String> = unknown
+        .iter()
+        .take(MAX_NAMED_UNKNOWN_FIELDS)
+        .map(|k| echo_field_name(k))
+        .collect();
+    let more = match unknown.len().saturating_sub(MAX_NAMED_UNKNOWN_FIELDS) {
+        0 => String::new(),
+        n => format!(" and {n} more"),
+    };
+    let noun = if unknown.len() == 1 {
+        "field"
+    } else {
+        "fields"
+    };
+    errs.push(refusal(
+        Some(name),
+        RefusalReason::UnknownFilterField,
+        format!(
+            "`resource_filter` has no {noun} named {}{more}; an unknown field would narrow \
+             nothing, so the stage would answer a wider question than the one asked. \
+             `resource_filter` declares: {}",
+            shown.join(", "),
+            RESOURCE_FILTER_FIELDS
+                .iter()
+                .map(|f| format!("`{f}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+    ));
+}
+
+/// A caller's key, quoted for a refusal: JSON-escaped, so no control character or backtick reaches
+/// the detail raw, and cut to [`MAX_ECHOED_FIELD_BYTES`] of the key on a character boundary.
+fn echo_field_name(key: &str) -> String {
+    let mut cut = key.len().min(MAX_ECHOED_FIELD_BYTES);
+    while !key.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let quoted = serde_json::to_string(&key[..cut]).unwrap_or_else(|_| "\"?\"".to_string());
+    if cut < key.len() {
+        format!("{quoted} (cut to {MAX_ECHOED_FIELD_BYTES} bytes)")
+    } else {
+        quoted
+    }
+}
+
 /// Declaration-driven checks for one act node. Every axis is independent — a node can fail more
 /// than one — so nothing short-circuits; a caller sees the whole picture.
 fn check_act(
@@ -567,6 +646,7 @@ fn check_act(
     // Sequencing was part of the work: this fires in the same change that gives the act its
     // mechanic, never before it.
     if let Some(f) = &inv.resource_filter {
+        check_unrecognized_resource_fields(name, f, errs);
         if matches!(
             inv.act,
             ActName::FindResourcesWith | ActName::ListResourcesWith
