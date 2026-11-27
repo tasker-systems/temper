@@ -1,5 +1,5 @@
 {
-  "$comment": "Recorded corrections to the 0.6 pin. check-openapi-pin.sh replaces each operation in `corrections` and each component in `component_corrections` in the pin with its recorded shape before comparing; see its RECORDED CORRECTIONS and COMPONENT CORRECTIONS headers. A component record must equal the component as openapi.json publishes it, and may differ from the pinned component only by `oneOf` renamed to `anyOf` plus open-vocabulary growth.",
+  "$comment": "Recorded corrections to the 0.6 pin. check-openapi-pin.sh replaces each operation in `corrections` and each component in `component_corrections` in the pin with its recorded shape before comparing; see its RECORDED CORRECTIONS and COMPONENT CORRECTIONS headers. A component record is derived, not authored: it must be exactly the pinned component with `oneOf` renamed to `anyOf`, and the published component is judged against it by the shared comparator.",
   "corrections": [
     {
       "method": "delete",
@@ -621,16 +621,9 @@
           },
           {
             "type": "string",
-            "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nAn act with no intention — a pure selection (`list-resources-with`, which returns its rows,\nasks none either). It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`. The rows themselves come back through\n[`ActName::ListResourcesWith`].",
+            "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
             "enum": [
               "find-resources-with"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "*I can say what these things ARE, and I want them back as rows.*\n\n`find-resources-with`'s mechanic under a returning asker: the same filters and anchors, plus\na resource bound, ordered by `created` (newest first unless the stage's `order` says\notherwise) and paged. It **returns and feeds nothing**: its output is a page, and a page\npiped into a later stage would look like the set it is a sample of, so naming it as any\nstage's input is refused `stage_not_pipeable`.",
-            "enum": [
-              "list-resources-with"
             ]
           },
           {
@@ -777,13 +770,6 @@
           },
           {
             "type": "string",
-            "description": "An `order` was supplied to an act that does not let the caller choose its direction\n(`ActDeclaration::accepts_order` is `false`). Declined, never ignored, by the rule\n`bound_term_not_applicable` follows: an act-level parameter the act does not admit.",
-            "enum": [
-              "order_not_applicable"
-            ]
-          },
-          {
-            "type": "string",
             "description": "The act is declared and built, but its mechanic is not reachable from THIS surface — the\ncompiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the\ndistinction `BuildState` cannot draw: existence versus reachability-from-this-surface.\n\nThe live instance before beat D was the three `find` acts: `BuildState::Served` with their\nown SQL functions (`search_exact` / `search_wide`), which the beat-C compiler did not emit.\n`NotImplemented` would have been false about them (they are served); this variant is the\nhonest one. Beat D deleted the refusal for them by giving the compiler their fragments.\n\nThe live instances are `substantiate` and `survey` — the first `Served`, the second\n`Fused`, both with mechanics the compiler emits no fragment for. **The rule keys on the\ncallable-fragment set and never on `build_state`, and `substantiate` is what holds that**:\nit is `Served` and unreachable, so a rule reading the discriminant would admit an act this\nsurface cannot emit.\n\n`[corrected — 2026-08-15, found while adding `SubtrahendRefused`]` This named a trio —\n*\"`substantiate`, `follow-from` and `survey` … all three with mechanics the compiler emits\nno fragment for\"* — and **`follow-from` had not belonged to it since 2026-08-14**, when\n`query_follow_from` entered `CALLABLE_FRAGMENTS` and `registry.rs` moved the act from\n`Absent` to `Serves` at CLI and API on exactly that condition. So one edit updated the\ndeclaration and left the doc describing the world before it.\n\nWorth correcting rather than tidying, because **this doc comment is a published schema\ndescription** (`tests/fixtures/query/refusal.schema.json`, and `RefusalReason` in\ntemper-ui's generated `query.ts`) — the same reason [`super::composition::Intention`]'s\nheader gives for repairing its own stale sentence in place. The `Fused`-half argument that\nhung off the trio is dropped with it: it observed that the discriminant *happened* to agree\nabout a pair, which was a coincidence of the corpus and is not one now.",
             "enum": [
               "not_separably_reachable"
@@ -840,7 +826,7 @@
           },
           {
             "type": "string",
-            "description": "A narrowing list carries more values than the contract admits.\n\n`[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`\nand `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array\ncontainment and `= ANY` are single operations whatever their length — which is precisely why\nnothing had capped them. What they cost is BODY: ten thousand one-character labels per stage\nserialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits\nwith a bare 413. See `MAX_FILTER_VALUES`.\n\nAlso an artifact predicate path past `MAX_ARTIFACT_PATH_DEPTH` segments, or an artifact ask's\n`intent` or `shape_states` longer than its vocabulary (with `teaches.terms`). And a composition\nwhose artifact filters together carry more asks than `MAX_ASKS_PER_REQUEST` or name more\ndistinct shapes than `MAX_ASKED_SHAPES` — refused before any shape is loaded.",
+            "description": "A narrowing list carries more values than the contract admits.\n\n`[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`\nand `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array\ncontainment and `= ANY` are single operations whatever their length — which is precisely why\nnothing had capped them. What they cost is BODY: ten thousand one-character labels per stage\nserialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits\nwith a bare 413. See `MAX_FILTER_VALUES`.",
             "enum": [
               "too_many_filter_values"
             ]
@@ -910,13 +896,6 @@
           },
           {
             "type": "string",
-            "description": "A stage whose output is a PAGE is named as another stage's input — a bound, a seed, or a\ncombinator operand. Today that is a `list-resources-with` stage.\n\nThe mirror of [`RefusalReason::StageNotReturnable`]. A page looks exactly like the set it\nis a sample of, so piping it on would bound a later stage to an arbitrary subset while\nlooking like a narrowing — and as a `difference` subtrahend it reports every match past the\npage as absent, under `extent: complete`. The repair is to select with\n`find-resources-with`, pipe that, and return `list-resources-with`.",
-            "enum": [
-              "stage_not_pipeable"
-            ]
-          },
-          {
-            "type": "string",
             "description": "`returns` names a stage that was never declared.",
             "enum": [
               "unknown_return_stage"
@@ -948,146 +927,6 @@
             "description": "A `contains` predicate was supplied with no values, so it narrows nothing.",
             "enum": [
               "empty_contains"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "A `resource_filter.properties` predicate names a field every resource carries as a column,\nnever as a property row: `created` or `updated`, or their frontmatter names\n`temper-created` and `temper-updated`.\n\nA property predicate reads only `kb_properties` rows, so it could match nothing, and the\nempty answer it would give looks exactly like an honest \"none\". The detail names the field\nand the range that narrows by it, `resource_filter.created` or `resource_filter.updated`.\nThe list is `filter::RESOURCE_COLUMN_FIELDS`.",
-            "enum": [
-              "column_not_a_property"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "A `resource_filter.created` or `resource_filter.updated` range has both ends and its `from`\nis not before its `until`. `from` is inclusive and `until` exclusive, so no timestamp lies\nin it, and its empty answer would look exactly like an honest \"none\". The detail names the\nrange.",
-            "enum": [
-              "inverted_range"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "A `resource_filter.created` or `resource_filter.updated` range end is earlier than\n`-4713-11-24T00:00:00Z` (4714-11-24 BC), the earliest instant a resource timestamp can be\nstored at. No resource can lie there, and the store cannot compare against it. The detail\nnames the range and the end.",
-            "enum": [
-              "timestamp_out_of_range"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "A property-predicate value — a `contains` value, a `compare` bound or a facet value — is\nlarger than 16384 bytes, or carries more than 256 nested array elements or object members.\n\nThe probe cap counts values, not bytes, so without this one value of any size validated.\nThe refusal names the predicate's position and the limit, never the value: echoing a value\nrefused for its size would return the oversized payload in the error body.",
-            "enum": [
-              "property_value_too_large"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "The property-predicate values across the whole composition sum past 524288 bytes.\n\nComposition-level, like `too_many_stages`. It is what keeps the largest\nlegal composition inside the query door's body limit once each value may be 16 KiB.",
-            "enum": [
-              "property_value_budget_exceeded"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`,\n`owner` or `title_contains` — is longer than its published cap: 256 bytes, or 4096 for\n`title_contains`, counted as JSON-escaped bytes.\n\nThe count caps bound how many strings a stage carries, never how long each is; without\nthis a plan inside every count cap could exceed the body limit and meet a bare 413. The\nrefusal names the field and the limit, never the string.",
-            "enum": [
-              "filter_string_too_long"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "A list whose entries must be distinct carries more than any legal plan can: `returns` or a\ncombine stage's `inputs` past 64, or an act's `inputs` past 2 (one per relation).\n\nRefused once, up front, like `too_many_stages`, so no check runs once per entry: an\nover-long list would otherwise answer with a refusal list many times its own size.",
-            "enum": [
-              "list_too_long"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "The composition's caller text — narrowing strings, facet and predicate values, questions —\nexceeds 786432 bytes counted as the most expansive encoder that escapes per character would\nsend it.\n\nWhat makes a legal plan fit the body limit under any encoder that escapes per character.",
-            "enum": [
-              "text_budget_exceeded"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "The ask names a shape that does not exist or that the asker cannot read. One reason and one\nfixed detail for both, so a refusal is never an existence oracle.",
-            "enum": [
-              "shape_not_askable"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "The ask names a folded shape version. It is never re-pointed at the successor: the\npredicates were written against a schema that no longer governs. `teaches` carries the\nversion now in force, when there is one.",
-            "enum": [
-              "shape_superseded"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "The shape's schema does not compile under the no-fetch compiler, or is larger than the\nwalk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The\ndetail is a fixed sentence, naming for an uncompilable schema the first keyword or cap the\ncompile refused and its schema path — schema text the asker can already read; the\ncompiler's text is never echoed.",
-            "enum": [
-              "shape_schema_uncompilable"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "An artifact predicate's path has no segments, so it would address the whole document.",
-            "enum": [
-              "empty_artifact_path"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "An artifact predicate's path is not one the shape declares, or lies beyond a bound of the\nschema walk. `teaches` carries the askable paths, and the bound when one was met.",
-            "enum": [
-              "path_outside_shape"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "The operator is not feasible at the path — `compare` where the path declares no orderable\ntype, or with a bound of a type not declared there. `teaches` carries the path's facts and\nfeasible operators.",
-            "enum": [
-              "operator_outside_shape"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "A value lies outside what the shape declares at its path: not of a declared type, not an\nenum member, or not an admissible array element. `teaches` carries the declared values and\nsays that stored content is not closed by its shape, with the route to the rest.",
-            "enum": [
-              "value_outside_shape"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "An ask's `intent` names a term outside `current` / `member` / `pinned`. `teaches` names the\nset.",
-            "enum": [
-              "unknown_artifact_intent"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "An ask's `shape_states` names a term outside the three a live shape admits — including\n`never_declared`, which no artifact under a live shape can have. `teaches` names the set.",
-            "enum": [
-              "unknown_shape_state"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or\ntwo asks in one filter whose shapes live in different homes. Either is empty by\nconstruction, since a resource has exactly one home. `teaches` names the shapes' homes.",
-            "enum": [
-              "ask_scope_conflict"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "An artifact predicate value carries U+0000, in a string or an object key. No stored content\ncan hold it — jsonb cannot represent the character — so the value could match nothing, and\nbinding it would be a database error where a refusal belongs.",
-            "enum": [
-              "unstorable_value"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "A batch read's `limit` is 0, or above the page ceiling `MAX_ARTIFACT_PAGE_ROWS` (200).\nRefused, never clamped, with no stage, and beside the ask's own refusals: a caller asking\nfor more than a page holds is told so rather than handed a short page it might read as the\nend. The detail names the body field.",
-            "enum": [
-              "page_limit_out_of_range"
             ]
           },
           {
@@ -1130,13 +969,6 @@
             "description": "`0.4*sal_norm + 0.6*query_cos`, spanning `[-0.6, 1.0]`. `survey`.",
             "enum": [
               "region_score"
-            ]
-          },
-          {
-            "type": "string",
-            "description": "The resource's creation instant in Unix epoch seconds. UNBOUNDED, and an enumeration key\nrather than a relevance: higher is newer, never better. `list-resources-with`.",
-            "enum": [
-              "created_epoch"
             ]
           },
           {

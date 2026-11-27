@@ -23,9 +23,10 @@ compares against this pin with those operations replaced by their recorded shape
 `openapi.json` here stays byte-identical to the release. Its `component_corrections` do the
 same for a `$ref`'d member of `components.schemas`: the named pinned component is replaced by its
 recorded shape, so every operation reaching it is judged against the correction. A component
-record must equal the component as `openapi.json` publishes it, and may differ from the pinned
-component only by its `oneOf` renamed to `anyOf` plus open-vocabulary growth. The rules, including
-what a component correction does not admit, are in the gate's header.
+record is derived, not authored: it must be exactly the pinned component with its `oneOf` renamed
+to `anyOf`, and the published component is judged against it like any other schema, so growth since
+the pin needs no edit here. The rules, including what a component correction does not admit, are
+in the gate's header.
 
 **Relation to pin 0.5:** this pin holds everything pin 0.5 does, plus the additive growth
 of the 0.5 era (v0.5.1 → v0.6.0). Pin selection takes the greatest pin ≤ `VERSION`'s
