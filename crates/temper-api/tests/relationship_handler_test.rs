@@ -375,3 +375,88 @@ async fn fold_relationship_marks_edge_folded(pool: PgPool) {
 
     assert!(is_folded, "edge should be folded after fold endpoint call");
 }
+
+// ─── Re-asserting the other polarity of a live edge → 409 naming it ──────────
+
+/// A re-assertion of a live edge with the other polarity answers `409 CONFLICT` naming the live
+/// edge's handle, and records nothing: the edge keeps its polarity, and the ledger gains no
+/// event. A same-polarity re-assertion still answers `200` with the same handle.
+///
+/// FAILS IF: the refusal (SQLSTATE `TF005`, migration 20261204000010) is not typed at the
+/// substrate or not mapped at the backend's bridge (it then answers `500`), or the assert no
+/// longer checks polarity (it then answers `200` with the forward edge, the bug).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reasserting_the_other_polarity_is_a_conflict_naming_the_live_edge(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    let email = format!("rh-polarity-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let sub = format!("test|{profile_id}");
+    let token = common::generate_test_jwt(&sub, &email);
+
+    let source = insert_resource(&pool, profile_id, context_id, "Whole", "rh-pol-a").await;
+    let target = insert_resource(&pool, profile_id, context_id, "Part", "rh-pol-b").await;
+    let body = |polarity: &str| {
+        json!({
+            "source": source.to_string(),
+            "target": target.to_string(),
+            "edge_kind": "contains",
+            "polarity": polarity,
+            "label": "part_of",
+            "weight": 1.0
+        })
+    };
+    let post = |b: Value| {
+        app.client
+            .post(app.url("/api/relationships"))
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&b)
+            .send()
+    };
+    let asserted_events = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
+              WHERE et.name = 'relationship_asserted'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+
+    let resp = post(body("forward")).await.expect("first assert");
+    assert_eq!(resp.status().as_u16(), 200);
+    let ack: Value = resp.json().await.unwrap();
+    let handle = ack["edge_handle"].as_str().unwrap().to_string();
+    let events = asserted_events().await;
+
+    let resp = post(body("inverse")).await.expect("inverse assert");
+    assert_eq!(resp.status().as_u16(), 409, "the other polarity conflicts");
+    let refusal: Value = resp.json().await.unwrap();
+    assert_eq!(refusal["error"]["code"], "CONFLICT", "body {refusal}");
+    assert!(
+        refusal["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains(&handle)),
+        "the refusal names the live edge {handle}: {refusal}"
+    );
+    assert_eq!(asserted_events().await, events, "nothing is recorded");
+    let polarity: String =
+        sqlx::query_scalar("SELECT polarity::text FROM kb_edges WHERE id = $1::uuid")
+            .bind(&handle)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(polarity, "forward", "the live edge keeps its polarity");
+
+    let resp = post(body("forward"))
+        .await
+        .expect("same-polarity re-assert");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "the same polarity stays idempotent"
+    );
+    let again: Value = resp.json().await.unwrap();
+    assert_eq!(again["edge_handle"], handle.as_str());
+}

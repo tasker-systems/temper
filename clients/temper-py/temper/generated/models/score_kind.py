@@ -13,40 +13,45 @@
 
 
 from __future__ import annotations
+from inspect import getfullargspec
 import json
 import pprint
+import re  # noqa: F401
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
-from typing import Any, List, Optional
-from pydantic import StrictStr, Field
-from typing import Union, List, Set, Optional, Dict
+from typing import Optional
+from typing import Union, Any, List, Set, TYPE_CHECKING, Optional, Dict
 from typing_extensions import Literal, Self
+from pydantic import Field
 
-SCOREKIND_ONE_OF_SCHEMAS = ["str"]
+SCOREKIND_ANY_OF_SCHEMAS = ["str"]
 
 class ScoreKind(BaseModel):
     """
     Which quantity a hit's score is, named so that combining two of different kinds reads as the category error it is.  The values are the DEPLOYED column names the serving functions emit — not names invented here — so a caller who greps the SQL for one finds it, and each equals the [`super::act::ActQuantity::field`] of the act that produced the row.  **OPEN, like [`super::act::ActName`].** A new act brings a new quantity, and a closed vocabulary would make adding one a breaking change for every client. Openness costs nothing here because the operation a client performs on this value is EQUALITY — *are these two scores the same kind?* — never exhaustive enumeration. Contrast [`super::disposition::StageDisposition`], which stays closed precisely because consumers match it exhaustively.  **The ranges differ and these names do not say so.** `vec_norm` rescales a cosine distance as `1 - d/2` into `[0,1]`; `region_score` rescales the identical operator as `1 - d` and spans `[-0.6, 1.0]`; `graph_score` is unbounded. The range rides once per stage on [`super::envelope::StageResult::orders_by`] rather than per row — read it instead of assuming `[0,1]`, which is the live mistake in this family, not a hypothetical one.
     """
-    # data type: str
-    oneof_schema_1_validator: Optional[StrictStr] = Field(default=None, description="`ts_rank` flag 33 — `rank/(rank+1)` plus log-length division — in `[0,1)`. `find-exact`.")
-    # data type: str
-    oneof_schema_2_validator: Optional[StrictStr] = Field(default=None, description="pgvector cosine distance rescaled as `1 - d/2`, in `[0,1]`. Both `find-about-*` acts.")
-    # data type: str
-    oneof_schema_3_validator: Optional[StrictStr] = Field(default=None, description="Product of edge weights along the best path. UNBOUNDED. `follow-from`.")
-    # data type: str
-    oneof_schema_4_validator: Optional[StrictStr] = Field(default=None, description="`0.4*sal_norm + 0.6*query_cos`, spanning `[-0.6, 1.0]`. `survey`.")
-    # data type: str
-    oneof_schema_5_validator: Optional[StrictStr] = Field(default=None, description="The resource's creation instant in Unix epoch seconds. UNBOUNDED, and an enumeration key rather than a relevance: higher is newer, never better. `list-resources-with`.")
-    # data type: str
-    oneof_schema_6_validator: Optional[StrictStr] = Field(default=None, description="A kind this consumer does not recognize — only ever produced by deserializing a producer newer than this consumer.")
-    actual_instance: Optional[Union[str]] = None
-    one_of_schemas: Set[str] = { "str" }
 
-    model_config = ConfigDict(
-        validate_assignment=True,
-        protected_namespaces=(),
-    )
+    # data type: str
+    anyof_schema_1_validator: Optional[StrictStr] = Field(default=None, description="`ts_rank` flag 33 — `rank/(rank+1)` plus log-length division — in `[0,1)`. `find-exact`.")
+    # data type: str
+    anyof_schema_2_validator: Optional[StrictStr] = Field(default=None, description="pgvector cosine distance rescaled as `1 - d/2`, in `[0,1]`. Both `find-about-*` acts.")
+    # data type: str
+    anyof_schema_3_validator: Optional[StrictStr] = Field(default=None, description="Product of edge weights along the best path. UNBOUNDED. `follow-from`.")
+    # data type: str
+    anyof_schema_4_validator: Optional[StrictStr] = Field(default=None, description="`0.4*sal_norm + 0.6*query_cos`, spanning `[-0.6, 1.0]`. `survey`.")
+    # data type: str
+    anyof_schema_5_validator: Optional[StrictStr] = Field(default=None, description="The resource's creation instant in Unix epoch seconds. UNBOUNDED, and an enumeration key rather than a relevance: higher is newer, never better. `list-resources-with`.")
+    # data type: str
+    anyof_schema_6_validator: Optional[StrictStr] = Field(default=None, description="A kind this consumer does not recognize — only ever produced by deserializing a producer newer than this consumer.")
+    if TYPE_CHECKING:
+        actual_instance: Optional[Union[str]] = None
+    else:
+        actual_instance: Any = None
+    any_of_schemas: Set[str] = { "str" }
 
+    model_config = {
+        "validate_assignment": True,
+        "protected_namespaces": (),
+    }
 
     def __init__(self, *args, **kwargs) -> None:
         if args:
@@ -59,57 +64,53 @@ class ScoreKind(BaseModel):
             super().__init__(**kwargs)
 
     @field_validator('actual_instance')
-    def actual_instance_must_validate_oneof(cls, v):
+    def actual_instance_must_validate_anyof(cls, v):
         instance = ScoreKind.model_construct()
         error_messages = []
-        match = 0
         # validate data type: str
         try:
-            instance.oneof_schema_1_validator = v
-            match += 1
+            instance.anyof_schema_1_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_2_validator = v
-            match += 1
+            instance.anyof_schema_2_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_3_validator = v
-            match += 1
+            instance.anyof_schema_3_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_4_validator = v
-            match += 1
+            instance.anyof_schema_4_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_5_validator = v
-            match += 1
+            instance.anyof_schema_5_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_6_validator = v
-            match += 1
+            instance.anyof_schema_6_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
-        if match > 1:
-            # more than 1 match
-            raise ValueError("Multiple matches found when setting `actual_instance` in ScoreKind with oneOf schemas: str. Details: " + ", ".join(error_messages))
-        elif match == 0:
+        if error_messages:
             # no match
-            raise ValueError("No match found when setting `actual_instance` in ScoreKind with oneOf schemas: str. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when setting the actual_instance in ScoreKind with anyOf schemas: str. Details: " + ", ".join(error_messages))
         else:
             return v
 
     @classmethod
-    def from_dict(cls, obj: Union[str, Dict[str, Any]]) -> Self:
+    def from_dict(cls, obj: Dict[str, Any]) -> Self:
         return cls.from_json(json.dumps(obj))
 
     @classmethod
@@ -117,69 +118,64 @@ class ScoreKind(BaseModel):
         """Returns the object represented by the json string"""
         instance = cls.model_construct()
         error_messages = []
-        match = 0
-
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_1_validator = json.loads(json_str)
+            instance.anyof_schema_1_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_1_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_1_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_2_validator = json.loads(json_str)
+            instance.anyof_schema_2_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_2_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_2_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_3_validator = json.loads(json_str)
+            instance.anyof_schema_3_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_3_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_3_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_4_validator = json.loads(json_str)
+            instance.anyof_schema_4_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_4_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_4_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_5_validator = json.loads(json_str)
+            instance.anyof_schema_5_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_5_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_5_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_6_validator = json.loads(json_str)
+            instance.anyof_schema_6_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_6_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_6_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
 
-        if match > 1:
-            # more than 1 match
-            raise ValueError("Multiple matches found when deserializing the JSON string into ScoreKind with oneOf schemas: str. Details: " + ", ".join(error_messages))
-        elif match == 0:
+        if error_messages:
             # no match
-            raise ValueError("No match found when deserializing the JSON string into ScoreKind with oneOf schemas: str. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when deserializing the JSON string into ScoreKind with anyOf schemas: str. Details: " + ", ".join(error_messages))
         else:
             return instance
 
@@ -201,7 +197,6 @@ class ScoreKind(BaseModel):
         if hasattr(self.actual_instance, "to_dict") and callable(self.actual_instance.to_dict):
             return self.actual_instance.to_dict()
         else:
-            # primitive type
             return self.actual_instance
 
     def to_str(self) -> str:

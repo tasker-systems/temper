@@ -17,25 +17,24 @@ module Temper::Generated
   # Which quantity a hit's score is, named so that combining two of different kinds reads as the category error it is.  The values are the DEPLOYED column names the serving functions emit — not names invented here — so a caller who greps the SQL for one finds it, and each equals the [`super::act::ActQuantity::field`] of the act that produced the row.  **OPEN, like [`super::act::ActName`].** A new act brings a new quantity, and a closed vocabulary would make adding one a breaking change for every client. Openness costs nothing here because the operation a client performs on this value is EQUALITY — *are these two scores the same kind?* — never exhaustive enumeration. Contrast [`super::disposition::StageDisposition`], which stays closed precisely because consumers match it exhaustively.  **The ranges differ and these names do not say so.** `vec_norm` rescales a cosine distance as `1 - d/2` into `[0,1]`; `region_score` rescales the identical operator as `1 - d` and spans `[-0.6, 1.0]`; `graph_score` is unbounded. The range rides once per stage on [`super::envelope::StageResult::orders_by`] rather than per row — read it instead of assuming `[0,1]`, which is the live mistake in this family, not a hypothetical one.
   module ScoreKind
     class << self
-      # List of class defined in oneOf (OpenAPI v3)
-      def openapi_one_of
+      # List of class defined in anyOf (OpenAPI v3)
+      def openapi_any_of
         [
           :'String'
         ]
       end
 
       # Builds the object
-      # @param [Mixed] Data to be matched against the list of oneOf items
+      # @param [Mixed] Data to be matched against the list of anyOf items
       # @return [Object] Returns the model or the data itself
       def build(data)
-        # Go through the list of oneOf items and attempt to identify the appropriate one.
+        # Go through the list of anyOf items and attempt to identify the appropriate one.
         # Note:
-        # - We do not attempt to check whether exactly one item matches.
         # - No advanced validation of types in some cases (e.g. "x: { type: string }" will happily match { x: 123 })
         #   due to the way the deserialization is made in the base_object template (it just casts without verifying).
         # - TODO: scalar values are de facto behaving as if they were nullable.
         # - TODO: logging when debugging is set.
-        openapi_one_of.each do |klass|
+        openapi_any_of.each do |klass|
           begin
             next if klass == :AnyType # "nullable: true"
             return find_and_cast_into_type(klass, data)
@@ -43,7 +42,7 @@ module Temper::Generated
           end
         end
 
-        openapi_one_of.include?(:AnyType) ? data : nil
+        openapi_any_of.include?(:AnyType) ? data : nil
       end
 
       private
@@ -82,7 +81,7 @@ module Temper::Generated
         else # model
           const = Temper::Generated.const_get(klass)
           if const
-            if const.respond_to?(:openapi_one_of) # nested oneOf model
+            if const.respond_to?(:openapi_any_of) # nested anyOf model
               model = const.build(data)
               return model if model
             else

@@ -16884,7 +16884,7 @@
         "additionalProperties": false
       },
       "ActName": {
-        "oneOf": [
+        "anyOf": [
           {
             "type": "string",
             "description": "*I can quote the exact words.*",
@@ -22811,7 +22811,7 @@
         }
       },
       "IdKind": {
-        "oneOf": [
+        "anyOf": [
           {
             "type": "string",
             "enum": [
@@ -26390,7 +26390,7 @@
         "description": "Why a principal was refused, typed.\n\nThis replaces the stringly-typed enriched 403, which carried `access_mode: String` and whose\ntests asserted a sentinel `\"join_request\"` that was never a real mode (the domain *was*\n`open`/`invite_only`; that column was retired and admission is now per-principal standing).\n\nSpec §12: \"Every illegal cell asserts a *reason*, not just a refusal. The point of refusing at\nthe act is that the actor learns why; a test that only checks 'not admitted' would pass on a\nsilent denial.\""
       },
       "RefusalReason": {
-        "oneOf": [
+        "anyOf": [
           {
             "type": "string",
             "description": "The act does not accept bounds of the supplied `IdKind`.",
@@ -28872,7 +28872,7 @@
         }
       },
       "ScoreKind": {
-        "oneOf": [
+        "anyOf": [
           {
             "type": "string",
             "description": "`ts_rank` flag 33 — `rank/(rank+1)` plus log-length division — in `[0,1)`. `find-exact`.",

@@ -89,6 +89,11 @@ fn api_err<E: Into<anyhow::Error>>(e: E) -> TemperError {
     if let Some(edge) = crate::error::erased_edge_refused(&e) {
         return TemperError::NotFound(format!("edge {edge} not found"));
     }
+    // A re-assertion of a live edge with the other polarity, refused before anything was recorded
+    // (migration 20261204000010): the caller's conflict, naming the live edge to retype or fold.
+    if let Some(conflict) = crate::error::edge_polarity_conflict(&e) {
+        return TemperError::Conflict(conflict);
+    }
     TemperError::Api(e.to_string())
 }
 
@@ -2268,11 +2273,13 @@ impl DbBackend {
                     .ok_or_else(|| {
                         TemperError::BadRequest(format!("unknown edge polarity: {}", e.polarity))
                     })?;
-                // Per-edge existence check, polarity-aware (a forward and an inverse edge of the same
-                // kind to the same target are distinct, both deliverable). Re-asserting a present edge
-                // would append an event (`relationship_assert` fires unconditionally) and break
-                // idempotency, so skip when already present. The kernel has ~15 edges; per-edge
-                // `find_edge` is fine.
+                // Per-edge existence check, polarity-aware. Re-asserting a present edge would append
+                // an event (`relationship_assert` fires unconditionally) and break idempotency, so
+                // skip when already present. A forward and an inverse edge of the same kind, label
+                // and target are NOT two edges: polarity is outside the edge's live identity, so
+                // asserting the other direction of a live edge is refused as a conflict naming it
+                // (migration 20261204000010), and the reconcile rolls back. The kernel has ~15
+                // edges; per-edge `find_edge` is fine.
                 let present = readback::find_edge(
                     &mut *conn,
                     ResourceId::from(src),

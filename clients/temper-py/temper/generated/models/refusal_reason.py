@@ -13,140 +13,145 @@
 
 
 from __future__ import annotations
+from inspect import getfullargspec
 import json
 import pprint
+import re  # noqa: F401
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
-from typing import Any, List, Optional
-from pydantic import StrictStr, Field
-from typing import Union, List, Set, Optional, Dict
+from typing import Optional
+from typing import Union, Any, List, Set, TYPE_CHECKING, Optional, Dict
 from typing_extensions import Literal, Self
+from pydantic import Field
 
-REFUSALREASON_ONE_OF_SCHEMAS = ["str"]
+REFUSALREASON_ANY_OF_SCHEMAS = ["str"]
 
 class RefusalReason(BaseModel):
     """
     Why an act refused. A typed variant so every door renders the same value; how a door TRANSPORTS it (HTTP status, MCP error code) stays a door concern.  OPEN vocabulary, deliberately — design §6.1 settled openness for the `act` discriminator and for `disposition` but never ruled on refusals, and v0 first shipped this closed by default. Corrected by decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`: the growth this contract wants includes new ways to decline, so a closed enum would make every future reason a breaking change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions, matched exhaustively.
     """
-    # data type: str
-    oneof_schema_1_validator: Optional[StrictStr] = Field(default=None, description="The act does not accept bounds of the supplied `IdKind`.")
-    # data type: str
-    oneof_schema_2_validator: Optional[StrictStr] = Field(default=None, description="A cogmap or context bound arrived carrying anything other than exactly one id.  **Distinct from [`RefusalReason::UnsupportedBoundKind`] on purpose, and the distinction is the whole reason this variant exists.** The kind IS accepted — reporting \"this act does not narrow on that kind of id\" would teach the caller the wrong lesson (*stop sending cogmap bounds*) when the right one is *send one*. `RefusalReason` is OPEN precisely so a reason that says the true thing can be added without breaking a client.  The constraint is the fragments': a resource bound is a `uuid[]`, but a cogmap or context bound is served by an `(anchor_table, anchor_id)` PAIR, which holds one id. Spec §9 names the mismatch — *\"an `IdSet` holds N ids; an anchor slot holds one\"* — as an open cardinality gap, and refusing is the honest response to it. Silently anchoring on the first element would answer a different question than the one asked and look like a successful narrowing.  **Zero refuses too, and is not \"unbounded\".** For a resource array the fragments distinguish `'{}'` (bounded to nothing) from `NULL` (unbounded); an anchor has no such pair, so an empty anchor set is a caller who asked to scope and named nothing. Admitting it would drop the scope and answer the unscoped question.  `[moved from the compiler — 2026-08-09, Pete]` The compiler used to raise this as an `Err` that aborted the whole composition, costing every innocent stage beside it. It is a STATIC property of the plan, so it belongs here, in the 400 with every other refusal at once.")
-    # data type: str
-    oneof_schema_3_validator: Optional[StrictStr] = Field(default=None, description="The act does not accept seeds of the supplied `IdKind`.")
-    # data type: str
-    oneof_schema_4_validator: Optional[StrictStr] = Field(default=None, description="A region set arrived without the `provenance` its kind requires.")
-    # data type: str
-    oneof_schema_5_validator: Optional[StrictStr] = Field(default=None, description="The act is declared but not built (`build_state` is not `served` or `fused`).")
-    # data type: str
-    oneof_schema_6_validator: Optional[StrictStr] = Field(default=None, description="A find stage with no threaded intention — no QUESTION, not no vector. Explicitly NOT a silent substitution.  The distinction is load-bearing and easy to lose. This fires when the composition supplied no query text at all, which `find-exact` cannot work around: its text becomes `p_query` and there is nowhere else to source it. It does **not** fire for a missing embedding — the server computes one, because API callers structurally cannot, and a failed attempt is [`RefusalReason::EmbeddingUnavailable`] instead.")
-    # data type: str
-    oneof_schema_7_validator: Optional[StrictStr] = Field(default=None, description="`ReturnSpec.with` named a hydration section this door does not offer.  A refusal rather than a parse error on purpose. The section vocabulary is shared with `show` and `list`, so `body` and `edges` are real words that deserialize cleanly — they are simply not what `/api/query` hydrates, and saying so (with a pointer to the door that does) is worth more than a deserializer's \"unknown variant\". It also keeps the promise that every refusal comes back at once: serde failures short-circuit before validation runs.")
-    # data type: str
-    oneof_schema_8_validator: Optional[StrictStr] = Field(default=None, description="A filter slot the act does not admit (`ResourceFilter` on an edge-only act, or the reverse). Declined, never ignored.")
-    # data type: str
-    oneof_schema_9_validator: Optional[StrictStr] = Field(default=None, description="A bound term was supplied to an act for which that frame of reference does not exist — e.g. `limit` (rows) handed to `survey`, whose bound is a funnel width. The term is never reinterpreted to fit; it is declined. Raised STATICALLY, at plan validation against the generated schemas, so an inapplicable bound is a property of the plan rather than a runtime surprise.")
-    # data type: str
-    oneof_schema_10_validator: Optional[StrictStr] = Field(default=None, description="An `order` was supplied to an act that does not let the caller choose its direction (`ActDeclaration::accepts_order` is `false`). Declined, never ignored, by the rule `bound_term_not_applicable` follows: an act-level parameter the act does not admit.")
-    # data type: str
-    oneof_schema_11_validator: Optional[StrictStr] = Field(default=None, description="The act is declared and built, but its mechanic is not reachable from THIS surface — the compiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the distinction `BuildState` cannot draw: existence versus reachability-from-this-surface.  The live instance before beat D was the three `find` acts: `BuildState::Served` with their own SQL functions (`search_exact` / `search_wide`), which the beat-C compiler did not emit. `NotImplemented` would have been false about them (they are served); this variant is the honest one. Beat D deleted the refusal for them by giving the compiler their fragments.  The live instances are `substantiate` and `survey` — the first `Served`, the second `Fused`, both with mechanics the compiler emits no fragment for. **The rule keys on the callable-fragment set and never on `build_state`, and `substantiate` is what holds that**: it is `Served` and unreachable, so a rule reading the discriminant would admit an act this surface cannot emit.  `[corrected — 2026-08-15, found while adding `SubtrahendRefused`]` This named a trio — *\"`substantiate`, `follow-from` and `survey` … all three with mechanics the compiler emits no fragment for\"* — and **`follow-from` had not belonged to it since 2026-08-14**, when `query_follow_from` entered `CALLABLE_FRAGMENTS` and `registry.rs` moved the act from `Absent` to `Serves` at CLI and API on exactly that condition. So one edit updated the declaration and left the doc describing the world before it.  Worth correcting rather than tidying, because **this doc comment is a published schema description** (`tests/fixtures/query/refusal.schema.json`, and `RefusalReason` in temper-ui's generated `query.ts`) — the same reason [`super::composition::Intention`]'s header gives for repairing its own stale sentence in place. The `Fused`-half argument that hung off the trio is dropped with it: it observed that the discriminant *happened* to agree about a pair, which was a coincidence of the corpus and is not one now.")
-    # data type: str
-    oneof_schema_12_validator: Optional[StrictStr] = Field(default=None, description="**The one refusal that is not static.** A `find-about-*` stage needed a query embedding, the server had to compute it because the caller could not, and the attempt failed — an error, a panic, or the query-embed budget expiring.  It is a refusal rather than an empty because the stage holds a well-formed question it cannot answer; returning `empty` would hand back a list that reads like an answer. It is also the reason every OTHER refusal here can be reported as a 400 before anything runs: this is the only one that can appear mid-flight, and it is what gives a runtime refusal a referent at all. `[decided — 2026-08-08, Pete]`")
-    # data type: str
-    oneof_schema_13_validator: Optional[StrictStr] = Field(default=None, description="A `difference` stage whose SUBTRAHEND — or anything upstream of it — refused, so what to subtract is not known. `[added — 2026-08-15]`  **The only refusal a stage inherits rather than raises**, and the reason it has to exist is that the contract's standing rule inverts here. Every other consumer of a refused stage takes it as an EMPTY set and is bounded to nothing — safe, because every other consumer is MONOTONE: less input, less output. `EXCEPT` is anti-monotone in its right arm. An empty subtrahend subtracts nothing and hands back the minuend IN FULL, which is the maximal answer produced by a failure, and it is indistinguishable from a successful one.  That is exactly what [`StageDisposition::Refused`]'s own rule forbids — *\"a stage that depends on a refused one answers over nothing rather than over everything\"* — so the stage refuses and its own CTE is empty, at which point the ordinary rule governs everything downstream of it again.  **Transitive, and that is not caution.** A refusal one hop ABOVE the subtrahend never reaches the subtrahend's own disposition: a union with one refused arm answers with its surviving arm, which is less than the truth, so the difference subtracts less than it should and over-returns — silently, since nothing anywhere reports a problem. A check reading only the subtrahend's own refusal would pass that straight through.  It does **not** fire for a refused MINUEND. `∅ − B` is `∅`, the ordinary bounded-to-nothing outcome, and refusing there would report a refusal for a stage that gave the honest answer.")
-    # data type: str
-    oneof_schema_14_validator: Optional[StrictStr] = Field(default=None, description="The composition declares no stages, so it asks nothing.")
-    # data type: str
-    oneof_schema_15_validator: Optional[StrictStr] = Field(default=None, description="The composition declares more stages than the contract admits.  `[added — 2026-08-26]` The counterpart to [`RefusalReason::NoStages`]: a plan has a floor and now a ceiling, and the ceiling is [`Composition::stages`](super::composition::Composition::stages)' published `max_items`. Every declared stage is executed whether or not `returns` names it, so the stage count is what a composition costs — the bound makes that cost legible up front instead of a caller discovering it in a latency number.  **The repair is decomposition, not persuasion.** A question needing more stages than this is more than one question: ask them as separate compositions and combine the answers, which is also what makes each one's trace readable. The ceiling is far above anything a hand-authored plan reaches; a plan meeting it is usually generated in a loop.  Raised in the SHAPE pass, so it costs nothing to receive — refused before any embedding or database contact, on every door. That placement is only legal because the number is published: a client refuses what the CONTRACT forbids, never what one deployment chose, and widening it is a wire-contract change visible in `openapi.json`.")
-    # data type: str
-    oneof_schema_16_validator: Optional[StrictStr] = Field(default=None, description="A stage's `intention.query` is longer than the contract admits.  `[added — 2026-08-28]` The second member of the declaration family [`RefusalReason::TooManyStages`] opened, and it is raised for the same reason in the same place: the ceiling is [`Intention::query`](super::composition::Intention::query)' published `max_length`, so a client refuses what the CONTRACT forbids rather than what one deployment chose.  **What it closes is work paid for and then discarded.** The embedder tokenizes the whole string and truncates the ENCODING to 512 tokens (`temper-ingest`'s `embed_batch` → `truncate_encoding`), so every byte past the model's window is tokenized, paid for, and thrown away. The cap sits far above 512 tokens of English, so no question anyone asks meets it.  **Refused rather than truncated**, which is this contract's standing choice: a silently shortened question is a different question answered confidently, the substitution [`RefusalReason::FilterNotApplicable`]'s sites exist to prevent one field over.  Counted in **bytes**, not characters. The bound exists to bound work and transfer, both of which are byte-shaped, and a char count would admit four times the bytes for a plan written in a non-Latin script.")
-    # data type: str
-    oneof_schema_17_validator: Optional[StrictStr] = Field(default=None, description="An [`IdSet`](super::id_set::IdSet) carries more ids than the contract admits.  `[added — 2026-08-28]` Third member of the same family, published as `max_items` on [`IdSet::ids`](super::id_set::IdSet::ids) and raised in the shape pass for the same reason.  **What it bounds is a product, not a list.** A caller's id set is compared against the visible corpus to produce the `unusable` tally every stage discloses, so its cost is `|caller ids| × |visible ids|` — the same `|candidates| × |second factor|` shape `MAX_PER_CANDIDATE_PROBES` was measured against, with the caller choosing the second factor again.  **Distinct from [`RefusalReason::AnchorTakesOneId`], which is not retired by it.** That one refuses a *cogmap or context* bound carrying more than one id, because today's fragments take an `(anchor_table, anchor_id)` pair — a limitation of what this server has built, which an `anchor_ids uuid[]` would retire, and which therefore lives in the capability pass. This one is a contract fact about every kind and cannot move without a wire change.")
-    # data type: str
-    oneof_schema_18_validator: Optional[StrictStr] = Field(default=None, description="The composition asks the server to embed more question text than it can inside its budget.  `[added — 2026-08-28]` The one member of the declaration family that is **not** a contract fact, and it is raised in the CAPABILITY pass for exactly that reason: what a deployment can embed inside `DEFAULT_QUERY_EMBED_BUDGET_MS` is a property of the machine it runs on, not of the wire. A beefier deployment could raise it, and a client refusing on this number against a server that raised it would refuse a plan that server answers — which is what the shape pass may never do. Its unpublished siblings `MAX_PER_CANDIDATE_PREDICATES` and `MAX_PER_CANDIDATE_PROBES` are the same shape: cost bounds over a SUM, unexpressible per field, and capability for the same reason.  **It counts only what the SERVER must embed** — stages whose `intention` carries no vector. A caller who precomputed has already paid that cost, and refusing them for it would bound work nobody does.  **The repair is fewer or shorter questions, and it is a real repair**: over the budget no stage gets a vector at all, so the alternative to this refusal is not a slower answer, it is every find stage refusing `embedding_unavailable` at once with nothing saying why.")
-    # data type: str
-    oneof_schema_19_validator: Optional[StrictStr] = Field(default=None, description="A narrowing list carries more values than the contract admits.  `[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags` and `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array containment and `= ANY` are single operations whatever their length — which is precisely why nothing had capped them. What they cost is BODY: ten thousand one-character labels per stage serialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits with a bare 413. See `MAX_FILTER_VALUES`.  Also an artifact predicate path past `MAX_ARTIFACT_PATH_DEPTH` segments, or an artifact ask's `intent` or `shape_states` longer than its vocabulary (with `teaches.terms`). And a composition whose artifact filters together carry more asks than `MAX_ASKS_PER_REQUEST` or name more distinct shapes than `MAX_ASKED_SHAPES` — refused before any shape is loaded.")
-    # data type: str
-    oneof_schema_20_validator: Optional[StrictStr] = Field(default=None, description="A list that means a SET names the same member twice.  `[added — 2026-08-28, found in review]` `ReturnSpec::with` and `EdgeFilter::edge_kinds` are both closed vocabularies carried as lists, and a repeat in either changes nothing about the answer — hydrating a section twice hydrates it once, and walking `leads_to` twice walks it once. Left admitted, the repeat is a caller's only way to make an unbounded body out of a bounded vocabulary: `with: [open_meta; 10_000]` per return validated `Ok` at **9.6 MB** `[measured — 2026-08-28]`.  **Refusing rather than deduplicating**, which is this contract's standing choice and the same one [`RefusalReason::DuplicateReturnStage`] made one field over: silently collapsing a caller's list answers a question they did not quite ask, and says nothing about it. De-duplicating is also what makes the bound disappear — the count would be silently clamped to the vocabulary size, which is a cost decision taken by omission.")
-    # data type: str
-    oneof_schema_21_validator: Optional[StrictStr] = Field(default=None, description="A caller-supplied query vector is not the shape this server's vector space has.  `[added — 2026-08-28, found in review]` `Intention::embedding` carried no bound at all, which made it the largest unbounded field on the contract — a million floats on one stage is 4 MB that validates cleanly, times [`super::composition::MAX_STAGES`] stages.  **Not a `TooMany…`**, and the difference is what a caller can act on. A wrong-length vector is not a large question; it is a vector for a different space, and 767 floats is exactly as wrong as 769. Before this it reached pgvector, whose dimension complaint the door redacts to an opaque 500 — a caller told nothing at all, by the surface whose contract is that every refusal arrives at once and in their own vocabulary.")
-    # data type: str
-    oneof_schema_22_validator: Optional[StrictStr] = Field(default=None, description="The composition returns no stages, so it answers nothing.")
-    # data type: str
-    oneof_schema_23_validator: Optional[StrictStr] = Field(default=None, description="Two stages share a name.")
-    # data type: str
-    oneof_schema_24_validator: Optional[StrictStr] = Field(default=None, description="A set combination needs two or more inputs.")
-    # data type: str
-    oneof_schema_25_validator: Optional[StrictStr] = Field(default=None, description="A stage references a stage that was never declared.")
-    # data type: str
-    oneof_schema_26_validator: Optional[StrictStr] = Field(default=None, description="A stage is named more than once in `returns`.")
-    # data type: str
-    oneof_schema_27_validator: Optional[StrictStr] = Field(default=None, description="A stage carries two inputs in the same relation — two seeds, or two bounds.  `[added — 2026-08-14]` with the widening of `ActInvocation::inputs` from one slot to a list. The list exists so a stage can hold a seed **and** a bound at once; it is deliberately not a general fan-in `[decided — 2026-08-14, Pete]`.  **Refused rather than unioned, and that is the whole point of the variant.** Merging two seed sets is `CombineOp::Union` — an existing stage the caller declares, that appears in the trace, and whose `produced` count a reader can see. Doing it implicitly inside one act's input list would be the same merge with no stage, no tally and no disclosure, which is the silent-substitution class this contract keeps closing.  It lives in the SHAPE pass: a duplicate relation is malformed whatever the act, so no declaration is consulted to decide it.")
-    # data type: str
-    oneof_schema_28_validator: Optional[StrictStr] = Field(default=None, description="A returned stage's rows have no single ordering quantity to score them.  `[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a combinator, whose rows come from two or more acts — when the rule is about the consequence, and a second cause arrived: `find-resources-with` selects a set and orders nothing, so a stage running it has no quantity either. Two reasons for one consequence would make a client's handling depend on which route produced it, when the repair is the same: return something that ranks, and use this stage as its input.")
-    # data type: str
-    oneof_schema_29_validator: Optional[StrictStr] = Field(default=None, description="A stage whose output is a PAGE is named as another stage's input — a bound, a seed, or a combinator operand. Today that is a `list-resources-with` stage.  The mirror of [`RefusalReason::StageNotReturnable`]. A page looks exactly like the set it is a sample of, so piping it on would bound a later stage to an arbitrary subset while looking like a narrowing — and as a `difference` subtrahend it reports every match past the page as absent, under `extent: complete`. The repair is to select with `find-resources-with`, pipe that, and return `list-resources-with`.")
-    # data type: str
-    oneof_schema_30_validator: Optional[StrictStr] = Field(default=None, description="`returns` names a stage that was never declared.")
-    # data type: str
-    oneof_schema_31_validator: Optional[StrictStr] = Field(default=None, description="The composition contains a cycle; a query DAG must be acyclic.")
-    # data type: str
-    oneof_schema_32_validator: Optional[StrictStr] = Field(default=None, description="The `act` name is not one this server declares. `ActName` is open, so this is reachable.")
-    # data type: str
-    oneof_schema_33_validator: Optional[StrictStr] = Field(default=None, description="A property predicate was supplied with no key.")
-    # data type: str
-    oneof_schema_34_validator: Optional[StrictStr] = Field(default=None, description="A `contains` predicate was supplied with no values, so it narrows nothing.")
-    # data type: str
-    oneof_schema_35_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter.properties` predicate names a field every resource carries as a column, never as a property row: `created` or `updated`, or their frontmatter names `temper-created` and `temper-updated`.  A property predicate reads only `kb_properties` rows, so it could match nothing, and the empty answer it would give looks exactly like an honest \"none\". The detail names the field and the range that narrows by it, `resource_filter.created` or `resource_filter.updated`. The list is `filter::RESOURCE_COLUMN_FIELDS`.")
-    # data type: str
-    oneof_schema_36_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter` carries a field it does not declare, such as `created_at` for `created`. An unknown field would narrow nothing, so the stage would answer a wider question than the one asked and say nothing of it. The detail names the field (cut to 64 bytes) and lists the fields `resource_filter` declares. Raised by the server, which knows its own field set, so a plan sent to a newer server that declares the field is not refused.")
-    # data type: str
-    oneof_schema_37_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter.created` or `resource_filter.updated` range has both ends and its `from` is not before its `until`. `from` is inclusive and `until` exclusive, so no timestamp lies in it, and its empty answer would look exactly like an honest \"none\". The detail names the range.")
-    # data type: str
-    oneof_schema_38_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter.created` or `resource_filter.updated` range end is earlier than `-4713-11-24T00:00:00Z` (4714-11-24 BC), the earliest instant a resource timestamp can be stored at. No resource can lie there, and the store cannot compare against it. The detail names the range and the end.")
-    # data type: str
-    oneof_schema_39_validator: Optional[StrictStr] = Field(default=None, description="A property-predicate value — a `contains` value, a `compare` bound or a facet value — is larger than 16384 bytes, or carries more than 256 nested array elements or object members.  The probe cap counts values, not bytes, so without this one value of any size validated. The refusal names the predicate's position and the limit, never the value: echoing a value refused for its size would return the oversized payload in the error body.")
-    # data type: str
-    oneof_schema_40_validator: Optional[StrictStr] = Field(default=None, description="The property-predicate values across the whole composition sum past 524288 bytes.  Composition-level, like `too_many_stages`. It is what keeps the largest legal composition inside the query door's body limit once each value may be 16 KiB.")
-    # data type: str
-    oneof_schema_41_validator: Optional[StrictStr] = Field(default=None, description="A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`, `owner` or `title_contains` — is longer than its published cap: 256 bytes, or 4096 for `title_contains`, counted as JSON-escaped bytes.  The count caps bound how many strings a stage carries, never how long each is; without this a plan inside every count cap could exceed the body limit and meet a bare 413. The refusal names the field and the limit, never the string.")
-    # data type: str
-    oneof_schema_42_validator: Optional[StrictStr] = Field(default=None, description="A list whose entries must be distinct carries more than any legal plan can: `returns` or a combine stage's `inputs` past 64, or an act's `inputs` past 2 (one per relation).  Refused once, up front, like `too_many_stages`, so no check runs once per entry: an over-long list would otherwise answer with a refusal list many times its own size.")
-    # data type: str
-    oneof_schema_43_validator: Optional[StrictStr] = Field(default=None, description="The composition's caller text — narrowing strings, facet and predicate values, questions — exceeds 786432 bytes counted as the most expansive encoder that escapes per character would send it.  What makes a legal plan fit the body limit under any encoder that escapes per character.")
-    # data type: str
-    oneof_schema_44_validator: Optional[StrictStr] = Field(default=None, description="The ask names a shape that does not exist or that the asker cannot read. One reason and one fixed detail for both, so a refusal is never an existence oracle.")
-    # data type: str
-    oneof_schema_45_validator: Optional[StrictStr] = Field(default=None, description="The ask names a folded shape version. It is never re-pointed at the successor: the predicates were written against a schema that no longer governs. `teaches` carries the version now in force, when there is one.")
-    # data type: str
-    oneof_schema_46_validator: Optional[StrictStr] = Field(default=None, description="The shape's schema does not compile under the no-fetch compiler, or is larger than the walk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The detail is a fixed sentence, naming for an uncompilable schema the first keyword or cap the compile refused and its schema path — schema text the asker can already read; the compiler's text is never echoed.")
-    # data type: str
-    oneof_schema_47_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate's path has no segments, so it would address the whole document.")
-    # data type: str
-    oneof_schema_48_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate's path is not one the shape declares, or lies beyond a bound of the schema walk. `teaches` carries the askable paths, and the bound when one was met.")
-    # data type: str
-    oneof_schema_49_validator: Optional[StrictStr] = Field(default=None, description="The operator is not feasible at the path — `compare` where the path declares no orderable type, or with a bound of a type not declared there. `teaches` carries the path's facts and feasible operators.")
-    # data type: str
-    oneof_schema_50_validator: Optional[StrictStr] = Field(default=None, description="A value lies outside what the shape declares at its path: not of a declared type, not an enum member, or not an admissible array element. `teaches` carries the declared values and says that stored content is not closed by its shape, with the route to the rest.")
-    # data type: str
-    oneof_schema_51_validator: Optional[StrictStr] = Field(default=None, description="An ask's `intent` names a term outside `current` / `member` / `pinned`. `teaches` names the set.")
-    # data type: str
-    oneof_schema_52_validator: Optional[StrictStr] = Field(default=None, description="An ask's `shape_states` names a term outside the three a live shape admits — including `never_declared`, which no artifact under a live shape can have. `teaches` names the set.")
-    # data type: str
-    oneof_schema_53_validator: Optional[StrictStr] = Field(default=None, description="An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or two asks in one filter whose shapes live in different homes. Either is empty by construction, since a resource has exactly one home. `teaches` names the shapes' homes.")
-    # data type: str
-    oneof_schema_54_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate value carries U+0000, in a string or an object key. No stored content can hold it — jsonb cannot represent the character — so the value could match nothing, and binding it would be a database error where a refusal belongs.")
-    # data type: str
-    oneof_schema_55_validator: Optional[StrictStr] = Field(default=None, description="A batch read's `limit` is 0, or above the page ceiling `MAX_ARTIFACT_PAGE_ROWS` (200). Refused, never clamped, with no stage, and beside the ask's own refusals: a caller asking for more than a page holds is told so rather than handed a short page it might read as the end. The detail names the body field.")
-    # data type: str
-    oneof_schema_56_validator: Optional[StrictStr] = Field(default=None, description="A reason outside the declared vocabulary.  `[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by deserializing a producer newer than this consumer.\" **That was false at the time**: `validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while every declared variant was snake_case — a client's vocabulary was two conventions at once. Found in review; recorded rather than repaired then, because promoting twelve strings to variants is a wire change and nothing consumed them yet — `/api/query` did not exist, so the change was free and the door was the moment it would stop being free.  `[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants above, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is exactly what its original doc said — a reason from a producer newer than this consumer, one this binary has never been taught to name. Deserializing it never fails; `is_known` answers `false`; a caller degrades gracefully instead of losing the whole response to a parse error.")
-    actual_instance: Optional[Union[str]] = None
-    one_of_schemas: Set[str] = { "str" }
 
-    model_config = ConfigDict(
-        validate_assignment=True,
-        protected_namespaces=(),
-    )
+    # data type: str
+    anyof_schema_1_validator: Optional[StrictStr] = Field(default=None, description="The act does not accept bounds of the supplied `IdKind`.")
+    # data type: str
+    anyof_schema_2_validator: Optional[StrictStr] = Field(default=None, description="A cogmap or context bound arrived carrying anything other than exactly one id.  **Distinct from [`RefusalReason::UnsupportedBoundKind`] on purpose, and the distinction is the whole reason this variant exists.** The kind IS accepted — reporting \"this act does not narrow on that kind of id\" would teach the caller the wrong lesson (*stop sending cogmap bounds*) when the right one is *send one*. `RefusalReason` is OPEN precisely so a reason that says the true thing can be added without breaking a client.  The constraint is the fragments': a resource bound is a `uuid[]`, but a cogmap or context bound is served by an `(anchor_table, anchor_id)` PAIR, which holds one id. Spec §9 names the mismatch — *\"an `IdSet` holds N ids; an anchor slot holds one\"* — as an open cardinality gap, and refusing is the honest response to it. Silently anchoring on the first element would answer a different question than the one asked and look like a successful narrowing.  **Zero refuses too, and is not \"unbounded\".** For a resource array the fragments distinguish `'{}'` (bounded to nothing) from `NULL` (unbounded); an anchor has no such pair, so an empty anchor set is a caller who asked to scope and named nothing. Admitting it would drop the scope and answer the unscoped question.  `[moved from the compiler — 2026-08-09, Pete]` The compiler used to raise this as an `Err` that aborted the whole composition, costing every innocent stage beside it. It is a STATIC property of the plan, so it belongs here, in the 400 with every other refusal at once.")
+    # data type: str
+    anyof_schema_3_validator: Optional[StrictStr] = Field(default=None, description="The act does not accept seeds of the supplied `IdKind`.")
+    # data type: str
+    anyof_schema_4_validator: Optional[StrictStr] = Field(default=None, description="A region set arrived without the `provenance` its kind requires.")
+    # data type: str
+    anyof_schema_5_validator: Optional[StrictStr] = Field(default=None, description="The act is declared but not built (`build_state` is not `served` or `fused`).")
+    # data type: str
+    anyof_schema_6_validator: Optional[StrictStr] = Field(default=None, description="A find stage with no threaded intention — no QUESTION, not no vector. Explicitly NOT a silent substitution.  The distinction is load-bearing and easy to lose. This fires when the composition supplied no query text at all, which `find-exact` cannot work around: its text becomes `p_query` and there is nowhere else to source it. It does **not** fire for a missing embedding — the server computes one, because API callers structurally cannot, and a failed attempt is [`RefusalReason::EmbeddingUnavailable`] instead.")
+    # data type: str
+    anyof_schema_7_validator: Optional[StrictStr] = Field(default=None, description="`ReturnSpec.with` named a hydration section this door does not offer.  A refusal rather than a parse error on purpose. The section vocabulary is shared with `show` and `list`, so `body` and `edges` are real words that deserialize cleanly — they are simply not what `/api/query` hydrates, and saying so (with a pointer to the door that does) is worth more than a deserializer's \"unknown variant\". It also keeps the promise that every refusal comes back at once: serde failures short-circuit before validation runs.")
+    # data type: str
+    anyof_schema_8_validator: Optional[StrictStr] = Field(default=None, description="A filter slot the act does not admit (`ResourceFilter` on an edge-only act, or the reverse). Declined, never ignored.")
+    # data type: str
+    anyof_schema_9_validator: Optional[StrictStr] = Field(default=None, description="A bound term was supplied to an act for which that frame of reference does not exist — e.g. `limit` (rows) handed to `survey`, whose bound is a funnel width. The term is never reinterpreted to fit; it is declined. Raised STATICALLY, at plan validation against the generated schemas, so an inapplicable bound is a property of the plan rather than a runtime surprise.")
+    # data type: str
+    anyof_schema_10_validator: Optional[StrictStr] = Field(default=None, description="An `order` was supplied to an act that does not let the caller choose its direction (`ActDeclaration::accepts_order` is `false`). Declined, never ignored, by the rule `bound_term_not_applicable` follows: an act-level parameter the act does not admit.")
+    # data type: str
+    anyof_schema_11_validator: Optional[StrictStr] = Field(default=None, description="The act is declared and built, but its mechanic is not reachable from THIS surface — the compiler emits no fragment for its `served_by` function yet. Spec §7's own wording for the distinction `BuildState` cannot draw: existence versus reachability-from-this-surface.  The live instance before beat D was the three `find` acts: `BuildState::Served` with their own SQL functions (`search_exact` / `search_wide`), which the beat-C compiler did not emit. `NotImplemented` would have been false about them (they are served); this variant is the honest one. Beat D deleted the refusal for them by giving the compiler their fragments.  The live instances are `substantiate` and `survey` — the first `Served`, the second `Fused`, both with mechanics the compiler emits no fragment for. **The rule keys on the callable-fragment set and never on `build_state`, and `substantiate` is what holds that**: it is `Served` and unreachable, so a rule reading the discriminant would admit an act this surface cannot emit.  `[corrected — 2026-08-15, found while adding `SubtrahendRefused`]` This named a trio — *\"`substantiate`, `follow-from` and `survey` … all three with mechanics the compiler emits no fragment for\"* — and **`follow-from` had not belonged to it since 2026-08-14**, when `query_follow_from` entered `CALLABLE_FRAGMENTS` and `registry.rs` moved the act from `Absent` to `Serves` at CLI and API on exactly that condition. So one edit updated the declaration and left the doc describing the world before it.  Worth correcting rather than tidying, because **this doc comment is a published schema description** (`tests/fixtures/query/refusal.schema.json`, and `RefusalReason` in temper-ui's generated `query.ts`) — the same reason [`super::composition::Intention`]'s header gives for repairing its own stale sentence in place. The `Fused`-half argument that hung off the trio is dropped with it: it observed that the discriminant *happened* to agree about a pair, which was a coincidence of the corpus and is not one now.")
+    # data type: str
+    anyof_schema_12_validator: Optional[StrictStr] = Field(default=None, description="**The one refusal that is not static.** A `find-about-*` stage needed a query embedding, the server had to compute it because the caller could not, and the attempt failed — an error, a panic, or the query-embed budget expiring.  It is a refusal rather than an empty because the stage holds a well-formed question it cannot answer; returning `empty` would hand back a list that reads like an answer. It is also the reason every OTHER refusal here can be reported as a 400 before anything runs: this is the only one that can appear mid-flight, and it is what gives a runtime refusal a referent at all. `[decided — 2026-08-08, Pete]`")
+    # data type: str
+    anyof_schema_13_validator: Optional[StrictStr] = Field(default=None, description="A `difference` stage whose SUBTRAHEND — or anything upstream of it — refused, so what to subtract is not known. `[added — 2026-08-15]`  **The only refusal a stage inherits rather than raises**, and the reason it has to exist is that the contract's standing rule inverts here. Every other consumer of a refused stage takes it as an EMPTY set and is bounded to nothing — safe, because every other consumer is MONOTONE: less input, less output. `EXCEPT` is anti-monotone in its right arm. An empty subtrahend subtracts nothing and hands back the minuend IN FULL, which is the maximal answer produced by a failure, and it is indistinguishable from a successful one.  That is exactly what [`StageDisposition::Refused`]'s own rule forbids — *\"a stage that depends on a refused one answers over nothing rather than over everything\"* — so the stage refuses and its own CTE is empty, at which point the ordinary rule governs everything downstream of it again.  **Transitive, and that is not caution.** A refusal one hop ABOVE the subtrahend never reaches the subtrahend's own disposition: a union with one refused arm answers with its surviving arm, which is less than the truth, so the difference subtracts less than it should and over-returns — silently, since nothing anywhere reports a problem. A check reading only the subtrahend's own refusal would pass that straight through.  It does **not** fire for a refused MINUEND. `∅ − B` is `∅`, the ordinary bounded-to-nothing outcome, and refusing there would report a refusal for a stage that gave the honest answer.")
+    # data type: str
+    anyof_schema_14_validator: Optional[StrictStr] = Field(default=None, description="The composition declares no stages, so it asks nothing.")
+    # data type: str
+    anyof_schema_15_validator: Optional[StrictStr] = Field(default=None, description="The composition declares more stages than the contract admits.  `[added — 2026-08-26]` The counterpart to [`RefusalReason::NoStages`]: a plan has a floor and now a ceiling, and the ceiling is [`Composition::stages`](super::composition::Composition::stages)' published `max_items`. Every declared stage is executed whether or not `returns` names it, so the stage count is what a composition costs — the bound makes that cost legible up front instead of a caller discovering it in a latency number.  **The repair is decomposition, not persuasion.** A question needing more stages than this is more than one question: ask them as separate compositions and combine the answers, which is also what makes each one's trace readable. The ceiling is far above anything a hand-authored plan reaches; a plan meeting it is usually generated in a loop.  Raised in the SHAPE pass, so it costs nothing to receive — refused before any embedding or database contact, on every door. That placement is only legal because the number is published: a client refuses what the CONTRACT forbids, never what one deployment chose, and widening it is a wire-contract change visible in `openapi.json`.")
+    # data type: str
+    anyof_schema_16_validator: Optional[StrictStr] = Field(default=None, description="A stage's `intention.query` is longer than the contract admits.  `[added — 2026-08-28]` The second member of the declaration family [`RefusalReason::TooManyStages`] opened, and it is raised for the same reason in the same place: the ceiling is [`Intention::query`](super::composition::Intention::query)' published `max_length`, so a client refuses what the CONTRACT forbids rather than what one deployment chose.  **What it closes is work paid for and then discarded.** The embedder tokenizes the whole string and truncates the ENCODING to 512 tokens (`temper-ingest`'s `embed_batch` → `truncate_encoding`), so every byte past the model's window is tokenized, paid for, and thrown away. The cap sits far above 512 tokens of English, so no question anyone asks meets it.  **Refused rather than truncated**, which is this contract's standing choice: a silently shortened question is a different question answered confidently, the substitution [`RefusalReason::FilterNotApplicable`]'s sites exist to prevent one field over.  Counted in **bytes**, not characters. The bound exists to bound work and transfer, both of which are byte-shaped, and a char count would admit four times the bytes for a plan written in a non-Latin script.")
+    # data type: str
+    anyof_schema_17_validator: Optional[StrictStr] = Field(default=None, description="An [`IdSet`](super::id_set::IdSet) carries more ids than the contract admits.  `[added — 2026-08-28]` Third member of the same family, published as `max_items` on [`IdSet::ids`](super::id_set::IdSet::ids) and raised in the shape pass for the same reason.  **What it bounds is a product, not a list.** A caller's id set is compared against the visible corpus to produce the `unusable` tally every stage discloses, so its cost is `|caller ids| × |visible ids|` — the same `|candidates| × |second factor|` shape `MAX_PER_CANDIDATE_PROBES` was measured against, with the caller choosing the second factor again.  **Distinct from [`RefusalReason::AnchorTakesOneId`], which is not retired by it.** That one refuses a *cogmap or context* bound carrying more than one id, because today's fragments take an `(anchor_table, anchor_id)` pair — a limitation of what this server has built, which an `anchor_ids uuid[]` would retire, and which therefore lives in the capability pass. This one is a contract fact about every kind and cannot move without a wire change.")
+    # data type: str
+    anyof_schema_18_validator: Optional[StrictStr] = Field(default=None, description="The composition asks the server to embed more question text than it can inside its budget.  `[added — 2026-08-28]` The one member of the declaration family that is **not** a contract fact, and it is raised in the CAPABILITY pass for exactly that reason: what a deployment can embed inside `DEFAULT_QUERY_EMBED_BUDGET_MS` is a property of the machine it runs on, not of the wire. A beefier deployment could raise it, and a client refusing on this number against a server that raised it would refuse a plan that server answers — which is what the shape pass may never do. Its unpublished siblings `MAX_PER_CANDIDATE_PREDICATES` and `MAX_PER_CANDIDATE_PROBES` are the same shape: cost bounds over a SUM, unexpressible per field, and capability for the same reason.  **It counts only what the SERVER must embed** — stages whose `intention` carries no vector. A caller who precomputed has already paid that cost, and refusing them for it would bound work nobody does.  **The repair is fewer or shorter questions, and it is a real repair**: over the budget no stage gets a vector at all, so the alternative to this refusal is not a slower answer, it is every find stage refusing `embedding_unavailable` at once with nothing saying why.")
+    # data type: str
+    anyof_schema_19_validator: Optional[StrictStr] = Field(default=None, description="A narrowing list carries more values than the contract admits.  `[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags` and `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array containment and `= ANY` are single operations whatever their length — which is precisely why nothing had capped them. What they cost is BODY: ten thousand one-character labels per stage serialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits with a bare 413. See `MAX_FILTER_VALUES`.  Also an artifact predicate path past `MAX_ARTIFACT_PATH_DEPTH` segments, or an artifact ask's `intent` or `shape_states` longer than its vocabulary (with `teaches.terms`). And a composition whose artifact filters together carry more asks than `MAX_ASKS_PER_REQUEST` or name more distinct shapes than `MAX_ASKED_SHAPES` — refused before any shape is loaded.")
+    # data type: str
+    anyof_schema_20_validator: Optional[StrictStr] = Field(default=None, description="A list that means a SET names the same member twice.  `[added — 2026-08-28, found in review]` `ReturnSpec::with` and `EdgeFilter::edge_kinds` are both closed vocabularies carried as lists, and a repeat in either changes nothing about the answer — hydrating a section twice hydrates it once, and walking `leads_to` twice walks it once. Left admitted, the repeat is a caller's only way to make an unbounded body out of a bounded vocabulary: `with: [open_meta; 10_000]` per return validated `Ok` at **9.6 MB** `[measured — 2026-08-28]`.  **Refusing rather than deduplicating**, which is this contract's standing choice and the same one [`RefusalReason::DuplicateReturnStage`] made one field over: silently collapsing a caller's list answers a question they did not quite ask, and says nothing about it. De-duplicating is also what makes the bound disappear — the count would be silently clamped to the vocabulary size, which is a cost decision taken by omission.")
+    # data type: str
+    anyof_schema_21_validator: Optional[StrictStr] = Field(default=None, description="A caller-supplied query vector is not the shape this server's vector space has.  `[added — 2026-08-28, found in review]` `Intention::embedding` carried no bound at all, which made it the largest unbounded field on the contract — a million floats on one stage is 4 MB that validates cleanly, times [`super::composition::MAX_STAGES`] stages.  **Not a `TooMany…`**, and the difference is what a caller can act on. A wrong-length vector is not a large question; it is a vector for a different space, and 767 floats is exactly as wrong as 769. Before this it reached pgvector, whose dimension complaint the door redacts to an opaque 500 — a caller told nothing at all, by the surface whose contract is that every refusal arrives at once and in their own vocabulary.")
+    # data type: str
+    anyof_schema_22_validator: Optional[StrictStr] = Field(default=None, description="The composition returns no stages, so it answers nothing.")
+    # data type: str
+    anyof_schema_23_validator: Optional[StrictStr] = Field(default=None, description="Two stages share a name.")
+    # data type: str
+    anyof_schema_24_validator: Optional[StrictStr] = Field(default=None, description="A set combination needs two or more inputs.")
+    # data type: str
+    anyof_schema_25_validator: Optional[StrictStr] = Field(default=None, description="A stage references a stage that was never declared.")
+    # data type: str
+    anyof_schema_26_validator: Optional[StrictStr] = Field(default=None, description="A stage is named more than once in `returns`.")
+    # data type: str
+    anyof_schema_27_validator: Optional[StrictStr] = Field(default=None, description="A stage carries two inputs in the same relation — two seeds, or two bounds.  `[added — 2026-08-14]` with the widening of `ActInvocation::inputs` from one slot to a list. The list exists so a stage can hold a seed **and** a bound at once; it is deliberately not a general fan-in `[decided — 2026-08-14, Pete]`.  **Refused rather than unioned, and that is the whole point of the variant.** Merging two seed sets is `CombineOp::Union` — an existing stage the caller declares, that appears in the trace, and whose `produced` count a reader can see. Doing it implicitly inside one act's input list would be the same merge with no stage, no tally and no disclosure, which is the silent-substitution class this contract keeps closing.  It lives in the SHAPE pass: a duplicate relation is malformed whatever the act, so no declaration is consulted to decide it.")
+    # data type: str
+    anyof_schema_28_validator: Optional[StrictStr] = Field(default=None, description="A returned stage's rows have no single ordering quantity to score them.  `[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a combinator, whose rows come from two or more acts — when the rule is about the consequence, and a second cause arrived: `find-resources-with` selects a set and orders nothing, so a stage running it has no quantity either. Two reasons for one consequence would make a client's handling depend on which route produced it, when the repair is the same: return something that ranks, and use this stage as its input.")
+    # data type: str
+    anyof_schema_29_validator: Optional[StrictStr] = Field(default=None, description="A stage whose output is a PAGE is named as another stage's input — a bound, a seed, or a combinator operand. Today that is a `list-resources-with` stage.  The mirror of [`RefusalReason::StageNotReturnable`]. A page looks exactly like the set it is a sample of, so piping it on would bound a later stage to an arbitrary subset while looking like a narrowing — and as a `difference` subtrahend it reports every match past the page as absent, under `extent: complete`. The repair is to select with `find-resources-with`, pipe that, and return `list-resources-with`.")
+    # data type: str
+    anyof_schema_30_validator: Optional[StrictStr] = Field(default=None, description="`returns` names a stage that was never declared.")
+    # data type: str
+    anyof_schema_31_validator: Optional[StrictStr] = Field(default=None, description="The composition contains a cycle; a query DAG must be acyclic.")
+    # data type: str
+    anyof_schema_32_validator: Optional[StrictStr] = Field(default=None, description="The `act` name is not one this server declares. `ActName` is open, so this is reachable.")
+    # data type: str
+    anyof_schema_33_validator: Optional[StrictStr] = Field(default=None, description="A property predicate was supplied with no key.")
+    # data type: str
+    anyof_schema_34_validator: Optional[StrictStr] = Field(default=None, description="A `contains` predicate was supplied with no values, so it narrows nothing.")
+    # data type: str
+    anyof_schema_35_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter.properties` predicate names a field every resource carries as a column, never as a property row: `created` or `updated`, or their frontmatter names `temper-created` and `temper-updated`.  A property predicate reads only `kb_properties` rows, so it could match nothing, and the empty answer it would give looks exactly like an honest \"none\". The detail names the field and the range that narrows by it, `resource_filter.created` or `resource_filter.updated`. The list is `filter::RESOURCE_COLUMN_FIELDS`.")
+    # data type: str
+    anyof_schema_36_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter` carries a field it does not declare, such as `created_at` for `created`. An unknown field would narrow nothing, so the stage would answer a wider question than the one asked and say nothing of it. The detail names the field (cut to 64 bytes) and lists the fields `resource_filter` declares. Raised by the server, which knows its own field set, so a plan sent to a newer server that declares the field is not refused.")
+    # data type: str
+    anyof_schema_37_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter.created` or `resource_filter.updated` range has both ends and its `from` is not before its `until`. `from` is inclusive and `until` exclusive, so no timestamp lies in it, and its empty answer would look exactly like an honest \"none\". The detail names the range.")
+    # data type: str
+    anyof_schema_38_validator: Optional[StrictStr] = Field(default=None, description="A `resource_filter.created` or `resource_filter.updated` range end is earlier than `-4713-11-24T00:00:00Z` (4714-11-24 BC), the earliest instant a resource timestamp can be stored at. No resource can lie there, and the store cannot compare against it. The detail names the range and the end.")
+    # data type: str
+    anyof_schema_39_validator: Optional[StrictStr] = Field(default=None, description="A property-predicate value — a `contains` value, a `compare` bound or a facet value — is larger than 16384 bytes, or carries more than 256 nested array elements or object members.  The probe cap counts values, not bytes, so without this one value of any size validated. The refusal names the predicate's position and the limit, never the value: echoing a value refused for its size would return the oversized payload in the error body.")
+    # data type: str
+    anyof_schema_40_validator: Optional[StrictStr] = Field(default=None, description="The property-predicate values across the whole composition sum past 524288 bytes.  Composition-level, like `too_many_stages`. It is what keeps the largest legal composition inside the query door's body limit once each value may be 16 KiB.")
+    # data type: str
+    anyof_schema_41_validator: Optional[StrictStr] = Field(default=None, description="A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`, `owner` or `title_contains` — is longer than its published cap: 256 bytes, or 4096 for `title_contains`, counted as JSON-escaped bytes.  The count caps bound how many strings a stage carries, never how long each is; without this a plan inside every count cap could exceed the body limit and meet a bare 413. The refusal names the field and the limit, never the string.")
+    # data type: str
+    anyof_schema_42_validator: Optional[StrictStr] = Field(default=None, description="A list whose entries must be distinct carries more than any legal plan can: `returns` or a combine stage's `inputs` past 64, or an act's `inputs` past 2 (one per relation).  Refused once, up front, like `too_many_stages`, so no check runs once per entry: an over-long list would otherwise answer with a refusal list many times its own size.")
+    # data type: str
+    anyof_schema_43_validator: Optional[StrictStr] = Field(default=None, description="The composition's caller text — narrowing strings, facet and predicate values, questions — exceeds 786432 bytes counted as the most expansive encoder that escapes per character would send it.  What makes a legal plan fit the body limit under any encoder that escapes per character.")
+    # data type: str
+    anyof_schema_44_validator: Optional[StrictStr] = Field(default=None, description="The ask names a shape that does not exist or that the asker cannot read. One reason and one fixed detail for both, so a refusal is never an existence oracle.")
+    # data type: str
+    anyof_schema_45_validator: Optional[StrictStr] = Field(default=None, description="The ask names a folded shape version. It is never re-pointed at the successor: the predicates were written against a schema that no longer governs. `teaches` carries the version now in force, when there is one.")
+    # data type: str
+    anyof_schema_46_validator: Optional[StrictStr] = Field(default=None, description="The shape's schema does not compile under the no-fetch compiler, or is larger than the walk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The detail is a fixed sentence, naming for an uncompilable schema the first keyword or cap the compile refused and its schema path — schema text the asker can already read; the compiler's text is never echoed.")
+    # data type: str
+    anyof_schema_47_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate's path has no segments, so it would address the whole document.")
+    # data type: str
+    anyof_schema_48_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate's path is not one the shape declares, or lies beyond a bound of the schema walk. `teaches` carries the askable paths, and the bound when one was met.")
+    # data type: str
+    anyof_schema_49_validator: Optional[StrictStr] = Field(default=None, description="The operator is not feasible at the path — `compare` where the path declares no orderable type, or with a bound of a type not declared there. `teaches` carries the path's facts and feasible operators.")
+    # data type: str
+    anyof_schema_50_validator: Optional[StrictStr] = Field(default=None, description="A value lies outside what the shape declares at its path: not of a declared type, not an enum member, or not an admissible array element. `teaches` carries the declared values and says that stored content is not closed by its shape, with the route to the rest.")
+    # data type: str
+    anyof_schema_51_validator: Optional[StrictStr] = Field(default=None, description="An ask's `intent` names a term outside `current` / `member` / `pinned`. `teaches` names the set.")
+    # data type: str
+    anyof_schema_52_validator: Optional[StrictStr] = Field(default=None, description="An ask's `shape_states` names a term outside the three a live shape admits — including `never_declared`, which no artifact under a live shape can have. `teaches` names the set.")
+    # data type: str
+    anyof_schema_53_validator: Optional[StrictStr] = Field(default=None, description="An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or two asks in one filter whose shapes live in different homes. Either is empty by construction, since a resource has exactly one home. `teaches` names the shapes' homes.")
+    # data type: str
+    anyof_schema_54_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate value carries U+0000, in a string or an object key. No stored content can hold it — jsonb cannot represent the character — so the value could match nothing, and binding it would be a database error where a refusal belongs.")
+    # data type: str
+    anyof_schema_55_validator: Optional[StrictStr] = Field(default=None, description="A batch read's `limit` is 0, or above the page ceiling `MAX_ARTIFACT_PAGE_ROWS` (200). Refused, never clamped, with no stage, and beside the ask's own refusals: a caller asking for more than a page holds is told so rather than handed a short page it might read as the end. The detail names the body field.")
+    # data type: str
+    anyof_schema_56_validator: Optional[StrictStr] = Field(default=None, description="A reason outside the declared vocabulary.  `[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by deserializing a producer newer than this consumer.\" **That was false at the time**: `validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while every declared variant was snake_case — a client's vocabulary was two conventions at once. Found in review; recorded rather than repaired then, because promoting twelve strings to variants is a wire change and nothing consumed them yet — `/api/query` did not exist, so the change was free and the door was the moment it would stop being free.  `[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants above, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is exactly what its original doc said — a reason from a producer newer than this consumer, one this binary has never been taught to name. Deserializing it never fails; `is_known` answers `false`; a caller degrades gracefully instead of losing the whole response to a parse error.")
+    if TYPE_CHECKING:
+        actual_instance: Optional[Union[str]] = None
+    else:
+        actual_instance: Any = None
+    any_of_schemas: Set[str] = { "str" }
 
+    model_config = {
+        "validate_assignment": True,
+        "protected_namespaces": (),
+    }
 
     def __init__(self, *args, **kwargs) -> None:
         if args:
@@ -159,357 +164,353 @@ class RefusalReason(BaseModel):
             super().__init__(**kwargs)
 
     @field_validator('actual_instance')
-    def actual_instance_must_validate_oneof(cls, v):
+    def actual_instance_must_validate_anyof(cls, v):
         instance = RefusalReason.model_construct()
         error_messages = []
-        match = 0
         # validate data type: str
         try:
-            instance.oneof_schema_1_validator = v
-            match += 1
+            instance.anyof_schema_1_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_2_validator = v
-            match += 1
+            instance.anyof_schema_2_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_3_validator = v
-            match += 1
+            instance.anyof_schema_3_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_4_validator = v
-            match += 1
+            instance.anyof_schema_4_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_5_validator = v
-            match += 1
+            instance.anyof_schema_5_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_6_validator = v
-            match += 1
+            instance.anyof_schema_6_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_7_validator = v
-            match += 1
+            instance.anyof_schema_7_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_8_validator = v
-            match += 1
+            instance.anyof_schema_8_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_9_validator = v
-            match += 1
+            instance.anyof_schema_9_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_10_validator = v
-            match += 1
+            instance.anyof_schema_10_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_11_validator = v
-            match += 1
+            instance.anyof_schema_11_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_12_validator = v
-            match += 1
+            instance.anyof_schema_12_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_13_validator = v
-            match += 1
+            instance.anyof_schema_13_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_14_validator = v
-            match += 1
+            instance.anyof_schema_14_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_15_validator = v
-            match += 1
+            instance.anyof_schema_15_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_16_validator = v
-            match += 1
+            instance.anyof_schema_16_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_17_validator = v
-            match += 1
+            instance.anyof_schema_17_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_18_validator = v
-            match += 1
+            instance.anyof_schema_18_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_19_validator = v
-            match += 1
+            instance.anyof_schema_19_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_20_validator = v
-            match += 1
+            instance.anyof_schema_20_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_21_validator = v
-            match += 1
+            instance.anyof_schema_21_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_22_validator = v
-            match += 1
+            instance.anyof_schema_22_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_23_validator = v
-            match += 1
+            instance.anyof_schema_23_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_24_validator = v
-            match += 1
+            instance.anyof_schema_24_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_25_validator = v
-            match += 1
+            instance.anyof_schema_25_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_26_validator = v
-            match += 1
+            instance.anyof_schema_26_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_27_validator = v
-            match += 1
+            instance.anyof_schema_27_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_28_validator = v
-            match += 1
+            instance.anyof_schema_28_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_29_validator = v
-            match += 1
+            instance.anyof_schema_29_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_30_validator = v
-            match += 1
+            instance.anyof_schema_30_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_31_validator = v
-            match += 1
+            instance.anyof_schema_31_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_32_validator = v
-            match += 1
+            instance.anyof_schema_32_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_33_validator = v
-            match += 1
+            instance.anyof_schema_33_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_34_validator = v
-            match += 1
+            instance.anyof_schema_34_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_35_validator = v
-            match += 1
+            instance.anyof_schema_35_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_36_validator = v
-            match += 1
+            instance.anyof_schema_36_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_37_validator = v
-            match += 1
+            instance.anyof_schema_37_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_38_validator = v
-            match += 1
+            instance.anyof_schema_38_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_39_validator = v
-            match += 1
+            instance.anyof_schema_39_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_40_validator = v
-            match += 1
+            instance.anyof_schema_40_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_41_validator = v
-            match += 1
+            instance.anyof_schema_41_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_42_validator = v
-            match += 1
+            instance.anyof_schema_42_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_43_validator = v
-            match += 1
+            instance.anyof_schema_43_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_44_validator = v
-            match += 1
+            instance.anyof_schema_44_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_45_validator = v
-            match += 1
+            instance.anyof_schema_45_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_46_validator = v
-            match += 1
+            instance.anyof_schema_46_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_47_validator = v
-            match += 1
+            instance.anyof_schema_47_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_48_validator = v
-            match += 1
+            instance.anyof_schema_48_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_49_validator = v
-            match += 1
+            instance.anyof_schema_49_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_50_validator = v
-            match += 1
+            instance.anyof_schema_50_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_51_validator = v
-            match += 1
+            instance.anyof_schema_51_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_52_validator = v
-            match += 1
+            instance.anyof_schema_52_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_53_validator = v
-            match += 1
+            instance.anyof_schema_53_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_54_validator = v
-            match += 1
+            instance.anyof_schema_54_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_55_validator = v
-            match += 1
+            instance.anyof_schema_55_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # validate data type: str
         try:
-            instance.oneof_schema_56_validator = v
-            match += 1
+            instance.anyof_schema_56_validator = v
+            return v
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
-        if match > 1:
-            # more than 1 match
-            raise ValueError("Multiple matches found when setting `actual_instance` in RefusalReason with oneOf schemas: str. Details: " + ", ".join(error_messages))
-        elif match == 0:
+        if error_messages:
             # no match
-            raise ValueError("No match found when setting `actual_instance` in RefusalReason with oneOf schemas: str. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when setting the actual_instance in RefusalReason with anyOf schemas: str. Details: " + ", ".join(error_messages))
         else:
             return v
 
     @classmethod
-    def from_dict(cls, obj: Union[str, Dict[str, Any]]) -> Self:
+    def from_dict(cls, obj: Dict[str, Any]) -> Self:
         return cls.from_json(json.dumps(obj))
 
     @classmethod
@@ -517,519 +518,514 @@ class RefusalReason(BaseModel):
         """Returns the object represented by the json string"""
         instance = cls.model_construct()
         error_messages = []
-        match = 0
-
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_1_validator = json.loads(json_str)
+            instance.anyof_schema_1_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_1_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_1_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_2_validator = json.loads(json_str)
+            instance.anyof_schema_2_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_2_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_2_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_3_validator = json.loads(json_str)
+            instance.anyof_schema_3_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_3_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_3_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_4_validator = json.loads(json_str)
+            instance.anyof_schema_4_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_4_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_4_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_5_validator = json.loads(json_str)
+            instance.anyof_schema_5_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_5_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_5_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_6_validator = json.loads(json_str)
+            instance.anyof_schema_6_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_6_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_6_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_7_validator = json.loads(json_str)
+            instance.anyof_schema_7_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_7_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_7_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_8_validator = json.loads(json_str)
+            instance.anyof_schema_8_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_8_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_8_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_9_validator = json.loads(json_str)
+            instance.anyof_schema_9_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_9_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_9_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_10_validator = json.loads(json_str)
+            instance.anyof_schema_10_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_10_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_10_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_11_validator = json.loads(json_str)
+            instance.anyof_schema_11_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_11_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_11_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_12_validator = json.loads(json_str)
+            instance.anyof_schema_12_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_12_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_12_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_13_validator = json.loads(json_str)
+            instance.anyof_schema_13_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_13_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_13_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_14_validator = json.loads(json_str)
+            instance.anyof_schema_14_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_14_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_14_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_15_validator = json.loads(json_str)
+            instance.anyof_schema_15_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_15_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_15_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_16_validator = json.loads(json_str)
+            instance.anyof_schema_16_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_16_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_16_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_17_validator = json.loads(json_str)
+            instance.anyof_schema_17_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_17_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_17_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_18_validator = json.loads(json_str)
+            instance.anyof_schema_18_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_18_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_18_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_19_validator = json.loads(json_str)
+            instance.anyof_schema_19_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_19_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_19_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_20_validator = json.loads(json_str)
+            instance.anyof_schema_20_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_20_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_20_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_21_validator = json.loads(json_str)
+            instance.anyof_schema_21_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_21_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_21_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_22_validator = json.loads(json_str)
+            instance.anyof_schema_22_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_22_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_22_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_23_validator = json.loads(json_str)
+            instance.anyof_schema_23_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_23_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_23_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_24_validator = json.loads(json_str)
+            instance.anyof_schema_24_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_24_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_24_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_25_validator = json.loads(json_str)
+            instance.anyof_schema_25_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_25_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_25_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_26_validator = json.loads(json_str)
+            instance.anyof_schema_26_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_26_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_26_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_27_validator = json.loads(json_str)
+            instance.anyof_schema_27_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_27_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_27_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_28_validator = json.loads(json_str)
+            instance.anyof_schema_28_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_28_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_28_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_29_validator = json.loads(json_str)
+            instance.anyof_schema_29_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_29_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_29_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_30_validator = json.loads(json_str)
+            instance.anyof_schema_30_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_30_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_30_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_31_validator = json.loads(json_str)
+            instance.anyof_schema_31_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_31_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_31_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_32_validator = json.loads(json_str)
+            instance.anyof_schema_32_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_32_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_32_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_33_validator = json.loads(json_str)
+            instance.anyof_schema_33_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_33_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_33_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_34_validator = json.loads(json_str)
+            instance.anyof_schema_34_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_34_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_34_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_35_validator = json.loads(json_str)
+            instance.anyof_schema_35_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_35_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_35_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_36_validator = json.loads(json_str)
+            instance.anyof_schema_36_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_36_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_36_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_37_validator = json.loads(json_str)
+            instance.anyof_schema_37_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_37_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_37_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_38_validator = json.loads(json_str)
+            instance.anyof_schema_38_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_38_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_38_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_39_validator = json.loads(json_str)
+            instance.anyof_schema_39_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_39_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_39_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_40_validator = json.loads(json_str)
+            instance.anyof_schema_40_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_40_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_40_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_41_validator = json.loads(json_str)
+            instance.anyof_schema_41_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_41_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_41_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_42_validator = json.loads(json_str)
+            instance.anyof_schema_42_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_42_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_42_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_43_validator = json.loads(json_str)
+            instance.anyof_schema_43_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_43_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_43_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_44_validator = json.loads(json_str)
+            instance.anyof_schema_44_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_44_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_44_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_45_validator = json.loads(json_str)
+            instance.anyof_schema_45_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_45_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_45_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_46_validator = json.loads(json_str)
+            instance.anyof_schema_46_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_46_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_46_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_47_validator = json.loads(json_str)
+            instance.anyof_schema_47_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_47_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_47_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_48_validator = json.loads(json_str)
+            instance.anyof_schema_48_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_48_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_48_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_49_validator = json.loads(json_str)
+            instance.anyof_schema_49_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_49_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_49_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_50_validator = json.loads(json_str)
+            instance.anyof_schema_50_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_50_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_50_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_51_validator = json.loads(json_str)
+            instance.anyof_schema_51_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_51_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_51_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_52_validator = json.loads(json_str)
+            instance.anyof_schema_52_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_52_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_52_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_53_validator = json.loads(json_str)
+            instance.anyof_schema_53_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_53_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_53_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_54_validator = json.loads(json_str)
+            instance.anyof_schema_54_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_54_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_54_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_55_validator = json.loads(json_str)
+            instance.anyof_schema_55_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_55_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_55_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
         # deserialize data into str
         try:
             # validation
-            instance.oneof_schema_56_validator = json.loads(json_str)
+            instance.anyof_schema_56_validator = json.loads(json_str)
             # assign value to actual_instance
-            instance.actual_instance = instance.oneof_schema_56_validator
-            match += 1
+            instance.actual_instance = instance.anyof_schema_56_validator
+            return instance
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
 
-        if match > 1:
-            # more than 1 match
-            raise ValueError("Multiple matches found when deserializing the JSON string into RefusalReason with oneOf schemas: str. Details: " + ", ".join(error_messages))
-        elif match == 0:
+        if error_messages:
             # no match
-            raise ValueError("No match found when deserializing the JSON string into RefusalReason with oneOf schemas: str. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when deserializing the JSON string into RefusalReason with anyOf schemas: str. Details: " + ", ".join(error_messages))
         else:
             return instance
 
@@ -1051,7 +1047,6 @@ class RefusalReason(BaseModel):
         if hasattr(self.actual_instance, "to_dict") and callable(self.actual_instance.to_dict):
             return self.actual_instance.to_dict()
         else:
-            # primitive type
             return self.actual_instance
 
     def to_str(self) -> str:
