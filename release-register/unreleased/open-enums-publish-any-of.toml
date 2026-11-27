@@ -1,0 +1,25 @@
+title    = "The four open string enums are published as `anyOf`, so temper-py's generated models parse every value"
+pr       = "self"
+classes  = ["spec-correction"]
+surfaces = ["http", "clients"]
+status   = "signal-only"
+body = '''
+`ActName`, `IdKind`, `RefusalReason` and `ScoreKind` are published as `anyOf` instead of `oneOf`.
+What the server always did: send a bare string, either one of the named values or (from the
+`#[serde(untagged)] Other(String)` arm) any other string. The `oneOf` contract described an answer
+no server could give: its bare-string arm overlaps every named arm, so a known value matches two
+arms and is invalid under "exactly one". `anyOf` is what schemars already publishes for the same
+enums. Both skew directions hold because the wire bytes do not change: an old client against a new
+server and a new client against an old server receive the same strings.
+
+Who observes: temper-py callers of the generated models. Before, `RefusalReason.from_json` raised
+"No match found" for every value, so every `PlanRefusal`, `PlanRefusalDetails`, `ErrorDetails` and
+`QueryResponse` carrying one failed to deserialize; the same held for `ActName`, `IdKind` and
+`ScoreKind`. temper-ts's `schema.ts` is byte-identical. temper-rb's four generated modules rename
+`openapi_one_of` to `openapi_any_of` and parse the same values as before. Witnesses:
+`TestOpenStringEnums` in `clients/temper-py/tests/test_generated.py` and
+`every_open_enum_publishes_any_of_not_one_of` in `crates/temper-api/src/openapi.rs`.
+
+Release relevance: signal-only. The 0.6 pin gate (`check-openapi-pin.sh`) records corrections per
+operation, and these are components, so it reports the four schemas as changed; see the PR.
+'''
