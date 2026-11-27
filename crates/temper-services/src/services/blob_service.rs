@@ -1102,6 +1102,10 @@ pub async fn relate_blob(
     .map_err(|e| {
         if crate::backend::write_floor::hit_lock_bound(&e) {
             ApiError::ResourceBusy
+        } else if let Some(conflict) = crate::error::edge_polarity_conflict(&e) {
+            // The other polarity of a live relation (migration 20261204000010): the caller's
+            // conflict, naming the live edge. Its sentence is ours, never third-party text.
+            ApiError::Conflict(conflict)
         } else {
             ApiError::internal_scrubbed("blob relation assert failed", e)
         }
