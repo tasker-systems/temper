@@ -17,8 +17,9 @@ columns are left alone, as on the resource side. The list is `filter::EDGE_COLUM
 Who observes: any caller of POST /api/query, the MCP query tool, and `temper query`, which now gets
 400 PLAN_REFUSED where it got 200 and an empty walk. `temper query --check` refuses it too, because
 it runs the same shape pass. An edge property literally named one of the five stays writable and is
-now unreachable by a predicate; none existed when edge predicates shipped (measured 2026-08-14, not
-re-measured). Every other edge key is unchanged.
+now unreachable by a predicate. Measured on the community deployment on 2026-11-27: 1186 edge
+properties over 2 distinct keys, none of them one of the five (case-insensitive); other installs
+were not measured. Every other edge key is unchanged.
 
 Why additive + behavioral: no new value or field. The shape half is the `column_not_a_property`
 description and `EdgeFilter.properties`' description now naming the edge fields (openapi.json, the

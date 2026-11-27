@@ -502,9 +502,10 @@ pub const RESOURCE_COLUMN_FIELDS: &[(&str, &str)] = &[
 /// `home_anchor_id`, `asserted_by_event_id`, `last_event_id`, `is_folded`). They are not fields a
 /// caller narrows by; an id set is a bound.
 ///
-/// **Not re-measured.** Zero edge-owned properties existed when `EdgeFilter::properties` shipped
-/// `[measured on prod — 2026-08-14]`; this list was not measured again. An edge property literally
-/// named one of the five stays writable, and this refusal makes it unreachable by a predicate.
+/// **No edge property uses any of the five names** `[measured on the community deployment —
+/// 2026-11-27: 1186 edge properties over 2 distinct keys, none of the five, case-insensitively;
+/// not measured on other installs]`. An edge property literally named one of the five stays
+/// writable, and this refusal makes it unreachable by a predicate.
 ///
 /// Each name is published in `ColumnNotAProperty`'s description, which is what lets the offline
 /// `--check` raise it; `the_published_column_fields_are_the_refused_ones` holds the two together.
