@@ -5403,7 +5403,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98819125d96663ca27bc1b4fa06673da03de760f6b4d24596efd175e66ac3857"
 dependencies = [
  "jiff",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
 ]
 
@@ -5419,7 +5419,26 @@ dependencies = [
  "futures-io",
  "jiff",
  "rustls-pki-types",
- "sigstore-types",
+ "sigstore-types 0.16.0",
+ "spki 0.7.3",
+ "thiserror 2.0.21",
+ "x509-cert",
+]
+
+[[package]]
+name = "sigstore-crypto"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b3876f3dcd98b7ce983e017e3c2dea6392fefdc2f076d61df4a045e38f53054"
+dependencies = [
+ "aws-lc-rs",
+ "const-oid 0.9.6",
+ "curve25519-dalek",
+ "der 0.7.10",
+ "futures-io",
+ "jiff",
+ "rustls-pki-types",
+ "sigstore-types 0.17.0",
  "spki 0.7.3",
  "thiserror 2.0.21",
  "x509-cert",
@@ -5431,8 +5450,8 @@ version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90821ce3bed8dec1862a4283848b724aba892b5af02155f1c0d8052c925726e1"
 dependencies = [
- "sigstore-crypto",
- "sigstore-types",
+ "sigstore-crypto 0.16.0",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
 ]
 
@@ -5448,7 +5467,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigstore-merkle",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
 ]
 
@@ -5458,13 +5477,28 @@ version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6111e00e097bb764b6fe9e6205bce3d582c3594512450ee69837753f759c55e2"
 dependencies = [
+ "jiff",
+ "serde",
+ "serde_json",
+ "sigstore-crypto 0.16.0",
+ "sigstore-tuf 0.16.0",
+ "sigstore-types 0.16.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "sigstore-trust-root"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2be7d164a8d5137fce8915e76d2b5d67d1db0e2308ad4555f0a9921bc5479b67"
+dependencies = [
  "directories",
  "jiff",
  "serde",
  "serde_json",
- "sigstore-crypto",
- "sigstore-tuf",
- "sigstore-types",
+ "sigstore-crypto 0.17.0",
+ "sigstore-tuf 0.17.0",
+ "sigstore-types 0.17.0",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -5482,8 +5516,8 @@ dependencies = [
  "jiff",
  "rustls-pki-types",
  "rustls-webpki",
- "sigstore-crypto",
- "sigstore-types",
+ "sigstore-crypto 0.16.0",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
  "tracing",
  "x509-cert",
@@ -5501,8 +5535,28 @@ dependencies = [
  "reqwest 0.13.2",
  "serde",
  "serde_json",
- "sigstore-crypto",
- "sigstore-types",
+ "sigstore-crypto 0.16.0",
+ "sigstore-types 0.16.0",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "sigstore-tuf"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55fcdb90054c5ab76f4122d72406127780dbb595adab417382efb7721ebf5990"
+dependencies = [
+ "glob",
+ "hex",
+ "jiff",
+ "reqwest 0.13.2",
+ "serde",
+ "serde_json",
+ "sigstore-crypto 0.17.0",
+ "sigstore-types 0.17.0",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
@@ -5514,6 +5568,21 @@ name = "sigstore-types"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4f0e9a87bcaf654b5d3b8540eaf78040cae72eb59157bb1765f56684fb0e3e9"
+dependencies = [
+ "base64 0.23.1",
+ "hex",
+ "jiff",
+ "pem",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "sigstore-types"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b7f9226a4d3c1c187ccdc874536a0e581e009427837659519148f57869bb9be"
 dependencies = [
  "base64 0.23.1",
  "hex",
@@ -5541,12 +5610,12 @@ dependencies = [
  "serde_json",
  "serde_json_canonicalizer",
  "sigstore-bundle",
- "sigstore-crypto",
+ "sigstore-crypto 0.16.0",
  "sigstore-merkle",
  "sigstore-rekor",
- "sigstore-trust-root",
+ "sigstore-trust-root 0.16.0",
  "sigstore-tsa",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
  "tls_codec",
  "tracing",
@@ -6170,8 +6239,8 @@ dependencies = [
  "sha2 0.11.1",
  "shell-words",
  "shlex 2.0.1",
- "sigstore-trust-root",
- "sigstore-types",
+ "sigstore-trust-root 0.17.0",
+ "sigstore-types 0.16.0",
  "sigstore-verify",
  "similar",
  "temp-env",
