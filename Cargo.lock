@@ -5403,7 +5403,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98819125d96663ca27bc1b4fa06673da03de760f6b4d24596efd175e66ac3857"
 dependencies = [
  "jiff",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
 ]
 
@@ -5419,7 +5419,7 @@ dependencies = [
  "futures-io",
  "jiff",
  "rustls-pki-types",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "spki 0.7.3",
  "thiserror 2.0.21",
  "x509-cert",
@@ -5432,7 +5432,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90821ce3bed8dec1862a4283848b724aba892b5af02155f1c0d8052c925726e1"
 dependencies = [
  "sigstore-crypto",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
 ]
 
@@ -5448,7 +5448,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigstore-merkle",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
 ]
 
@@ -5464,7 +5464,7 @@ dependencies = [
  "serde_json",
  "sigstore-crypto",
  "sigstore-tuf",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -5483,7 +5483,7 @@ dependencies = [
  "rustls-pki-types",
  "rustls-webpki",
  "sigstore-crypto",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
  "tracing",
  "x509-cert",
@@ -5502,7 +5502,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigstore-crypto",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
@@ -5514,6 +5514,21 @@ name = "sigstore-types"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4f0e9a87bcaf654b5d3b8540eaf78040cae72eb59157bb1765f56684fb0e3e9"
+dependencies = [
+ "base64 0.23.1",
+ "hex",
+ "jiff",
+ "pem",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "sigstore-types"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b7f9226a4d3c1c187ccdc874536a0e581e009427837659519148f57869bb9be"
 dependencies = [
  "base64 0.23.1",
  "hex",
@@ -5546,7 +5561,7 @@ dependencies = [
  "sigstore-rekor",
  "sigstore-trust-root",
  "sigstore-tsa",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
  "tls_codec",
  "tracing",
@@ -6171,7 +6186,7 @@ dependencies = [
  "shell-words",
  "shlex 2.0.1",
  "sigstore-trust-root",
- "sigstore-types",
+ "sigstore-types 0.17.0",
  "sigstore-verify",
  "similar",
  "temp-env",
