@@ -16,10 +16,14 @@ import pytest
 import temper
 from temper.generated.api.resources_api import ResourcesApi
 from temper.generated.configuration import Configuration
+from temper.generated.models.act_name import ActName
+from temper.generated.models.id_kind import IdKind
 from temper.generated.models.illegal_transition import IllegalTransition
 from temper.generated.models.ingest_payload import IngestPayload
 from temper.generated.models.insufficient_authority import InsufficientAuthority
 from temper.generated.models.refusal import Refusal
+from temper.generated.models.refusal_reason import RefusalReason
+from temper.generated.models.score_kind import ScoreKind
 from temper.generated.models.system_access_details import SystemAccessDetails
 
 CONTRACT_PATH = Path(__file__).resolve().parents[3] / "openapi.json"
@@ -150,3 +154,83 @@ class TestTypedRefusal:
         assert variant is not None
         assert variant.kind == "revoked"
         assert details.email == "p@example.com"
+
+
+def _known_values(contract: dict[str, Any], name: str) -> list[str]:
+    """Every value an open enum's contract names, read from the spec rather than restated."""
+    schema = contract["components"]["schemas"][name]
+    arms = schema.get("anyOf") or schema.get("oneOf") or []
+    return [value for arm in arms for value in arm.get("enum", [])]
+
+
+class TestOpenStringEnums:
+    """An open enum parses every value it names AND a value from a newer producer.
+
+    These four are open on purpose — a Rust `#[serde(untagged)] Other(String)` arm — so a
+    client meeting a reason, act, kind or score it was never taught degrades instead of
+    failing. The generator turns every arm into a plain-string validator, so the published
+    combinator decides the outcome: under `oneOf` a value matches every arm at once and
+    parses as nothing, known and unknown alike.
+    """
+
+    @pytest.mark.parametrize("model", [RefusalReason, ActName, IdKind, ScoreKind])
+    def test_parses_every_declared_value_and_an_unknown_one(self, contract, model):
+        name = model.__name__
+        known = _known_values(contract, name)
+        # Not vacuous: the spec still publishes the enum's named values.
+        assert known, f"{name} publishes no named values"
+        for value in [*known, "some_future_value"]:
+            parsed = model.from_json(json.dumps(value))
+            assert parsed.actual_instance == value
+            assert json.loads(parsed.to_json()) == value
+
+    def test_a_plan_refusal_deserializes_through_every_envelope_that_nests_it(self):
+        from temper.generated.models.error_details import ErrorDetails
+        from temper.generated.models.plan_refusal import PlanRefusal
+        from temper.generated.models.plan_refusal_details import PlanRefusalDetails
+
+        refusal = {"stage": None, "reason": "empty_contains", "detail": "x"}
+        parsed = PlanRefusal.from_dict(refusal)
+        assert parsed is not None
+        assert parsed.reason.actual_instance == "empty_contains"
+
+        future = {**refusal, "reason": "some_future_reason"}
+        details = PlanRefusalDetails.from_dict({"refusals": [refusal, future]})
+        assert details is not None
+        assert [r.reason.actual_instance for r in details.refusals] == [
+            "empty_contains",
+            "some_future_reason",
+        ]
+
+        envelope = ErrorDetails.from_dict({"refusals": [refusal]})
+        assert isinstance(envelope.actual_instance, PlanRefusalDetails)
+
+    def test_a_query_response_carrying_a_refused_stage_deserializes(self):
+        from temper.generated.models.query_response import QueryResponse
+
+        response = QueryResponse.from_dict(
+            {
+                "returned": {},
+                "trace": {
+                    "stages": [
+                        {
+                            "stage": "s",
+                            "act": "find-exact",
+                            "disposition": "refused",
+                            "refusal": {"reason": "missing_intention", "detail": "x"},
+                            "input_ids": 0,
+                            "input_unusable": 0,
+                            "produced_ids": 0,
+                            "extent": {"extent": "complete"},
+                            "terms_applied": {},
+                            "narrowed_by": [],
+                        }
+                    ]
+                },
+            }
+        )
+        assert response is not None
+        stage = response.trace.stages[0]
+        assert stage.refusal is not None
+        assert stage.refusal.reason.actual_instance == "missing_intention"
+        assert stage.act.actual_instance == "find-exact"

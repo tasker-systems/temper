@@ -17,25 +17,24 @@ module Temper::Generated
   # The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and the mechanic currently serving it is evidence rather than identity.  OPEN discriminator — adding an act is additive.
   module ActName
     class << self
-      # List of class defined in oneOf (OpenAPI v3)
-      def openapi_one_of
+      # List of class defined in anyOf (OpenAPI v3)
+      def openapi_any_of
         [
           :'String'
         ]
       end
 
       # Builds the object
-      # @param [Mixed] Data to be matched against the list of oneOf items
+      # @param [Mixed] Data to be matched against the list of anyOf items
       # @return [Object] Returns the model or the data itself
       def build(data)
-        # Go through the list of oneOf items and attempt to identify the appropriate one.
+        # Go through the list of anyOf items and attempt to identify the appropriate one.
         # Note:
-        # - We do not attempt to check whether exactly one item matches.
         # - No advanced validation of types in some cases (e.g. "x: { type: string }" will happily match { x: 123 })
         #   due to the way the deserialization is made in the base_object template (it just casts without verifying).
         # - TODO: scalar values are de facto behaving as if they were nullable.
         # - TODO: logging when debugging is set.
-        openapi_one_of.each do |klass|
+        openapi_any_of.each do |klass|
           begin
             next if klass == :AnyType # "nullable: true"
             return find_and_cast_into_type(klass, data)
@@ -43,7 +42,7 @@ module Temper::Generated
           end
         end
 
-        openapi_one_of.include?(:AnyType) ? data : nil
+        openapi_any_of.include?(:AnyType) ? data : nil
       end
 
       private
@@ -82,7 +81,7 @@ module Temper::Generated
         else # model
           const = Temper::Generated.const_get(klass)
           if const
-            if const.respond_to?(:openapi_one_of) # nested oneOf model
+            if const.respond_to?(:openapi_any_of) # nested anyOf model
               model = const.build(data)
               return model if model
             else

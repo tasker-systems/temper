@@ -1,6 +1,6 @@
 title    = "A combinator stage's trace names its combinator, never admit, and carries a typed combinator field"
 pr       = "self"
-classes  = ["additive", "behavioral"]
+classes  = ["additive", "behavioral", "spec-correction"]
 surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
 status   = "signal-only"
 body = '''
@@ -23,5 +23,13 @@ the value of `act` on a combinator stage. Witnesses:
 `a_combinator_stage_names_its_combinator_never_admit`
 (crates/temper-api/tests/query_combinator_trace_test.rs, which fails against the `admit` label) and
 `the_combinator_key_is_absent_on_an_act_stage_and_names_the_op_on_a_combinator_stage` (temper-core
-trace tests). Release relevance: signal-only.
+trace tests).
+
+Why spec-correction too (ruling 35, decision 01a21d95-1e3d-70bb-a01f-c3b2d3e9e658): the shape
+movement the declared-class gate charges here is not this PR's. It is #1480's oneOf→anyOf
+correction of RefusalReason (entry `open-enums-publish-any-of`), which the release-relative reading
+re-charges on every operation this PR touches that reaches RefusalReason (COMPAT-1's residue: an
+earlier declared break can be re-charged). This PR's own change stays additive + behavioral.
+
+Release relevance: signal-only.
 '''

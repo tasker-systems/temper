@@ -50,10 +50,64 @@
 # review-owned class, see release-register/README.md). The id is resolved through the register's
 # one reader, tools/manifest/manifest.py, across unreleased/ and every rolled v<x.y.z>/ — a
 # correction outlives its entry's roll. The gate replaces each named operation in the pin with its RECORDED corrected
-# shape before comparing, so the record is a corrected baseline, never a waiver: a later change to
-# a corrected operation is judged against the recorded shape like any other movement. A correction
+# shape before comparing, so the record is a corrected baseline: a later change to a corrected
+# operation is judged against the recorded shape like any other movement. It is a waiver only as
+# far as the record itself reaches: an operation record is not checked against the pinned shape
+# or the published one, so a record looser than either admits whatever the comparator calls growth
+# against it. (Component corrections, below, close that for their own records by deriving them from
+# the pin; the same hole in operation records is known and open.) A correction
 # that names an operation the pin does not have, names an operation twice, or names a register entry
 # that is missing or not declared `spec-correction` fails the gate.
+#
+# COMPONENT CORRECTIONS
+# ---------------------
+# `corrections.json` may also carry `component_corrections`: entries that correct one pinned
+# `components.schemas` member rather than one operation, each with `component` (the schema's
+# name), `schema` (its corrected shape), `register_entry` and `reason`. They exist because a
+# shape defect can live in a `$ref`'d component that dozens of operations reach, and recording it
+# operation by operation would mean restating every one of them — a record nobody could review.
+# (The first instance: the four open string enums, `ActName`, `IdKind`, `RefusalReason` and
+# `ScoreKind`, pinned as a `oneOf` whose bare-string arm overlaps every named arm, so no value
+# validated against exactly one arm; corrected to `anyOf`.)
+#
+# What one admits, exactly: the pinned component with its top-level `oneOf` renamed to `anyOf`.
+# The record is derived, not authored — the recorded `schema` must be exactly that shape, or the
+# gate refuses, naming the component — so a looser record (`{}`, a subset) cannot be written and
+# nothing can be laundered through one. The pinned component is replaced by the record before the
+# comparison, and the published component is judged against it by the shared comparator like any
+# other schema: an open vocabulary gaining a named arm before its catch-all, existing arms in
+# order, is growth and needs no edit here; a dropped, edited or reordered named arm, a changed
+# arm type or a new `required` is movement and refuses. Every operation that reaches the component
+# through a `$ref` is judged against the corrected shape.
+#
+# Only an OPEN VOCABULARY can be corrected: the pinned component must carry a top-level `oneOf`
+# whose last arm is the bare-string catch-all and whose other arms are plain string enums (the
+# shape `open_vocabulary` in wire-shape-lib.jq names). Any other component — a tagged union, a
+# component with no top-level `oneOf`, where a "correction" would change nothing — is refused,
+# named.
+#
+# The comparator's open residue reaches corrected components too: a key an arm or the schema GAINS
+# while the arm count holds (a `pattern` on the catch-all; a sibling `type`, `not` or `oneOf` beside
+# the `anyOf`) is not seen, because arms are compared pairwise by `broke_node`, which walks base
+# keys only. That is the same on main and for every uncorrected component; it is not closed here.
+#
+# What one does not admit:
+# * Any other movement. Every other component and every operation is judged exactly as before,
+#   and the corrected component itself is held to what the comparator calls growth.
+# * A component the pin does not have — that is growth, which needs no record — or one named twice.
+# * Removal. The recorded `schema` is derived from the pinned one, so a component cannot be
+#   corrected out of existence; deleting a pinned component is still movement.
+# * A `register_entry` that is not one lowercase kebab-case token (checked for operation
+#   corrections too).
+# * An entry that is not declared `spec-correction`, or that the register does not carry — the
+#   same resolution, through the same reader, as an operation correction.
+# * A file with any top-level key other than `$comment`, `corrections` and
+#   `component_corrections`, so a misspelled array name refuses rather than silently applying
+#   nothing.
+#
+# The breadth is the risk, and it is stated rather than hidden: because a component correction
+# changes what every reaching operation is compared against, the pass line names each corrected
+# component, and its register entry must say what the server always did for all of them.
 #
 # ACCEPTED RESIDUE
 # ----------------
@@ -161,15 +215,69 @@ PIN_NAME="$(basename "$(dirname "$CURRENT_PIN")")"
 CORRECTIONS="$(dirname "$CURRENT_PIN")/corrections.json"
 CORRECTED_NOTE=""
 if [ -f "$CORRECTIONS" ]; then
-    jq -e '.corrections | type == "array" and length > 0 and all(.[];
-            (.path | type) == "string" and (.method | type) == "string"
-            and (.register_entry | type) == "string" and (.reason | type) == "string"
-            and (.operation | type) == "object")' "$CORRECTIONS" >/dev/null 2>&1 \
-        || fail "${CORRECTIONS} is not a non-empty \`corrections\` array whose every entry carries path, method, register_entry, reason and operation."
-    DUPES="$(jq -r '[.corrections[] | "\(.method | ascii_upcase) \(.path)"] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$CORRECTIONS")"
-    [ -z "$DUPES" ] || fail "${CORRECTIONS} corrects the same operation more than once: ${DUPES}"
-    UNKNOWN="$(jq -r --slurpfile pin "$TMP_BASE" '.corrections[] | select($pin[0].paths[.path][.method] == null) | "\(.method | ascii_upcase) \(.path)"' "$CORRECTIONS")"
-    [ -z "$UNKNOWN" ] || fail "${CORRECTIONS} corrects an operation the ${PIN_NAME} pin does not have: ${UNKNOWN}. A correction amends a pinned shape; growth needs no record."
+    jq -e 'type == "object"' "$CORRECTIONS" >/dev/null 2>&1 \
+        || fail "${CORRECTIONS} is not a JSON object."
+    STRAY_KEYS="$(jq -r 'keys - ["$comment", "corrections", "component_corrections"] | join(", ")' "$CORRECTIONS")"
+    [ -z "$STRAY_KEYS" ] || fail "${CORRECTIONS} carries top-level key(s) the gate does not read: ${STRAY_KEYS}. Only \`corrections\` and \`component_corrections\` record anything; a misspelled one would apply nothing."
+    jq -e 'has("corrections") or has("component_corrections")' "$CORRECTIONS" >/dev/null 2>&1 \
+        || fail "${CORRECTIONS} records nothing: it carries neither \`corrections\` nor \`component_corrections\`."
+
+    # Operation corrections — unchanged in meaning; the array is optional now that a file may hold
+    # component corrections alone, and non-empty whenever it is present.
+    if jq -e 'has("corrections")' "$CORRECTIONS" >/dev/null 2>&1; then
+        jq -e '.corrections | type == "array" and length > 0 and all(.[];
+                (.path | type) == "string" and (.method | type) == "string"
+                and (.register_entry | type) == "string" and (.reason | type) == "string"
+                and (.operation | type) == "object")' "$CORRECTIONS" >/dev/null 2>&1 \
+            || fail "${CORRECTIONS} is not a non-empty \`corrections\` array whose every entry carries path, method, register_entry, reason and operation."
+        DUPES="$(jq -r '[.corrections[] | "\(.method | ascii_upcase) \(.path)"] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$CORRECTIONS")"
+        [ -z "$DUPES" ] || fail "${CORRECTIONS} corrects the same operation more than once: ${DUPES}"
+        UNKNOWN="$(jq -r --slurpfile pin "$TMP_BASE" '.corrections[] | select($pin[0].paths[.path][.method] == null) | "\(.method | ascii_upcase) \(.path)"' "$CORRECTIONS")"
+        [ -z "$UNKNOWN" ] || fail "${CORRECTIONS} corrects an operation the ${PIN_NAME} pin does not have: ${UNKNOWN}. A correction amends a pinned shape; growth needs no record."
+    fi
+
+    # Component corrections — see COMPONENT CORRECTIONS above.
+    if jq -e 'has("component_corrections")' "$CORRECTIONS" >/dev/null 2>&1; then
+        jq -e '.component_corrections | type == "array" and length > 0 and all(.[];
+                (.component | type) == "string" and (.component | length) > 0
+                and (.register_entry | type) == "string" and (.reason | type) == "string"
+                and (.schema | type) == "object")' "$CORRECTIONS" >/dev/null 2>&1 \
+            || fail "${CORRECTIONS} is not a non-empty \`component_corrections\` array whose every entry carries component, register_entry, reason and an object schema."
+        CDUPES="$(jq -r '[.component_corrections[].component] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$CORRECTIONS")"
+        [ -z "$CDUPES" ] || fail "${CORRECTIONS} corrects the same component more than once: ${CDUPES}"
+        CUNKNOWN="$(jq -r --slurpfile pin "$TMP_BASE" '.component_corrections[] | select($pin[0].components.schemas[.component] == null) | .component' "$CORRECTIONS")"
+        [ -z "$CUNKNOWN" ] || fail "${CORRECTIONS} corrects a component the ${PIN_NAME} pin does not have: ${CUNKNOWN}. A correction amends a pinned shape; growth needs no record."
+        # A record is DERIVED, not authored: it must be exactly the pinned component with its
+        # top-level `oneOf` renamed to `anyOf`. Nothing else can be recorded, so a permissive record
+        # (`{}`, a subset) or one that launders a dropped, edited or reordered arm cannot stand. The
+        # published component is then judged against it by the shared comparator below, like any
+        # other schema: open-vocabulary growth (a new named arm before the catch-all, in order)
+        # reads as growth and needs no edit here; anything else reads as movement.
+        # Open vocabularies only: see COMPONENT CORRECTIONS above.
+        CNOTOPEN="$(jq -n -r -L "$SCRIPT_DIR" --slurpfile base "$TMP_BASE" --slurpfile head "$TMP_HEAD" --slurpfile c "$CORRECTIONS" '
+            include "wire-shape-lib";
+            $c[0].component_corrections[]
+            | .component as $n
+            | $base[0].components.schemas[$n] as $p
+            | select((($p | type) == "object" and ($p | has("oneOf")) and (($p | has("anyOf")) | not)
+                      and open_vocabulary($p.oneOf) and ($p.oneOf[-1] | is_catch_all)) | not)
+            | $n')" || fail "the component corrections in ${CORRECTIONS} could not be checked against the ${PIN_NAME} pin."
+        [ -z "$CNOTOPEN" ] || fail "${CORRECTIONS} corrects a component the ${PIN_NAME} pin does not publish as an open vocabulary (a top-level \`oneOf\` of plain string enums ending in a bare-string catch-all): ${CNOTOPEN}. Only an open vocabulary's \`oneOf\` → \`anyOf\` can be recorded."
+        CMISMATCH="$(jq -n -r --slurpfile base "$TMP_BASE" --slurpfile c "$CORRECTIONS" '
+            $c[0].component_corrections[]
+            | .component as $n
+            | ($base[0].components.schemas[$n]
+               | if has("oneOf") and (has("anyOf") | not) then {anyOf: .oneOf} + del(.oneOf) else . end) as $t
+            | select(.schema != $t)
+            | $n')" || fail "the component corrections in ${CORRECTIONS} could not be compared against the ${PIN_NAME} pin."
+        [ -z "$CMISMATCH" ] || fail "${CORRECTIONS} records a shape that is not the ${PIN_NAME} pin's component with \`oneOf\` renamed to \`anyOf\`: ${CMISMATCH}. A component record is derived, not authored: write exactly that shape. Growth since the pin is judged against it, and needs no record."
+    fi
+
+    # An id is one token. `jq -r` below splits a value on its newlines, so an id carrying one
+    # would resolve as two entries, each of which might pass.
+    BAD_IDS="$(jq -r '((.corrections // []) + (.component_corrections // []))[] | select((.register_entry | test("^[a-z0-9][a-z0-9-]*$")) | not) | .register_entry | @json' "$CORRECTIONS")"
+    [ -z "$BAD_IDS" ] || fail "${CORRECTIONS} names register entry id(s) that are not one lowercase kebab-case token: ${BAD_IDS}"
+
     REGISTER="${REGISTER_ARG:-release-register}"
     [ -d "$REGISTER" ] || fail "${CORRECTIONS} names register entries, but there is no register at ${REGISTER} to check them against."
     while IFS= read -r ENTRY; do
@@ -180,12 +288,14 @@ if [ -f "$CORRECTIONS" ]; then
             *", spec-correction,"*) : ;;
             *) fail "register entry \"${ENTRY}\" is named by ${CORRECTIONS} but declares ${CLASSES}, not spec-correction." ;;
         esac
-    done < <(jq -r '.corrections[].register_entry' "$CORRECTIONS" | LC_ALL=C sort -u)
+    done < <(jq -r '((.corrections // []) + (.component_corrections // []))[].register_entry' "$CORRECTIONS" | LC_ALL=C sort -u)
+
     jq -S --slurpfile c "$CORRECTIONS" \
-        'reduce $c[0].corrections[] as $x (.; .paths[$x.path][$x.method] = $x.operation)' \
+        'reduce ($c[0].corrections // [])[] as $x (.; .paths[$x.path][$x.method] = $x.operation)
+         | reduce ($c[0].component_corrections // [])[] as $x (.; .components.schemas[$x.component] = $x.schema)' \
         "$TMP_BASE" > "${TMP_BASE}.c" && mv "${TMP_BASE}.c" "$TMP_BASE" \
         || fail "the corrections in ${CORRECTIONS} could not be applied to the pin."
-    CORRECTED_NOTE=" (with $(jq '.corrections | length' "$CORRECTIONS") recorded correction(s) applied: $(jq -r '[.corrections[] | "\(.method | ascii_upcase) \(.path)"] | join(", ")' "$CORRECTIONS"))"
+    CORRECTED_NOTE=" (with $(jq '(.corrections // []) + (.component_corrections // []) | length' "$CORRECTIONS") recorded correction(s) applied: $(jq -r '[((.corrections // [])[] | "\(.method | ascii_upcase) \(.path)"), ((.component_corrections // [])[] | "component \(.component)")] | join(", ")' "$CORRECTIONS"))"
 fi
 
 if cmp -s "$TMP_BASE" "$TMP_HEAD"; then
