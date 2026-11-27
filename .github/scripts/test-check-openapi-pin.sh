@@ -406,6 +406,44 @@ if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '2 recorded correction(s) app
   ok "corrections: operation and component corrections apply together, and the pass names both"
 else bad "corrections: operation and component corrections apply together, and the pass names both" "exit=$rc" "$out"; fi
 
+# ── 15. THE REAL TREE — the four open string enums against the current pin ──────────────────────
+# The fixtures above prove the rule; this proves the record. It runs the gate on the repository's
+# own contract, pin tree, VERSION and register, then again with the component corrections removed.
+# Kept to those four names on purpose: a fifth component correction landing later is its own
+# record and its own witness, not something this case should absorb.
+#
+# Self-retiring, loudly: the next pin is cut from a contract that already publishes `anyOf`, so it
+# carries no record for these four. The case then prints a SKIP naming why, rather than failing on
+# a pin that no longer needs the correction — and rather than passing as though it had checked.
+REAL="${WORK}/real"
+mkdir -p "$REAL"
+cp -R "${REPO}/schemas/versions" "${REAL}/versions"
+REAL_VERSION="$(tr -d '[:space:]' < "${REPO}/VERSION")"
+REAL_MM="${REAL_VERSION%.*}"
+REAL_PIN="${REAL}/versions/${REAL_MM}/corrections.json"
+real_gate() { bash "$CHECK" --emitted "${REPO}/openapi.json" --pin-dir "${REAL}/versions" --version-file "${REPO}/VERSION" --register "${REPO}/release-register" 2>&1; }
+OPEN_ENUMS='["ActName","IdKind","RefusalReason","ScoreKind"]'
+if [ -f "$REAL_PIN" ] && jq -e --argjson want "$OPEN_ENUMS" \
+     '[(.component_corrections // [])[].component] as $have | all($want[]; . as $w | $have | index($w))' \
+     "$REAL_PIN" >/dev/null 2>&1; then
+  out="$(real_gate)"; rc=$?
+  if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'component ActName, component IdKind, component RefusalReason, component ScoreKind'; then
+    ok "real tree: the open enums' anyOf publication passes with its component corrections recorded"
+  else bad "real tree: the open enums' anyOf publication passes with its component corrections recorded" "exit=$rc" "$out"; fi
+
+  jq 'del(.component_corrections)' "$REAL_PIN" > "${REAL_PIN}.tmp" && mv "${REAL_PIN}.tmp" "$REAL_PIN"
+  out="$(real_gate)"; rc=$?
+  named=0
+  for c in ActName IdKind RefusalReason ScoreKind; do
+    printf '%s' "$out" | grep -q "schema changed: ${c}$" && named=$((named + 1))
+  done
+  if [ "$rc" -ne 0 ] && [ "$named" -eq 4 ]; then
+    ok "real tree: the same publication with the component corrections removed fails, naming all four"
+  else bad "real tree: the same publication with the component corrections removed fails, naming all four" "exit=$rc" "named=$named" "$out"; fi
+else
+  echo "  SKIP: real tree: the ${REAL_MM} pin records no component correction for the four open enums — a pin cut after the anyOf publication needs none. Retire case 15."
+fi
+
 echo
 echo "  ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

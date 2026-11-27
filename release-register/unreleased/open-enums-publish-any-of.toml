@@ -20,6 +20,7 @@ Who observes: temper-py callers of the generated models. Before, `RefusalReason.
 `TestOpenStringEnums` in `clients/temper-py/tests/test_generated.py` and
 `every_open_enum_publishes_any_of_not_one_of` in `crates/temper-api/src/openapi.rs`.
 
-Release relevance: signal-only. The 0.6 pin gate (`check-openapi-pin.sh`) records corrections per
-operation, and these are components, so it reports the four schemas as changed; see the PR.
+Release relevance: signal-only. Each of the four is recorded as a component correction against the
+0.6 pin (`schemas/versions/0.6/corrections.json`, `component_corrections`), so the pin gate judges
+every operation reaching them against the `anyOf` shape.
 '''
