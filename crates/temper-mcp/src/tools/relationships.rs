@@ -451,6 +451,31 @@ mod tests {
         assert_eq!(err.message, format!("resource {id} was erased"));
     }
 
+    /// A re-assertion with the other polarity of a live edge answers `409 CONFLICT` naming the
+    /// live edge (migration 20261204000010). The tool keeps it the caller's: `invalid_params`
+    /// carrying the server's sentence, so the agent learns the handle to retype or fold. FAILS IF
+    /// the Conflict arm is removed from `map_err` (the catch-all answers `INTERNAL_ERROR`).
+    #[test]
+    fn a_reassertion_with_the_other_polarity_maps_to_invalid_params_naming_the_edge() {
+        let edge = uuid::Uuid::now_v7();
+        let sentence = format!(
+            "relationship_assert: edge {edge} already asserts this relationship as forward; an \
+             assertion as inverse is refused (retype or fold edge {edge} to change its direction)"
+        );
+        let err = map_err(
+            ClientError::Conflict {
+                message: format!("Conflict: {sentence}"),
+            },
+            "assert_relationship",
+        );
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(
+            err.message.contains(&edge.to_string()),
+            "the tool names the live edge: {}",
+            err.message
+        );
+    }
+
     #[test]
     fn assert_relationship_input_deserializes() {
         let json = serde_json::json!({

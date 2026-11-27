@@ -1173,6 +1173,37 @@ fn classify_data_artifact_sql_error(e: sqlx::Error) -> anyhow::Error {
     e.into()
 }
 
+/// Classify one SQL error from `relationship_assert`. SQLSTATE `TF005` is its refusal of a
+/// re-assertion with the other polarity (migration 20261204000010), whose DETAIL is the live
+/// edge's id: typed ([`crate::writes::EdgePolarityConflict`]) so every door renders it as the
+/// caller's conflict instead of the 500-class bridge. Only that code with a well-formed id is
+/// typed; any other error passes through unchanged.
+fn classify_relationship_assert_sql_error(
+    e: sqlx::Error,
+    asked: payloads::EdgePolarity,
+) -> anyhow::Error {
+    if let sqlx::Error::Database(db) = &e {
+        if db.code().as_deref() == Some("TF005") {
+            let live_edge = db
+                .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
+                .and_then(|pg| pg.detail())
+                .and_then(|d| Uuid::parse_str(d).ok());
+            if let Some(live_edge) = live_edge {
+                let live = match asked {
+                    payloads::EdgePolarity::Forward => payloads::EdgePolarity::Inverse,
+                    payloads::EdgePolarity::Inverse => payloads::EdgePolarity::Forward,
+                };
+                return anyhow::Error::new(crate::writes::EdgePolarityConflict {
+                    live_edge: EdgeId::from(live_edge),
+                    live,
+                    asked,
+                });
+            }
+        }
+    }
+    e.into()
+}
+
 pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Result<Fired> {
     fire_with(conn, action, EventContext::default()).await
 }
@@ -1305,7 +1336,8 @@ pub async fn fire_with(
                 ctx_corr,
             )
             .fetch_one(&mut *conn)
-            .await?
+            .await
+            .map_err(|e| classify_relationship_assert_sql_error(e, polarity))?
             .context("relationship_assert returned null")?;
             Ok(Fired::Relationship(EdgeId::from(id)))
         }
