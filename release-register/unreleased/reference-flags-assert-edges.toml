@@ -1,0 +1,25 @@
+title    = "resource update's reference flags assert the edge they name, or refuse"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+`temper resource update` with --relates-to, --references, --depends-on, --extends, --preceded-by
+or --derived-from used to write only the open-tier key of the same name and exit 0. Nothing
+projects those keys into the graph, so graph traverse and resource connections never saw the
+relation. Each flag now also asserts its edge from the updated resource to the named one, with the
+structural triple EdgeType::legacy_mapping gives the relation, after the update commits.
+
+Behind which shape: the update's JSON gains `edges_asserted` (label, target, edge_handle per edge),
+present only when a reference flag was given. A failed assert exits non-zero with its typed error
+and names on stderr the edges that landed before it; re-running the command is safe. A flag value
+that is not a resource ref (a URL, a bare slug) is now refused as bad-request before anything is
+written, where it used to be stored as a key with no edge; --open-meta-add still records such a
+value without an edge.
+
+Who observes: CLI callers of those six flags. resource create has no reference flags and is
+unchanged; the HTTP and MCP surfaces are unchanged. Witnesses, each failing against the prior
+binary: `each_reference_flag_asserts_its_edge` and
+`a_reference_flag_refuses_a_value_that_is_not_a_resource` in
+`tests/e2e/tests/cli_reference_flags_e2e.rs`. Release relevance: signal-only.
+'''

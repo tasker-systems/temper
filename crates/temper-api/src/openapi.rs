@@ -345,6 +345,38 @@ impl Modify for OpenStringEnumAddon {
                 repaired.description = description;
                 *item = RefOr::T(Schema::Object(repaired));
             }
+
+            // **Then `oneOf` becomes `anyOf`, and the repaired arm is why.** It is a bare
+            // `{"type": "string"}`, so it matches every value a named arm matches too: under
+            // `oneOf` ("exactly one arm") a KNOWN value is invalid, because two arms take it.
+            // openapi-generator's Python output makes that fatal for unknown values as well — it
+            // renders every arm as a plain-string validator, enum constraint dropped, so every
+            // input matches all of them and `RefusalReason.from_json` raised "No match found" for
+            // every reason there is (task `01a113c1-f576-7a02-894d-6208a5b42f90`). `anyOf` says
+            // what the type is: a string, of which these are the named values. It is also what
+            // `schemars` publishes for the same enums (`tests/fixtures/query/*.schema.json`), so
+            // the two generators now agree on the combinator as they already did on the arm.
+            //
+            // utoipa 6's `AnyOf` has no `title`, `readOnly` or `writeOnly` slot. None of these
+            // enums carries one; if one ever does, this refuses to build the document rather than
+            // publish it with the field silently dropped.
+            let one_of = std::mem::take(one_of);
+            assert!(
+                one_of.title.is_none() && one_of.read_only.is_none() && one_of.write_only.is_none(),
+                "open enum `{name}` carries a title/readOnly/writeOnly that `anyOf` cannot hold"
+            );
+            let mut any_of = utoipa::openapi::schema::AnyOf::new();
+            any_of.items = one_of.items;
+            any_of.schema_type = one_of.schema_type;
+            any_of.description = one_of.description;
+            any_of.default = one_of.default;
+            any_of.example = one_of.example;
+            any_of.examples = one_of.examples;
+            any_of.discriminator = one_of.discriminator;
+            any_of.extensions = one_of.extensions;
+            if let Some(schema) = components.schemas.get_mut(name) {
+                *schema = RefOr::T(Schema::AnyOf(any_of));
+            }
         }
     }
 }
@@ -865,9 +897,12 @@ mod tests {
 
         let mut wrong: Vec<String> = Vec::new();
         for (name, schema) in schemas {
-            let Some(arms) = schema.get("oneOf").and_then(|a| a.as_array()) else {
-                continue;
-            };
+            // Both combinators: the addon publishes the listed enums as `anyOf`, so a scan of
+            // `oneOf` alone would stop seeing the very schemas it exists to guard.
+            let arms = ["oneOf", "anyOf"]
+                .iter()
+                .filter_map(|key| schema.get(*key).and_then(|a| a.as_array()))
+                .flatten();
             for arm in arms {
                 // Case-insensitive on purpose — see `OpenStringEnumAddon`. This assertion was
                 // written lowercase-only first and passed while `ActName` and `ScoreKind` were
@@ -894,6 +929,77 @@ mod tests {
              the unknown value the open vocabulary exists to admit. If one of these is a NEW open \
              enum, add it to `OPEN_STRING_ENUMS`."
         );
+    }
+
+    /// An open enum is published as `anyOf`, never `oneOf`, because its arms overlap.
+    ///
+    /// The escape-hatch arm is a bare `{"type": "string"}`, so it takes every value a named arm
+    /// takes. Under `oneOf` a known value then matches two arms and is invalid, and temper-py's
+    /// generated models failed to parse every value, known or not (task
+    /// `01a113c1-f576-7a02-894d-6208a5b42f90`; the Python half of the witness is
+    /// `TestOpenStringEnums` in `clients/temper-py/tests/test_generated.py`).
+    ///
+    /// **Detected by shape, which the addon itself refuses to do — and that is the right split.**
+    /// The addon rewrites, so it must name its targets; this only reports, so it may cast wide. Any
+    /// `oneOf` holding both an unconstrained string arm and a string arm with named values is the
+    /// overlap, whatever its name, so an open enum nobody added to [`OPEN_STRING_ENUMS`] fails
+    /// here and the failure names it.
+    #[test]
+    fn every_open_enum_publishes_any_of_not_one_of() {
+        let spec = crate::routes::openapi_spec();
+        let json = serde_json::to_value(&spec).expect("spec serializes to JSON");
+        let schemas = json["components"]["schemas"]
+            .as_object()
+            .expect("components.schemas is an object");
+
+        let is_string =
+            |arm: &serde_json::Value| arm.get("type").and_then(|t| t.as_str()) == Some("string");
+        let mut overlapping: Vec<&str> = Vec::new();
+        for (name, schema) in schemas {
+            let Some(arms) = schema.get("oneOf").and_then(|a| a.as_array()) else {
+                continue;
+            };
+            let bare = arms.iter().any(|a| is_string(a) && a.get("enum").is_none());
+            let named = arms.iter().any(|a| is_string(a) && a.get("enum").is_some());
+            if bare && named {
+                overlapping.push(name);
+            }
+        }
+        assert!(
+            overlapping.is_empty(),
+            "these schemas publish an open string enum as `oneOf`, whose bare-string arm overlaps \
+             every named one, so no value validates against exactly one arm: {overlapping:?}. Add \
+             the enum to `OPEN_STRING_ENUMS`."
+        );
+
+        // Not vacuous, and every listed enum that is published is now the repaired shape.
+        let mut published = 0;
+        for name in super::OPEN_STRING_ENUMS {
+            let Some(schema) = schemas.get(name) else {
+                continue;
+            };
+            published += 1;
+            let arms = schema["anyOf"]
+                .as_array()
+                .unwrap_or_else(|| panic!("`{name}` is not published as `anyOf`: {schema}"));
+            assert!(
+                schema.get("oneOf").is_none(),
+                "`{name}` carries both combinators"
+            );
+            assert!(
+                arms.iter().any(|a| is_string(a) && a.get("enum").is_none()),
+                "`{name}` lost its escape-hatch arm"
+            );
+            assert!(
+                arms.iter().any(|a| a.get("enum").is_some()),
+                "`{name}` lost its named values"
+            );
+            assert!(
+                schema.get("description").is_some(),
+                "`{name}` lost its description in the conversion"
+            );
+        }
+        assert!(published > 0, "no open enum is in the spec at all");
     }
 
     /// A `$ref` to a component that does not exist makes the document invalid OpenAPI.

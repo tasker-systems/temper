@@ -582,6 +582,45 @@ impl std::fmt::Display for DataArtifactRefusal {
 
 impl std::error::Error for DataArtifactRefusal {}
 
+/// A re-assertion of a live edge with the other polarity, refused before anything is recorded
+/// (`relationship_assert`, SQLSTATE `TF005`, migration 20261204000010). Polarity is not part of an
+/// edge's live identity, so the two directions of one relationship are one edge, and asserting the
+/// other direction would contradict it. The refusal names the live edge, the handle a caller
+/// retypes or folds to change the direction. Decoded once, in `events`, beside the fire call.
+///
+/// Naming the edge discloses nothing the caller lacks: every door reaches the assert only after
+/// the edge-creation gates admitted it to the edge's home and both endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgePolarityConflict {
+    /// The live edge of the asserted identity.
+    pub live_edge: EdgeId,
+    /// The polarity the live edge holds.
+    pub live: payloads::EdgePolarity,
+    /// The polarity the refused assertion asked for.
+    pub asked: payloads::EdgePolarity,
+}
+
+impl std::fmt::Display for EdgePolarityConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn name(p: payloads::EdgePolarity) -> &'static str {
+            match p {
+                payloads::EdgePolarity::Forward => "forward",
+                payloads::EdgePolarity::Inverse => "inverse",
+            }
+        }
+        write!(
+            f,
+            "relationship_assert: edge {edge} already asserts this relationship as {live}; an \
+             assertion as {asked} is refused (retype or fold edge {edge} to change its direction)",
+            edge = self.live_edge,
+            live = name(self.live),
+            asked = name(self.asked),
+        )
+    }
+}
+
+impl std::error::Error for EdgePolarityConflict {}
+
 /// The retraction's refusal: the addressed property id is not a live row owned by the addressed
 /// edge. A missing id, a foreign owner, and an already-retracted one are ONE error — the message
 /// names only what the caller already sent, so no arm of the refusal discloses more than another
