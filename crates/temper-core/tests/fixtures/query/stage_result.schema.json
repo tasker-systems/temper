@@ -534,7 +534,7 @@
         },
         {
           "const": "column_not_a_property",
-          "description": "A `resource_filter.properties` predicate names a field every resource carries as a column,\nnever as a property row: `created` or `updated`, or their frontmatter names\n`temper-created` and `temper-updated`.\n\nA property predicate reads only `kb_properties` rows, so it could match nothing, and the\nempty answer it would give looks exactly like an honest \"none\". The detail names the field\nand the range that narrows by it, `resource_filter.created` or `resource_filter.updated`.\nThe list is `filter::RESOURCE_COLUMN_FIELDS`.",
+          "description": "A property predicate names a field its subject carries as a column, never as a property\nrow. In `resource_filter.properties`: `created` or `updated`, or their frontmatter names\n`temper-created` and `temper-updated`. In `edge_filter.properties`: `created`, `edge_kind`,\n`label`, `polarity` or `weight`.\n\nA property predicate reads only `kb_properties` rows, so it could match nothing, and the\nempty answer it would give looks exactly like an honest \"none\". The detail names the field,\nthe container, and where the field is reached instead: the range `resource_filter.created`\nor `resource_filter.updated`, `edge_filter.edge_kinds` or `edge_filter.labels`, or that no\nfilter narrows by it. The lists are `filter::RESOURCE_COLUMN_FIELDS` and\n`filter::EDGE_COLUMN_FIELDS`.",
           "type": "string"
         },
         {

@@ -58,6 +58,11 @@ pub struct EdgeFilter {
     /// owner_table` includes `'kb_edges'`, whose DDL comment has said *"§4a edges carry facets"*
     /// throughout) with a shipped write path `[verified — 20260727000030]`. So this slot narrows
     /// nothing today by data rather than by design.
+    ///
+    /// **A key naming an edge column is refused `column_not_a_property`:** `created`,
+    /// `edge_kind`, `label`, `polarity` and `weight`. Those are columns, never property rows, so a
+    /// predicate on one could only answer empty. `edge_kinds` and `labels` above narrow by two of
+    /// them; nothing narrows by the other three.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyPredicate>,
 }
@@ -476,6 +481,53 @@ pub const RESOURCE_COLUMN_FIELDS: &[(&str, &str)] = &[
         "temper-updated",
         "the frontmatter name of `updated`, a column of every resource, its last-update time. \
          Narrow by it with the range `resource_filter.updated` (`{from?, until?}`)",
+    ),
+];
+
+/// The keys an [`EdgeFilter::properties`] predicate refuses, because each names a column of
+/// `kb_edges` and never a property row, each with where the field is reached instead, if anywhere.
+/// A predicate on one is refused [`super::disposition::RefusalReason::ColumnNotAProperty`] whatever
+/// its operator. The edge-side sibling of [`RESOURCE_COLUMN_FIELDS`], chosen by the same rule.
+///
+/// # Why exactly these five
+///
+/// An edge predicate reads `kb_edge_properties` rows and nothing else (the walk's
+/// `p_edge_properties`, `20260816000010`), so a key that is a column of `kb_edges` can only answer
+/// empty, and the empty looks like an honest "none". These are the columns a caller sees on an
+/// edge and so reaches for: `edge_kind`, `label` and `polarity` on every walk's `via` entry, and
+/// `weight` and `created` beside them on the edge listing (`GraphEdgeRow`).
+///
+/// Left alone, as `RESOURCE_COLUMN_FIELDS` leaves `id` alone: the ids (`id`, `source_id`,
+/// `target_id`) and the storage columns (`source_table`, `target_table`, `home_anchor_table`,
+/// `home_anchor_id`, `asserted_by_event_id`, `last_event_id`, `is_folded`). They are not fields a
+/// caller narrows by; an id set is a bound.
+///
+/// **Not re-measured.** Zero edge-owned properties existed when `EdgeFilter::properties` shipped
+/// `[measured on prod — 2026-08-14]`; this list was not measured again. An edge property literally
+/// named one of the five stays writable, and this refusal makes it unreachable by a predicate.
+///
+/// Each name is published in `ColumnNotAProperty`'s description, which is what lets the offline
+/// `--check` raise it; `the_published_column_fields_are_the_refused_ones` holds the two together.
+pub const EDGE_COLUMN_FIELDS: &[(&str, &str)] = &[
+    (
+        "created",
+        "a column of every edge, its creation time. No filter narrows an edge by it",
+    ),
+    (
+        "edge_kind",
+        "a column of every edge. Narrow by it with `edge_filter.edge_kinds`",
+    ),
+    (
+        "label",
+        "a column of every edge. Narrow by it with `edge_filter.labels`",
+    ),
+    (
+        "polarity",
+        "a column of every edge. No filter narrows an edge by it",
+    ),
+    (
+        "weight",
+        "a column of every edge, which scales the walk's score. No filter narrows an edge by it",
     ),
 ];
 

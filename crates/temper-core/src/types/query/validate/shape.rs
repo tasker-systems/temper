@@ -48,8 +48,8 @@ use crate::types::query::envelope::ActInvocation;
 use crate::types::query::filter::{
     earliest_storable_timestamp, json_string_bytes, property_value_bytes, property_value_nodes,
     worst_case_string_bytes, worst_case_value_bytes, PropertyOp, PropertyPredicate, TimeRange,
-    MAX_COMPOSITION_PROPERTY_VALUE_BYTES, MAX_COMPOSITION_TEXT_BYTES, MAX_FILTER_STRING_BYTES,
-    MAX_FILTER_VALUES, MAX_PROPERTY_VALUE_BYTES, MAX_PROPERTY_VALUE_NODES,
+    EDGE_COLUMN_FIELDS, MAX_COMPOSITION_PROPERTY_VALUE_BYTES, MAX_COMPOSITION_TEXT_BYTES,
+    MAX_FILTER_STRING_BYTES, MAX_FILTER_VALUES, MAX_PROPERTY_VALUE_BYTES, MAX_PROPERTY_VALUE_NODES,
     MAX_TITLE_CONTAINS_BYTES, RESOURCE_COLUMN_FIELDS,
 };
 use crate::types::query::id_set::{IdKind, MAX_ID_SET_IDS};
@@ -1047,14 +1047,30 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         }
     }
 
-    // **A resource predicate on a column.** `RESOURCE_COLUMN_FIELDS` names the fields and why only
-    // they are refused. Every operator is refused, since each reads property rows only. Shape, not
-    // capability: no server could answer it, and so `--check` refuses it too. One refusal per field
-    // per stage, never per predicate, and the key echoed is the list's own spelling.
-    if let Some(f) = &inv.resource_filter {
-        for (field, lives) in RESOURCE_COLUMN_FIELDS {
-            let named: Vec<usize> = (0..f.properties.len())
-                .filter(|&i| f.properties[i].key == *field)
+    // **A predicate on a column**, in either container. `RESOURCE_COLUMN_FIELDS` and
+    // `EDGE_COLUMN_FIELDS` name the fields and why only they are refused. Every operator is
+    // refused, since each reads property rows only. Shape, not capability: no server could answer
+    // it, and so `--check` refuses it too. One refusal per field per container per stage, never per
+    // predicate, and the key echoed is the list's own spelling. One site for both containers, so a
+    // caller's repair reads the same way whichever filter the predicate sat in.
+    let containers: [ColumnCheck<'_>; 2] = [
+        (
+            "resource_filter.properties",
+            inv.resource_filter
+                .as_ref()
+                .map_or(&[][..], |f| &f.properties),
+            RESOURCE_COLUMN_FIELDS,
+        ),
+        (
+            "edge_filter.properties",
+            inv.edge_filter.as_ref().map_or(&[][..], |f| &f.properties),
+            EDGE_COLUMN_FIELDS,
+        ),
+    ];
+    for (container, preds, columns) in containers {
+        for (field, lives) in columns {
+            let named: Vec<usize> = (0..preds.len())
+                .filter(|&i| preds[i].key == *field)
                 .collect();
             if let Some(first) = named.first() {
                 errs.push(refusal(
@@ -1063,8 +1079,7 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
                     format!(
                         "`{field}` is read as a property here, but it is {lives}. A property \
                          predicate reads only property rows, so it would match nothing; {} in \
-                         `resource_filter.properties` name it, the first \
-                         `resource_filter.properties[{first}]`",
+                         `{container}` name it, the first `{container}[{first}]`",
                         named.len()
                     ),
                 ));
@@ -1372,6 +1387,14 @@ fn ask_text_bytes(ask: &ArtifactAsk) -> usize {
         .sum();
     segments + terms + values
 }
+
+/// One container the column check reads: its wire name, its predicates, and the column fields it
+/// refuses with where each is reached instead.
+type ColumnCheck<'a> = (
+    &'static str,
+    &'a [PropertyPredicate],
+    &'static [(&'static str, &'static str)],
+);
 
 /// The three places a property predicate can sit on a stage, each named as the wire names it.
 fn predicate_sources(inv: &ActInvocation) -> [(&'static str, &[PropertyPredicate]); 3] {
