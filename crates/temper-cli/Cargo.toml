@@ -42,7 +42,7 @@ sha2 = "0.11"
 shell-words = "1"
 sigstore-trust-root = "0.16"
 sigstore-types = "0.16"
-sigstore-verify = "0.16"
+sigstore-verify = "0.17"
 similar = "3"
 temperkb-client = { workspace = true, features = ["telemetry"] }
 temperkb-core.workspace = true
