@@ -12046,6 +12046,12 @@ export interface components {
          *     Nothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.
          */
         StageTrace: {
+            /**
+             * @description What ran at this stage: the act's name, or for a combinator stage the combinator's wire
+             *     name (`union`, `intersect` or `difference`). A combinator is not an act, and `ActName` is
+             *     open, so its name reaches the wire through the open arm: never `admit`, the declared
+             *     anti-act, which a combinator stage used to report here.
+             */
             act: components["schemas"]["ActName"];
             /**
              * @description What each artifact ask of this stage counted, one entry per ask in `artifact_filter` order.
@@ -12063,6 +12069,7 @@ export interface components {
              *     of a refusal carries them like any other, because its counts never read its input.
              */
             artifact_asks?: components["schemas"]["ArtifactAskTrace"][];
+            combinator?: components["schemas"]["CombineOp"] | null;
             /**
              * @description Which regions a `survey` stage matched, and at what score. Empty for every other act.
              *

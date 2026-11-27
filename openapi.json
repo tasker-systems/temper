@@ -29965,7 +29965,8 @@
         ],
         "properties": {
           "act": {
-            "$ref": "#/components/schemas/ActName"
+            "$ref": "#/components/schemas/ActName",
+            "description": "What ran at this stage: the act's name, or for a combinator stage the combinator's wire\nname (`union`, `intersect` or `difference`). A combinator is not an act, and `ActName` is\nopen, so its name reaches the wire through the open arm: never `admit`, the declared\nanti-act, which a combinator stage used to report here."
           },
           "artifact_asks": {
             "type": "array",
@@ -29973,6 +29974,17 @@
               "$ref": "#/components/schemas/ArtifactAskTrace"
             },
             "description": "What each artifact ask of this stage counted, one entry per ask in `artifact_filter` order.\nEmpty, and absent on the wire, for a stage that asks nothing.\n\n**This is where an empty `find-resources-with` stage says why.** An empty selection that\nasked artifacts is one of three things — nothing in what you can see is governed by the\nshape; some is and none matched; or the ask narrowed by verdict state and reconciliation has\nnot reached the rows — and the per-ask population tells them apart (spec\n`2026-10-19-asking-artifacts-by-what-they-are` §4.5). See [`ArtifactAskPopulation`] for what\nis counted.\n\nIt describes the stage's INPUT, not its output: no entry is a quantity, and none orders\nanything. A stage that refused carries no entries: its asks did not run. A stage downstream\nof a refusal carries them like any other, because its counts never read its input."
+          },
+          "combinator": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CombineOp",
+                "description": "The combinator a combinator stage ran, typed. Absent on an act stage.\n\n**This is the typed handle; `act` is the name.** On a combinator stage `act` carries\n`union`, `intersect` or `difference` through `ActName`'s open arm, so a reader that parses\n`act` into its act vocabulary finds a name outside it (`ActName::Other`). Branch on this\nfield to tell a combinator stage from an act stage, and on `act` only to read what ran."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "disclosed_regions": {
             "type": "array",

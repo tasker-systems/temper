@@ -1385,7 +1385,23 @@ input_unusable: bigint, };
  * `PartialEq` and cannot be `Eq`.
  * Nothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.
  */
-export type StageTrace = { stage: StageName, act: ActName, disposition: StageDisposition, 
+export type StageTrace = { stage: StageName, 
+/**
+ * What ran at this stage: the act's name, or for a combinator stage the combinator's wire
+ * name (`union`, `intersect` or `difference`). A combinator is not an act, and `ActName` is
+ * open, so its name reaches the wire through the open arm: never `admit`, the declared
+ * anti-act, which a combinator stage used to report here.
+ */
+act: ActName, 
+/**
+ * The combinator a combinator stage ran, typed. Absent on an act stage.
+ *
+ * **This is the typed handle; `act` is the name.** On a combinator stage `act` carries
+ * `union`, `intersect` or `difference` through `ActName`'s open arm, so a reader that parses
+ * `act` into its act vocabulary finds a name outside it (`ActName::Other`). Branch on this
+ * field to tell a combinator stage from an act stage, and on `act` only to read what ran.
+ */
+combinator?: CombineOp | null, disposition: StageDisposition, 
 /**
  * Present iff `disposition` is `refused` — the reason and standing-aware detail. The trace
  * covers every stage while results cover only returned ones, so this is the ONLY refusal
