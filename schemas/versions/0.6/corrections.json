@@ -1,5 +1,5 @@
 {
-  "$comment": "Recorded corrections to the 0.6 pin. check-openapi-pin.sh replaces each operation in the pin with `operation` before comparing; see its RECORDED CORRECTIONS header.",
+  "$comment": "Recorded corrections to the 0.6 pin. check-openapi-pin.sh replaces each operation in `corrections` and each component in `component_corrections` in the pin with its recorded shape before comparing; see its RECORDED CORRECTIONS and COMPONENT CORRECTIONS headers. A component record must equal the component as openapi.json publishes it, and may differ from the pinned component only by `oneOf` renamed to `anyOf` plus open-vocabulary growth.",
   "corrections": [
     {
       "method": "delete",

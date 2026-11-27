@@ -50,8 +50,12 @@
 # review-owned class, see release-register/README.md). The id is resolved through the register's
 # one reader, tools/manifest/manifest.py, across unreleased/ and every rolled v<x.y.z>/ — a
 # correction outlives its entry's roll. The gate replaces each named operation in the pin with its RECORDED corrected
-# shape before comparing, so the record is a corrected baseline, never a waiver: a later change to
-# a corrected operation is judged against the recorded shape like any other movement. A correction
+# shape before comparing, so the record is a corrected baseline: a later change to a corrected
+# operation is judged against the recorded shape like any other movement. It is a waiver only as
+# far as the record itself reaches: an operation record is not checked against the pinned shape
+# or the published one, so a record looser than either admits whatever the comparator calls growth
+# against it. (Component corrections, below, close that for their own records with two checks; the
+# same hole in operation records is known and open.) A correction
 # that names an operation the pin does not have, names an operation twice, or names a register entry
 # that is missing or not declared `spec-correction` fails the gate.
 #
@@ -66,16 +70,28 @@
 # `ScoreKind`, pinned as a `oneOf` whose bare-string arm overlaps every named arm, so no value
 # validated against exactly one arm; corrected to `anyOf`.)
 #
-# What one admits: the named pinned component is replaced by the recorded `schema` before the
-# comparison, so every operation that reaches it through a `$ref` is judged against the corrected
-# shape. That is the same corrected-baseline rule as an operation correction, at component grain.
+# What one admits, exactly: the pinned component with its top-level `oneOf` renamed to `anyOf`,
+# plus whatever growth the shared comparator already admits for any schema (for these, an open
+# vocabulary gaining a named arm before its catch-all, existing arms in order). Two checks hold a
+# record to that:
+# * the recorded `schema` must EQUAL the component as the committed contract publishes it, so a
+#   record pins one exact shape and is never a looser stand-in (`{}`, a subset) for what the
+#   component later becomes; and
+# * the pinned schema, renamed, must compare as unchanged or grown against the record under the
+#   shared comparator. A dropped, edited or reordered named arm, a type change or a new `required`
+#   refuses.
+# The pinned component is then replaced by the record before the comparison, so every operation
+# that reaches it through a `$ref` is judged against the corrected shape.
 #
 # What one does not admit:
-# * Any other movement. Every other component and every operation is judged exactly as before,
-#   and a later change to the corrected component is judged against the RECORDED shape.
+# * Any other movement. Every other component and every operation is judged exactly as before.
+#   Changing a corrected component later means re-recording it, and the new record is judged
+#   against the pin by the same two checks.
 # * A component the pin does not have — that is growth, which needs no record — or one named twice.
-# * Removal. The recorded `schema` must be an object, so a component cannot be corrected out of
-#   existence; deleting a pinned component is still movement.
+# * Removal. The recorded `schema` must be an object equal to the published one, so a component
+#   cannot be corrected out of existence; deleting a pinned component is still movement.
+# * A `register_entry` that is not one lowercase kebab-case token (checked for operation
+#   corrections too).
 # * An entry that is not declared `spec-correction`, or that the register does not carry — the
 #   same resolution, through the same reader, as an operation correction.
 # * A file with any top-level key other than `$comment`, `corrections` and
@@ -224,7 +240,31 @@ if [ -f "$CORRECTIONS" ]; then
         [ -z "$CDUPES" ] || fail "${CORRECTIONS} corrects the same component more than once: ${CDUPES}"
         CUNKNOWN="$(jq -r --slurpfile pin "$TMP_BASE" '.component_corrections[] | select($pin[0].components.schemas[.component] == null) | .component' "$CORRECTIONS")"
         [ -z "$CUNKNOWN" ] || fail "${CORRECTIONS} corrects a component the ${PIN_NAME} pin does not have: ${CUNKNOWN}. A correction amends a pinned shape; growth needs no record."
+        # The record pins the exact shape: it must equal what the committed contract publishes for
+        # that component, so a permissive record (`{}`, a subset) cannot stand as a waiver for
+        # whatever the component later becomes.
+        CSTALE="$(jq -r --slurpfile head "$TMP_HEAD" '.component_corrections[] | select((.schema | tojson) != ($head[0].components.schemas[.component] // null | tojson)) | .component' \
+            < <(jq -S . "$CORRECTIONS"))"
+        [ -z "$CSTALE" ] || fail "${CORRECTIONS} records a shape for component(s) that differs from what ${EMITTED} publishes: ${CSTALE}. A component correction records the committed shape exactly; re-record it from ${EMITTED} (the change is then judged against the pin below)."
+        # The only movement a record admits: the pinned schema with `oneOf` renamed to `anyOf`,
+        # plus growth the shared comparator already calls growth (an open vocabulary gaining a
+        # named arm, in order). A dropped or reordered named arm, a type change or a new `required`
+        # computes as broken here and refuses.
+        CBROKE="$(jq -n -r -L "$SCRIPT_DIR" --slurpfile base "$TMP_BASE" --slurpfile head "$TMP_HEAD" --slurpfile c "$CORRECTIONS" '
+            include "wire-shape-lib";
+            $c[0].component_corrections[]
+            | .component as $n
+            | ($base[0].components.schemas[$n]
+               | if has("oneOf") and (has("anyOf") | not) then {anyOf: .oneOf} + del(.oneOf) else . end) as $t
+            | select(broke_node($t; .schema; "mixed"))
+            | $n')" || fail "the component corrections in ${CORRECTIONS} could not be judged against the ${PIN_NAME} pin."
+        [ -z "$CBROKE" ] || fail "${CORRECTIONS} records a component shape that is more than the pinned shape with \`oneOf\` renamed to \`anyOf\` plus open-vocabulary growth: ${CBROKE}. A component correction admits that transform and nothing else."
     fi
+
+    # An id is one token. `jq -r` below splits a value on its newlines, so an id carrying one
+    # would resolve as two entries, each of which might pass.
+    BAD_IDS="$(jq -r '((.corrections // []) + (.component_corrections // []))[] | select((.register_entry | test("^[a-z0-9][a-z0-9-]*$")) | not) | .register_entry | @json' "$CORRECTIONS")"
+    [ -z "$BAD_IDS" ] || fail "${CORRECTIONS} names register entry id(s) that are not one lowercase kebab-case token: ${BAD_IDS}"
 
     REGISTER="${REGISTER_ARG:-release-register}"
     [ -d "$REGISTER" ] || fail "${CORRECTIONS} names register entries, but there is no register at ${REGISTER} to check them against."

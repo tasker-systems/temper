@@ -349,13 +349,92 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'does not carry'; then
   ok "component corrections: a register entry that does not exist fails"
 else bad "component corrections: a register entry that does not exist fails" "exit=$rc" "$out"; fi
 
-# Not a waiver for the component: moving it again is judged against the RECORDED shape.
+# Not a waiver for the component. Moving it again without re-recording refuses: the record must
+# equal the published shape.
 component_setup "spec-correction"
 jq -S '.components.schemas.OpenReason.anyOf[0].enum = ["renamed"]' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
 out="$(run_gate)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'schema changed: OpenReason'; then
-  ok "component corrections: a corrected component that moves again fails"
-else bad "component corrections: a corrected component that moves again fails" "exit=$rc" "$out"; fi
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'differs from what .* publishes: OpenReason'; then
+  ok "component corrections: a corrected component that moves again without re-recording fails"
+else bad "component corrections: a corrected component that moves again without re-recording fails" "exit=$rc" "$out"; fi
+
+# Re-recording does not launder it: a renamed named arm is more than the declared transform.
+component_setup "spec-correction"
+jq -S '.components.schemas.OpenReason.anyOf[0].enum = ["renamed"]' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+write_component_corrections "$CROW" "OpenReason"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'more than the pinned shape .*: OpenReason'; then
+  ok "component corrections: a re-recorded rename of a named arm fails"
+else bad "component corrections: a re-recorded rename of a named arm fails" "exit=$rc" "$out"; fi
+
+# Review repro (b): a named value dropped from the published shape AND the record — refused.
+component_setup "spec-correction"
+jq -S '.components.schemas.OpenReason.anyOf |= del(.[0])' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+write_component_corrections "$CROW" "OpenReason"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'more than the pinned shape .*: OpenReason'; then
+  ok "component corrections: a dropped named arm, recorded to match, fails (no laundering)"
+else bad "component corrections: a dropped named arm, recorded to match, fails (no laundering)" "exit=$rc" "$out"; fi
+
+# Review repro (a): a permissive `{}` record. With the published shape left alone it is stale;
+# with the published shape changed to anything (here an integer enum) it is still stale; and
+# with both set to `{}` it is more than the transform.
+component_setup "spec-correction"
+jq '.component_corrections[0].schema = {}' "${PINDIR}/0.5/corrections.json" > "${WORK}/c.tmp" && mv "${WORK}/c.tmp" "${PINDIR}/0.5/corrections.json"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'differs from what'; then
+  ok "component corrections: a permissive {} record beside the real shape fails"
+else bad "component corrections: a permissive {} record beside the real shape fails" "exit=$rc" "$out"; fi
+
+component_setup "spec-correction"
+jq '.component_corrections[0].schema = {}' "${PINDIR}/0.5/corrections.json" > "${WORK}/c.tmp" && mv "${WORK}/c.tmp" "${PINDIR}/0.5/corrections.json"
+jq -S '.components.schemas.OpenReason = {"type":"integer","enum":[1]}' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'differs from what'; then
+  ok "component corrections: a {} record does not wave through a type change"
+else bad "component corrections: a {} record does not wave through a type change" "exit=$rc" "$out"; fi
+
+component_setup "spec-correction"
+jq -S '.components.schemas.OpenReason = {}' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+write_component_corrections "$CROW" "OpenReason"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'more than the pinned shape'; then
+  ok "component corrections: a {} record matching a {} publication fails"
+else bad "component corrections: a {} record matching a {} publication fails" "exit=$rc" "$out"; fi
+
+# A type change or a new `required`, recorded to match, is more than the transform.
+component_setup "spec-correction"
+jq -S '.components.schemas.OpenReason = {"type":"integer","enum":[1]}' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+write_component_corrections "$CROW" "OpenReason"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'more than the pinned shape'; then
+  ok "component corrections: a re-recorded type change fails"
+else bad "component corrections: a re-recorded type change fails" "exit=$rc" "$out"; fi
+
+component_setup "spec-correction"
+jq -S '.components.schemas.OpenReason.required = ["x"]' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+write_component_corrections "$CROW" "OpenReason"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'more than the pinned shape'; then
+  ok "component corrections: a re-recorded new required fails"
+else bad "component corrections: a re-recorded new required fails" "exit=$rc" "$out"; fi
+
+# What it does admit beyond the rename: open-vocabulary growth, re-recorded, in order.
+component_setup "spec-correction"
+jq -S '.components.schemas.OpenReason.anyOf |= (.[0:1] + [{"type":"string","enum":["newer"]}] + .[1:])' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+write_component_corrections "$CROW" "OpenReason"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -eq 0 ]; then
+  ok "component corrections: a re-recorded new named arm before the catch-all passes"
+else bad "component corrections: a re-recorded new named arm before the catch-all passes" "exit=$rc" "$out"; fi
+
+# Nit 6: an id carrying a newline would resolve as two entries; it is refused as one bad token.
+component_setup "spec-correction"
+jq --arg row "${CROW}"$'\n'"${ROW}" '.component_corrections[0].register_entry = $row' "${PINDIR}/0.5/corrections.json" > "${WORK}/c.tmp" && mv "${WORK}/c.tmp" "${PINDIR}/0.5/corrections.json"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'not one lowercase kebab-case token'; then
+  ok "corrections: a register_entry carrying a newline fails"
+else bad "corrections: a register_entry carrying a newline fails" "exit=$rc" "$out"; fi
 
 # Not a waiver for anything else: other movement beside the correction still fails.
 component_setup "spec-correction"
@@ -412,9 +491,9 @@ else bad "corrections: operation and component corrections apply together, and t
 # Kept to those four names on purpose: a fifth component correction landing later is its own
 # record and its own witness, not something this case should absorb.
 #
-# Self-retiring, loudly: the next pin is cut from a contract that already publishes `anyOf`, so it
-# carries no record for these four. The case then prints a SKIP naming why, rather than failing on
-# a pin that no longer needs the correction — and rather than passing as though it had checked.
+# Self-retiring on one exact condition only: the selected pin ITSELF publishes all four as `anyOf`
+# (a pin cut after the fix), which needs no record. Then it prints a SKIP naming that. While the
+# pin still publishes them as `oneOf`, a missing record for any of the four FAILS.
 REAL="${WORK}/real"
 mkdir -p "$REAL"
 cp -R "${REPO}/schemas/versions" "${REAL}/versions"
@@ -423,25 +502,30 @@ REAL_MM="${REAL_VERSION%.*}"
 REAL_PIN="${REAL}/versions/${REAL_MM}/corrections.json"
 real_gate() { bash "$CHECK" --emitted "${REPO}/openapi.json" --pin-dir "${REAL}/versions" --version-file "${REPO}/VERSION" --register "${REPO}/release-register" 2>&1; }
 OPEN_ENUMS='["ActName","IdKind","RefusalReason","ScoreKind"]'
-if [ -f "$REAL_PIN" ] && jq -e --argjson want "$OPEN_ENUMS" \
-     '[(.component_corrections // [])[].component] as $have | all($want[]; . as $w | $have | index($w))' \
-     "$REAL_PIN" >/dev/null 2>&1; then
-  out="$(real_gate)"; rc=$?
-  if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'component ActName, component IdKind, component RefusalReason, component ScoreKind'; then
-    ok "real tree: the open enums' anyOf publication passes with its component corrections recorded"
-  else bad "real tree: the open enums' anyOf publication passes with its component corrections recorded" "exit=$rc" "$out"; fi
-
-  jq 'del(.component_corrections)' "$REAL_PIN" > "${REAL_PIN}.tmp" && mv "${REAL_PIN}.tmp" "$REAL_PIN"
-  out="$(real_gate)"; rc=$?
-  named=0
-  for c in ActName IdKind RefusalReason ScoreKind; do
-    printf '%s' "$out" | grep -q "schema changed: ${c}$" && named=$((named + 1))
-  done
-  if [ "$rc" -ne 0 ] && [ "$named" -eq 4 ]; then
-    ok "real tree: the same publication with the component corrections removed fails, naming all four"
-  else bad "real tree: the same publication with the component corrections removed fails, naming all four" "exit=$rc" "named=$named" "$out"; fi
+REAL_PIN_JSON="${REAL}/versions/${REAL_MM}/openapi.json"
+if jq -e --argjson want "$OPEN_ENUMS" '. as $p | all($want[]; . as $n | ($p.components.schemas[$n] | has("anyOf") and (has("oneOf") | not)))' "$REAL_PIN_JSON" >/dev/null 2>&1; then
+  # The one condition that retires this case: the pin itself publishes all four as anyOf.
+  echo "  SKIP: real tree: the ${REAL_MM} pin already publishes the four open enums as anyOf, so it needs no component correction for them. Retire case 15."
 else
-  echo "  SKIP: real tree: the ${REAL_MM} pin records no component correction for the four open enums — a pin cut after the anyOf publication needs none. Retire case 15."
+  MISSING="$(jq -r --argjson want "$OPEN_ENUMS" '[(.component_corrections // [])[].component] as $have | $want[] | select(. as $w | $have | index($w) | not)' "$REAL_PIN" 2>/dev/null)"
+  if [ ! -f "$REAL_PIN" ] || [ -n "$MISSING" ]; then
+    bad "real tree: the ${REAL_MM} pin publishes the open enums as oneOf, so its corrections.json must record all four" "missing: ${MISSING:-the whole corrections.json}"
+  else
+    out="$(real_gate)"; rc=$?
+    if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'component ActName, component IdKind, component RefusalReason, component ScoreKind'; then
+      ok "real tree: the open enums' anyOf publication passes with its component corrections recorded"
+    else bad "real tree: the open enums' anyOf publication passes with its component corrections recorded" "exit=$rc" "$out"; fi
+
+    jq 'del(.component_corrections)' "$REAL_PIN" > "${REAL_PIN}.tmp" && mv "${REAL_PIN}.tmp" "$REAL_PIN"
+    out="$(real_gate)"; rc=$?
+    named=0
+    for c in ActName IdKind RefusalReason ScoreKind; do
+      printf '%s' "$out" | grep -q "schema changed: ${c}$" && named=$((named + 1))
+    done
+    if [ "$rc" -ne 0 ] && [ "$named" -eq 4 ]; then
+      ok "real tree: the same publication with the component corrections removed fails, naming all four"
+    else bad "real tree: the same publication with the component corrections removed fails, naming all four" "exit=$rc" "named=$named" "$out"; fi
+  fi
 fi
 
 echo
