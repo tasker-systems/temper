@@ -12,6 +12,13 @@ One refusal per stage; its detail names up to eight unknown keys (each JSON-esca
 bytes), counts the rest, and lists the declared fields. Before this the key parsed, narrowed
 nothing, and the stage answered every resource in its bound with no sign of why.
 
+Which keys, and which not: only a top-level key of the `resource_filter` object itself is refused,
+and only one outside its ten declared fields above, which are temper's own filter vocabulary.
+User-set keys (open-meta and facet keys) are not touched: they reach a filter as predicate VALUES,
+`properties[].key` and `facets[].key`, which are read exactly as before. No field has ever been
+removed from `resource_filter`, so no legitimate older client sends a retired name. Ruled additive +
+behavioral (ruling 30, decision 01a21d95-1e3d-70bb-a01f-c3b2d3e9e658).
+
 How: `ResourceFilter` captures unknown keys instead of serde dropping them (not
 `deny_unknown_fields`: a stage is an untagged enum, so serde would answer 422 UNREADABLE_PLAN
 without naming the field). The captured keys are serialized back, so the CLI, which parses a plan
