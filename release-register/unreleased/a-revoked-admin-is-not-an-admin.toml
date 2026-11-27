@@ -1,0 +1,27 @@
+title    = "A system admin whose standing is not approved is not an admin, whatever governance row remains"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "internal"]
+status   = "signal-only"
+body = '''
+is_system_admin now asks governance and live standing. Migration 20261205000010 is a body-only
+CREATE OR REPLACE with the signature unchanged: it is true only for a kb_principal_governance row
+whose principal also passes has_system_access (standing approved). Before, it read the governance
+row alone, so "admin implies approved" depended entirely on Revoke and Deactivate deleting the row
+in the same transaction. They still do; the read now refuses a row that outlives the standing too.
+Every caller follows the new body: the Rust passthrough access_service::is_system_admin, the
+locked re-check auth::is_system_admin_locked, and the in-database `IF NOT is_system_admin` guards.
+The result is EXISTS AND EXISTS, so it is never NULL and those guards stay fail-closed.
+
+Who observes: only a principal holding governance with standing revoked, deactivated, denied,
+requested or absent. Such a principal is refused (403) at every admin door, and any proof it holds
+fails its next locked re-check. An audit of every path that ends standing found no production
+door that leaves that state behind. Revoke, Deactivate and machine credential revocation all
+demote in the same transaction, and promotion approves before it grants. So no live admin is
+expected to lose access on deploy. A principal who did reach that state (by a direct write, say)
+loses admin-ness when the migration applies. No schema change, no response shape change, no row
+rewritten. Witnesses, each failing against the previous body:
+`governance_without_live_standing_is_not_admin` and
+`a_revoked_admin_with_governance_is_refused_at_admin_doors` in
+`crates/temper-services/tests/admin_demotion_test.rs`. Release relevance: signal-only.
+'''

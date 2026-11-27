@@ -94,15 +94,9 @@ async fn backend(pool: &PgPool) -> DbBackend {
     let sys = system_profile(pool).await;
     // L0 is in the admin-only regime, which `reconcile_cognitive_map` gates on a system admin. In a
     // migration-only test DB the bootseed that grants the system principal governance has not run,
-    // so grant it here (the governance row `is_system_admin` reads, as `make_test_admin` inserts).
-    sqlx::query(
-        "INSERT INTO kb_principal_governance (profile_id) VALUES ($1) \
-         ON CONFLICT (profile_id) DO NOTHING",
-    )
-    .bind(sys)
-    .execute(pool)
-    .await
-    .expect("grant test governance");
+    // so make it an admin here: approved standing plus the governance row (`is_system_admin` asks
+    // both).
+    temper_services::test_support::grant_governance(pool, sys).await;
     DbBackend::new(pool.clone(), ProfileId::from(sys))
 }
 

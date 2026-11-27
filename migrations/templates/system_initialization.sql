@@ -17,9 +17,10 @@
 -- migrated schema, so a schema change that breaks it fails CI rather than a self-hoster. The e2e
 -- suites' bootstrap helpers are separate copies that this test does not cover.
 --
--- Admission and governance are separate, and each reads exactly one table:
+-- Admission and governance are separate:
 --   has_system_access  -> kb_principal_standing   (may this principal use the instance?)
---   is_system_admin    -> kb_principal_governance (may this principal change the rules?)
+--   is_system_admin    -> kb_principal_governance AND has_system_access (may this principal change
+--                         the rules? Only while it may use the instance, 20261205000010)
 -- Neither reads team membership. Owning the gating team does not make anyone an admin.
 --
 -- Further admins are promoted by an existing admin, never by hand-written SQL:

@@ -42,11 +42,17 @@ pub async fn approve(pool: &PgPool, profile: Uuid) {
     .expect("seed approved standing");
 }
 
-/// Grant `profile` governance — the capability the repointed `is_system_admin` predicate reads.
+/// Make `profile` a system admin the way promotion does: [`approve`] its standing, then write the
+/// governance row.
 ///
 /// Gating-team ownership no longer confers admin standing on its own; a fixture that needs a system
-/// admin must write this row. `granted_by` is left NULL (a fixture bootstrap, not a delegated grant).
+/// admin must write this row. Since 20261205000010 `is_system_admin` also requires approved
+/// standing, so a governance row on an unadmitted profile confers nothing, and this helper
+/// approves first. A test that needs governance WITHOUT live standing (the drift that migration
+/// refuses) must build that state itself. `granted_by` is left NULL (a fixture bootstrap, not a
+/// delegated grant).
 pub async fn grant_governance(pool: &PgPool, profile: Uuid) {
+    approve(pool, profile).await;
     sqlx::query!(
         "INSERT INTO kb_principal_governance (profile_id)
          VALUES ($1)
@@ -60,10 +66,9 @@ pub async fn grant_governance(pool: &PgPool, profile: Uuid) {
 
 /// The common fixture shape: an `approved` principal that is also a system admin.
 ///
-/// Equivalent to [`approve`] followed by [`grant_governance`]. Use for any fixture principal that
-/// was, under open-mode, an ambient admin able to act on the system surface.
+/// The same as [`grant_governance`], which approves too. Use for any fixture principal that was,
+/// under open-mode, an ambient admin able to act on the system surface.
 pub async fn approved_admin(pool: &PgPool, profile: Uuid) {
-    approve(pool, profile).await;
     grant_governance(pool, profile).await;
 }
 

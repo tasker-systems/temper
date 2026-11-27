@@ -2,8 +2,9 @@
 //! Task 15 — demotion-by-transition and the manual `demote` act (D10 / spec §9).
 //!
 //! §9: "Revoke and Deactivate demote, so 'admin, but admission revoked' is never representable."
-//! The invariant is maintained BY TRANSITION — `is_system_admin` reads governance and nothing else,
-//! so if the demotion does not fire, a revoked admin stays admin. That is the whole risk here.
+//! The invariant is maintained BY TRANSITION, and since 20261205000010 also at the read:
+//! `is_system_admin` asks governance AND live standing, so a governance row left behind by a missed
+//! demotion confers nothing. Both halves are pinned below.
 //!
 //! Governance and admission are independent axes: `demote` removes the authority to change the rules
 //! without touching access, and `reactivate` restores access without returning authority.
@@ -151,5 +152,130 @@ async fn demote_admin_requires_the_caller_be_admin(pool: PgPool) {
     assert!(
         is_admin(&pool, subject).await,
         "the refused caller wrote nothing"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The read refuses as well (20261205000010). The tests above pin the transition: Revoke and
+// Deactivate delete the governance row. These pin the read: a governance row that outlives the
+// principal's standing (a missed demotion, a direct write) confers nothing. Each builds that state
+// directly, behind the transition's back, because no door is known to produce it.
+// ---------------------------------------------------------------------------------------------
+
+/// Move `p`'s standing without the committer, so the governance row is left behind.
+async fn force_standing(pool: &PgPool, p: uuid::Uuid, state: &str) {
+    sqlx::query(
+        "UPDATE kb_principal_standing SET state = $2, updated = now() WHERE profile_id = $1",
+    )
+    .bind(p)
+    .bind(state)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn holds_governance(pool: &PgPool, p: uuid::Uuid) -> bool {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM kb_principal_governance WHERE profile_id = $1)",
+    )
+    .bind(p)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// The predicate as a plpgsql `IF NOT` guard reads it: a NULL there falls open, so this asks
+/// whether the guard fires, not what the scalar is.
+async fn plpgsql_guard_refuses(pool: &PgPool, p: uuid::Uuid) -> bool {
+    let body = format!(
+        "DO $$ BEGIN IF NOT is_system_admin('{p}'::uuid) THEN \
+         RAISE EXCEPTION 'guard fired'; END IF; END $$"
+    );
+    sqlx::raw_sql(&body).execute(pool).await.is_err()
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn governance_without_live_standing_is_not_admin(pool: PgPool) {
+    let subject = an_admin(&pool, "governs-on-paper").await;
+    assert!(
+        is_admin(&pool, subject).await,
+        "the fixture starts as an admin"
+    );
+
+    for state in ["revoked", "deactivated", "denied", "requested"] {
+        force_standing(&pool, subject, state).await;
+        assert!(
+            holds_governance(&pool, subject).await,
+            "the row is left behind ({state})"
+        );
+
+        let scalar: Option<bool> = sqlx::query_scalar("SELECT is_system_admin($1)")
+            .bind(subject)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            scalar,
+            Some(false),
+            "standing {state}: never admin, and never NULL"
+        );
+        assert!(
+            !is_admin(&pool, subject).await,
+            "standing {state}: the Rust read refuses"
+        );
+        assert!(
+            plpgsql_guard_refuses(&pool, subject).await,
+            "standing {state}: an `IF NOT is_system_admin` guard fires"
+        );
+    }
+
+    // The same row with live standing governs again: the read follows standing, not the row alone.
+    force_standing(&pool, subject, "approved").await;
+    assert!(is_admin(&pool, subject).await);
+    assert!(!plpgsql_guard_refuses(&pool, subject).await);
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_revoked_admin_with_governance_is_refused_at_admin_doors(pool: PgPool) {
+    let revoked = an_admin(&pool, "revoked-but-governs").await;
+    let target = a_profile(&pool, "deactivation-target").await;
+    test_support::approve(&pool, target).await;
+
+    // A proof minted while live, as a session would hold one across the revocation.
+    let held = admin_proof(&pool, revoked).await;
+    let human = test_support::human_principal_for(&pool, revoked).await;
+
+    force_standing(&pool, revoked, "revoked").await;
+    assert!(holds_governance(&pool, revoked).await);
+
+    // The mint every admin door runs refuses.
+    assert!(matches!(
+        require_system_admin(&pool, &human).await,
+        Err(ApiError::Forbidden)
+    ));
+    // So does the locked re-check a door runs on its write transaction.
+    let mut tx = pool.begin().await.unwrap();
+    assert!(matches!(
+        temper_services::auth::require_system_admin_locked(&mut tx, &human).await,
+        Err(ApiError::Forbidden)
+    ));
+    drop(tx);
+    // And an admin act driven by the held proof re-checks and is refused, writing nothing.
+    let refused = access_service::admin_deactivate(&pool, &held, ProfileId::from(target)).await;
+    assert!(
+        matches!(refused, Err(ApiError::Forbidden)),
+        "got {refused:?}"
+    );
+    assert_eq!(standing(&pool, target).await.as_deref(), Some("approved"));
+
+    // With live standing the same principal, the same row and the same proof are admitted.
+    force_standing(&pool, revoked, "approved").await;
+    assert!(require_system_admin(&pool, &human).await.is_ok());
+    access_service::admin_deactivate(&pool, &held, ProfileId::from(target))
+        .await
+        .unwrap();
+    assert_eq!(
+        standing(&pool, target).await.as_deref(),
+        Some("deactivated")
     );
 }
