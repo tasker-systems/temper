@@ -1,0 +1,40 @@
+title    = "An edge property predicate on created, edge_kind, label, polarity or weight is refused as column_not_a_property, not answered empty"
+pr       = "self"
+classes  = ["additive", "behavioral", "spec-correction"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
+status   = "signal-only"
+body = '''
+What changed: an `edge_filter.properties` predicate whose key is `created`, `edge_kind`, `label`,
+`polarity` or `weight`, with any operator (`compare`, `contains`, `has_key`), is refused by the
+shape pass with the existing RefusalReason `column_not_a_property`, the edge-side sibling of
+`query-column-predicate-refused`. These are columns of every edge, never edge property rows, and an
+edge predicate reads only property rows (`kb_edge_properties`), so before this the walk ran and
+answered empty, which a caller asking "edges created after X" read as "none". The detail names the
+field, the container (`edge_filter.properties`) and where the field is reached instead
+(`edge_filter.edge_kinds`, `edge_filter.labels`, or that no filter narrows by it). Ids and storage
+columns are left alone, as on the resource side. The list is `filter::EDGE_COLUMN_FIELDS`.
+
+Who observes: any caller of POST /api/query, the MCP query tool, and `temper query`, which now gets
+400 PLAN_REFUSED where it got 200 and an empty walk. `temper query --check` refuses it too, because
+it runs the same shape pass. An edge property literally named one of the five stays writable and is
+now unreachable by a predicate. Measured on the community deployment on 2026-11-27: 1186 edge
+properties over 2 distinct keys, none of them one of the five (case-insensitive); other installs
+were not measured. Every other edge key is unchanged.
+
+Why additive + behavioral: no new value or field. The shape half is the `column_not_a_property`
+description and `EdgeFilter.properties`' description now naming the edge fields (openapi.json, the
+three SDKs, the query JSON-Schema snapshots, the MCP declarations); the behavioral half is a plan
+that used to answer being refused. Witnesses: `an_edge_predicate_on_an_edge_column_is_refused_by_name`
+(crates/temper-api/tests/query_edge_column_predicate_test.rs) and
+`an_edge_predicate_on_an_edge_column_is_refused_naming_the_field` (temper-core validate tests,
+shown to fail with the edge list emptied); `the_published_column_fields_are_the_refused_ones` now
+holds the edge list to the published description.
+
+Why spec-correction too (ruling 35, decision 01a21d95-1e3d-70bb-a01f-c3b2d3e9e658): the shape
+movement the declared-class gate charges here is not this PR's. It is #1480's oneOf→anyOf
+correction of RefusalReason (entry `open-enums-publish-any-of`), which the release-relative reading
+re-charges on every operation this PR touches that reaches RefusalReason (COMPAT-1's residue: an
+earlier declared break can be re-charged). This PR's own change stays additive + behavioral.
+
+Release relevance: signal-only.
+'''

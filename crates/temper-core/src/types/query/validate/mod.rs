@@ -1605,7 +1605,10 @@ mod tests {
         let description = arm(&schema)
             .and_then(|a| a["description"].as_str())
             .expect("`column_not_a_property` is published with a description");
-        for (field, _) in RESOURCE_COLUMN_FIELDS {
+        for (field, _) in RESOURCE_COLUMN_FIELDS
+            .iter()
+            .chain(crate::types::query::filter::EDGE_COLUMN_FIELDS)
+        {
             assert!(
                 description.contains(&format!("`{field}`")),
                 "`{field}` is refused but not named in the published description: {description}"
@@ -2979,6 +2982,102 @@ mod tests {
         );
         let reread: Composition = serde_json::from_value(sent).expect("re-parses");
         assert_eq!(reread, typo);
+    }
+
+    /// One returned `follow-from` stage seeded by one resource, carrying `edge_filter` as given,
+    /// parsed from the wire the way every door reads a plan.
+    fn wire_walk(edge_filter: serde_json::Value) -> Composition {
+        serde_json::from_value(serde_json::json!({
+            "stages": [{
+                "name": "walk",
+                "act": "follow-from",
+                "inputs": [{"from": "caller", "as": "seed",
+                            "ids": {"kind": "resource",
+                                    "ids": ["019fbb77-72a3-72e1-bbbd-13eb6aa64982"]}}],
+                "edge_filter": edge_filter,
+            }],
+            "outcome": {"returns": [{"stage": "walk"}]},
+        }))
+        .unwrap_or_else(|e| panic!("the plan parses: {e}"))
+    }
+
+    /// **An edge predicate on an edge column is refused by name, never answered.** `created`,
+    /// `edge_kind`, `label`, `polarity` and `weight` are columns of `kb_edges`, never edge property
+    /// rows, so a predicate on one matched nothing and the walk answered empty: a caller asking
+    /// "edges created after X" was told "none" for a question never asked. Every operator, in both
+    /// the full pass and `validate_shape`, which is what `temper query --check` runs.
+    ///
+    /// FAILS IF: `EDGE_COLUMN_FIELDS` loses a field, or the column check stops reading
+    /// `edge_filter.properties` (the plan validates and the walk answers empty).
+    #[test]
+    fn an_edge_predicate_on_an_edge_column_is_refused_naming_the_field() {
+        let ops = [
+            serde_json::json!({"op": "compare", "direction": "gte",
+                               "value": "2026-07-01T00:00:00Z"}),
+            serde_json::json!({"op": "has_key"}),
+            serde_json::json!({"op": "contains", "values": ["x"]}),
+        ];
+        let lives = [
+            ("created", "No filter narrows an edge by it"),
+            ("edge_kind", "Narrow by it with `edge_filter.edge_kinds`"),
+            ("label", "Narrow by it with `edge_filter.labels`"),
+            ("polarity", "No filter narrows an edge by it"),
+            ("weight", "No filter narrows an edge by it"),
+        ];
+        for (field, reached) in lives {
+            for op in &ops {
+                let c = wire_walk(serde_json::json!({
+                    "properties": [{"key": "since", "op": {"op": "has_key"}},
+                                   {"key": field, "op": op}],
+                }));
+                for (pass, errs) in [
+                    ("validate", validate(&c).expect_err("must refuse")),
+                    ("validate_shape", super::validate_shape(&c)),
+                ] {
+                    let hit: Vec<_> = errs
+                        .iter()
+                        .filter(|e| e.reason == RefusalReason::ColumnNotAProperty)
+                        .collect();
+                    assert_eq!(hit.len(), 1, "{pass}, `{field}` {op}: got {errs:?}");
+                    assert_eq!(errs.len(), 1, "{pass}: nothing else is wrong: {errs:?}");
+                    let d = &hit[0].detail;
+                    assert!(
+                        d.starts_with(&format!("`{field}` is read as a property here, but it is"))
+                            && d.contains("a column of every edge")
+                            && d.contains(reached),
+                        "{pass}: the detail names the field and where it lives: {d}"
+                    );
+                    assert!(
+                        d.ends_with(
+                            "1 in `edge_filter.properties` name it, the first \
+                             `edge_filter.properties[1]`"
+                        ),
+                        "{pass}: the detail names the container and the position: {d}"
+                    );
+                }
+            }
+        }
+
+        // Control: an edge property key that is no column validates, so the refusal is the field.
+        // `created_at` and `temper-created` are plain keys on an edge, which has no frontmatter.
+        for key in ["since", "created_at", "temper-created", "source_id"] {
+            let c = wire_walk(serde_json::json!({
+                "properties": [{"key": key, "op": {"op": "has_key"}}],
+            }));
+            assert!(validate(&c).is_ok(), "`{key}`: {:?}", validate(&c).err());
+        }
+
+        // The resource list does not leak into the edge container, nor the edge list into the
+        // resource one: `updated` is an edge open key, `weight` a resource open key.
+        let c = wire_walk(serde_json::json!({
+            "properties": [{"key": "updated", "op": {"op": "has_key"}}],
+        }));
+        assert!(validate(&c).is_ok(), "{:?}", validate(&c).err());
+        let c = selection_with_properties(vec![PropertyPredicate {
+            key: "weight".to_string(),
+            op: PropertyOp::HasKey,
+        }]);
+        assert!(validate(&c).is_ok(), "{:?}", validate(&c).err());
     }
 
     fn count_refusals(c: &Composition, reason: RefusalReason) -> usize {

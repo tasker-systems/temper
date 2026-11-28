@@ -387,14 +387,17 @@ pub enum RefusalReason {
     EmptyPropertyKey,
     /// A `contains` predicate was supplied with no values, so it narrows nothing.
     EmptyContains,
-    /// A `resource_filter.properties` predicate names a field every resource carries as a column,
-    /// never as a property row: `created` or `updated`, or their frontmatter names
-    /// `temper-created` and `temper-updated`.
+    /// A property predicate names a field its subject carries as a column, never as a property
+    /// row. In `resource_filter.properties`: `created` or `updated`, or their frontmatter names
+    /// `temper-created` and `temper-updated`. In `edge_filter.properties`: `created`, `edge_kind`,
+    /// `label`, `polarity` or `weight`.
     ///
     /// A property predicate reads only `kb_properties` rows, so it could match nothing, and the
-    /// empty answer it would give looks exactly like an honest "none". The detail names the field
-    /// and the range that narrows by it, `resource_filter.created` or `resource_filter.updated`.
-    /// The list is `filter::RESOURCE_COLUMN_FIELDS`.
+    /// empty answer it would give looks exactly like an honest "none". The detail names the field,
+    /// the container, and where the field is reached instead: the range `resource_filter.created`
+    /// or `resource_filter.updated`, `edge_filter.edge_kinds` or `edge_filter.labels`, or that no
+    /// filter narrows by it. The lists are `filter::RESOURCE_COLUMN_FIELDS` and
+    /// `filter::EDGE_COLUMN_FIELDS`.
     ColumnNotAProperty,
     /// A `resource_filter` carries a field it does not declare, such as `created_at` for
     /// `created`. An unknown field would narrow nothing, so the stage would answer a wider question

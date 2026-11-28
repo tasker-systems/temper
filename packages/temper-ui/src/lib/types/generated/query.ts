@@ -521,6 +521,11 @@ labels?: Array<string>,
  * owner_table` includes `'kb_edges'`, whose DDL comment has said *"§4a edges carry facets"*
  * throughout) with a shipped write path `[verified — 20260727000030]`. So this slot narrows
  * nothing today by data rather than by design.
+ *
+ * **A key naming an edge column is refused `column_not_a_property`:** `created`,
+ * `edge_kind`, `label`, `polarity` and `weight`. Those are columns, never property rows, so a
+ * predicate on one could only answer empty. `edge_kinds` and `labels` above narrow by two of
+ * them; nothing narrows by the other three.
  */
 properties?: Array<PropertyPredicate>, };
 
