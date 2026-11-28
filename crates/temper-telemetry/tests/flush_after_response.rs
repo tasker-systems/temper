@@ -1,4 +1,5 @@
-//! With an `AfterResponse` from the host, a request's span flush runs after its response, not before.
+//! With an `AfterResponse` from the host, a request's span flush is handed to the host instead of
+//! running before the response.
 //!
 //! The property is the one that matters to a client: the response does not wait on the telemetry
 //! backend. So the test holds the handed-off work instead of running it. If the response arrives

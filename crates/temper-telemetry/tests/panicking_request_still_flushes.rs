@@ -120,17 +120,32 @@ fn a_panicking_handler_still_exports_its_span() {
             //
             // The hook is silenced only around this call: the panic is expected, and letting it print
             // a backtrace makes a passing run look like a failing one.
+            let held: std::sync::Arc<
+                std::sync::Mutex<Vec<temper_telemetry::after_response::AfterResponseFuture>>,
+            > = std::sync::Arc::default();
+            let held_for_host = std::sync::Arc::clone(&held);
             let previous_hook = std::panic::take_hook();
             std::panic::set_hook(Box::new(|_| {}));
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 rt.block_on(async {
                     app()
-                        .oneshot(
-                            Request::builder()
+                        .oneshot({
+                            // A host handle that holds what it is given and never runs it. A panic
+                            // must flush inline regardless: on Vercel the resumed unwind ends the
+                            // connection before the host would run handed-off work, so a panic span
+                            // handed to it could be lost. If the panic path used the handle, nothing
+                            // would reach the sink below.
+                            let mut request = Request::builder()
                                 .uri("/boom")
                                 .body(Body::empty())
-                                .expect("build request"),
-                        )
+                                .expect("build request");
+                            request
+                                .extensions_mut()
+                                .insert(temper_telemetry::AfterResponse::new(move |future| {
+                                    held_for_host.lock().expect("held-work lock").push(future);
+                                }));
+                            request
+                        })
                         .await
                 })
             }));

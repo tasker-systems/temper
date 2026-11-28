@@ -53,8 +53,8 @@ use crate::after_response::AfterResponse;
 ///
 /// With an [`AfterResponse`] from the host, the flush is handed to it and this returns at once: the
 /// response is not held, and the host keeps the invocation alive until the flush settles. Without
-/// one, the flush runs inline and the response waits for it, up to `FLUSH_BUDGET`. See
-/// [`crate::after_response`].
+/// one, the flush runs inline and the response waits for it, up to `FLUSH_BUDGET`. The panic path
+/// always passes `None`. See [`crate::after_response`].
 async fn end_span_and_flush(span: Span, after_response: Option<&AfterResponse>) {
     // Dropping the last handle closes the tracing span, which is what makes `tracing-opentelemetry`
     // end the OpenTelemetry span and hand it to the processor.
@@ -149,7 +149,13 @@ where
                 latency_ms = started.elapsed().as_millis() as u64,
                 "panic"
             );
-            end_span_and_flush(span, after_response.as_ref()).await;
+            // Inline, never handed to the host, even when an `AfterResponse` is present. The
+            // resumed unwind is not caught above this middleware, so on Vercel it ends the
+            // connection's task before the runtime waits on this request's background work and
+            // sends its `end` message. A handed-off flush would then be tracked only by the
+            // process-wide drain at shutdown, and a freeze could take the span of the request that
+            // failed.
+            end_span_and_flush(span, None).await;
             std::panic::resume_unwind(payload);
         }
     };

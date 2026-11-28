@@ -1,5 +1,5 @@
-//! Work the host runs after the response has been sent: how a request's span flush leaves the
-//! response path.
+//! Work the host runs without holding the response: how a request's span flush leaves the response
+//! path.
 //!
 //! ## Why the flush must not hold the response
 //!
@@ -9,16 +9,19 @@
 //! the collector is slow, that is most requests, each held for telemetry the client never sees.
 //!
 //! A serverless host that can keep an invocation alive after its response removes the trade. Vercel
-//! can: `vercel_runtime::AppState::wait_until` sends the response at once and delays the
-//! invocation's end until the registered future settles, bounded by the function's `maxDuration`.
-//! The flush still finishes before the freeze, and nobody waits for it.
+//! can: `vercel_runtime::AppState::wait_until` starts the registered future at once, alongside the
+//! response, and delays the invocation's end until it settles, bounded by the function's
+//! `maxDuration`. The flush still finishes before the freeze, and nobody waits for it. The cost and
+//! the limits of that are on `export::flush_after_response`.
 //!
 //! ## The seam
 //!
-//! [`AfterResponse`] is a request extension: "run this after the response". A host that can do that
-//! inserts one; [`traced_request`](crate::traced_request) hands it the flush when it is present and
-//! flushes inline, within the budget, when it is not. The inline path serves the long-lived
-//! `temper-api` binary, whose process does not freeze, and any host that installs no handle.
+//! [`AfterResponse`] is a request extension: "run this without holding the response". A host that
+//! can do that inserts one; [`traced_request`](crate::traced_request) hands it the flush when it is
+//! present and flushes inline, within the budget, when it is not. The inline path serves the
+//! long-lived `temper-api` binary, whose process does not freeze, and any host that installs no
+//! handle. A panicking request always flushes inline: the resumed unwind ends the connection's task
+//! on Vercel before the runtime waits on the request's background work (see `traced_request`).
 //!
 //! This crate defines the handle without depending on a host. The Vercel adapter that inserts it is
 //! [`vercel::AfterResponseLayer`], behind the `vercel` feature, so a consumer that is not on Vercel
@@ -29,14 +32,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-/// A future the host runs after the response.
+/// A future the host runs without holding the response.
 pub type AfterResponseFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
-/// A request extension that runs work after the response has been sent.
+/// A request extension that runs work without holding the response.
 ///
-/// The host that inserts it guarantees the future runs to completion before the invocation ends.
-/// A host that cannot guarantee that must not insert one: the flush handed to it is what gets spans
-/// out before a freeze.
+/// The host that inserts it keeps the invocation alive until the future settles, for any request
+/// that returns a response. A host that cannot do that must not insert one: the flush handed to it
+/// is what gets spans out before a freeze.
 #[derive(Clone)]
 pub struct AfterResponse(Arc<dyn Fn(AfterResponseFuture) + Send + Sync>);
 
