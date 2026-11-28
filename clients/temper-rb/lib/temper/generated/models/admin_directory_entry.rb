@@ -26,7 +26,7 @@ module Temper::Generated
     # The profile holds an open (`pending`) join request — the direct bridge to `admin requests review <id>`.
     attr_accessor :has_pending_request
 
-    # Reads the principal-governance grant and nothing else.
+    # `is_system_admin`: the principal-governance grant AND approved standing. A grant on a principal whose standing is not approved reads `false` here.
     attr_accessor :is_system_admin
 
     # Present only when the `email_contains` filter drove the match: the address that satisfied it, so \"why was this person enumerated\" is answerable from the row itself.

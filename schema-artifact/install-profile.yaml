@@ -24,7 +24,7 @@ instance_name: "Acme Temper"
 # prerequisite (see the runbook). The gating team is created here if absent.
 root:
   # The gating team. NOTE: since D11 this confers no authorization by itself — is_system_admin
-  # reads kb_principal_governance, not team ownership. The slug is still recorded as instance
+  # reads kb_principal_governance and approved standing, not team ownership. The slug is still recorded as instance
   # configuration and the team is created here if absent.
   gating_team_slug: "temper-system"
   # The first admin's profile id (uuidv7). Found via `SELECT id FROM kb_profiles WHERE …` after the

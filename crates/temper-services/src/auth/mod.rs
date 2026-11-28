@@ -584,7 +584,8 @@ impl SystemAdmin {
 }
 
 /// Level 3 — governance check. A sibling of [`require_system_access`] off Level 1, not a chain on top
-/// of it: it reads governance *alone* (D11's posture that `is_system_admin` never ANDs standing).
+/// of it: it asks `is_system_admin`, which since 20261205000010 is a governance row AND live standing
+/// (`has_system_access`), so a governance row that outlives the principal's standing confers nothing.
 ///
 /// Takes a [`HumanPrincipal`], so a machine cannot be handed to it — that is a compile error, not a
 /// refusal, and it is why no code path can hold a `SystemAdmin` for a machine. (The #1089 triggers
@@ -665,9 +666,14 @@ pub async fn require_system_admin_locked(
 /// a demotion in a cycle. A later change that makes a demotion lock a door's rows after its delete
 /// would break this.
 ///
-/// The `is_system_admin` read after the lock is defence in depth: today it is an `EXISTS` on the
-/// row just locked, so it cannot disagree. It must stay a pure read of governance. A predicate that
-/// read standing or a team row here would make this a second lock-order site.
+/// The `is_system_admin` read after the lock is the governance row just locked AND live standing
+/// (20261205000010). The standing half is a plain MVCC read and takes no row lock, so it adds no
+/// lock-order site. It still holds to the end of the transaction: the only transitions out of
+/// `Approved` (Revoke and Deactivate, `temper_principal::transition`) delete the governance row in
+/// the same transaction, which conflicts with the `KEY SHARE` held here, so they either committed
+/// first (the answer is false) or wait. A direct `UPDATE` of standing takes no such path; that is the
+/// unlocked drift the read-time AND exists to refuse. It must not grow a read that takes a lock, or
+/// a team row: that would make this a second lock-order site.
 pub(crate) async fn is_system_admin_locked(
     tx: &mut sqlx::PgConnection,
     profile: ProfileId,

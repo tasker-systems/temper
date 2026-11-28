@@ -61,9 +61,10 @@ reconcile flow described here.
 `require_cogmap_write_admin → is_system_admin`. Two things make this
 non-obvious:
 
-1. **`is_system_admin` reads `kb_principal_governance` and nothing else.** Not
-   team membership, not `gating_team_slug`, not a column on `kb_profiles`. A
-   profile is a system admin exactly when it has a row in that table.
+1. **`is_system_admin` reads `kb_principal_governance` and approved standing,
+   and nothing else.** Not team membership, not `gating_team_slug`, not a column
+   on `kb_profiles`. A profile is a system admin exactly when it has a row in
+   that table *and* its standing in `kb_principal_standing` is `approved`.
 2. **Nothing has one out of the box.** The canonical seed grants no governance,
    so the L0 write gate denies **everyone** and the kernel is immutable on a
    fresh instance. A reconcile attempt returns **403 Forbidden** until the
@@ -86,20 +87,23 @@ inlined manifest below is saved into it.
 
 ### 1. Grant (temporary admin)
 
-`is_system_admin` reads `kb_principal_governance` and nothing else, so the
-grant is a governance grant — made through the shipped admin surface, never by
-editing team rows. If the instance already has a system admin, promote the
+`is_system_admin` reads `kb_principal_governance` and approved standing, so
+the grant is a governance grant on an admitted principal — made through the
+shipped admin surface, never by editing team rows. `temper admin promote`
+approves the profile first when it needs to. If the instance already has a system admin, promote the
 operator as that admin:
 
 ```bash
 temper admin promote <operator-profile-uuid>
 ```
 
-On a fresh instance nobody is admin yet, so the first grant is the SQL root
-step from
-[Bootstrap an Org](./bootstrap-an-org.md#0-the-irreducible-sql-root-step) —
-`SELECT principal_governance_set('<operator-profile-uuid>'::uuid, true, NULL,
-'root bootstrap');` — run over an admin connection to your instance's Postgres.
+On a fresh instance nobody is admin yet, so the first grant is the full SQL
+root step from
+[Bootstrap an Org](./bootstrap-an-org.md#0-the-irreducible-sql-root-step)
+(`migrations/templates/system_initialization.sql`), run over an admin
+connection to your instance's Postgres. It approves the profile and then grants
+governance in one transaction. Granting governance alone is not enough: a
+governance row on a profile whose standing is not `approved` confers nothing.
 Confirm the grant took either way:
 
 ```sql

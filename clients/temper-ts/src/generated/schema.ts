@@ -4096,7 +4096,10 @@ export interface components {
              *     `admin requests review <id>`.
              */
             has_pending_request: boolean;
-            /** @description Reads the principal-governance grant and nothing else. */
+            /**
+             * @description `is_system_admin`: the principal-governance grant AND approved standing. A grant on a
+             *     principal whose standing is not approved reads `false` here.
+             */
             is_system_admin: boolean;
             /**
              * @description Present only when the `email_contains` filter drove the match: the address that
@@ -12751,7 +12754,8 @@ export interface components {
         UpdateSettingsRequest: {
             /**
              * @description Gating team slug recorded in instance settings. Ownership of it confers no authorization:
-             *     `is_system_admin` reads the principal-governance grant. `None` leaves it unchanged.
+             *     `is_system_admin` reads the principal-governance grant and approved standing. `None` leaves
+             *     it unchanged.
              */
             gating_team_slug?: string | null;
             /** @description Human-facing instance name. */

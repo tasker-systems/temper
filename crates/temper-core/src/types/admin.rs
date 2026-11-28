@@ -24,7 +24,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateSettingsRequest {
     /// Gating team slug recorded in instance settings. Ownership of it confers no authorization:
-    /// `is_system_admin` reads the principal-governance grant. `None` leaves it unchanged.
+    /// `is_system_admin` reads the principal-governance grant and approved standing. `None` leaves
+    /// it unchanged.
     pub gating_team_slug: Option<String>,
     /// Human-facing instance name.
     pub instance_name: Option<String>,
@@ -464,7 +465,8 @@ pub struct AdminDirectoryEntry {
     pub standing: String,
     /// When the standing row was last written; `None` exactly when no row exists.
     pub standing_updated: Option<chrono::DateTime<chrono::Utc>>,
-    /// Reads the principal-governance grant and nothing else.
+    /// `is_system_admin`: the principal-governance grant AND approved standing. A grant on a
+    /// principal whose standing is not approved reads `false` here.
     pub is_system_admin: bool,
     /// The profile's default verified email (default link if verified, else earliest-verified),
     /// `None` when no verified link exists. An unverified email never renders here.

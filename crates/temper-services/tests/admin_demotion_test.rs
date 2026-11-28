@@ -233,6 +233,29 @@ async fn governance_without_live_standing_is_not_admin(pool: PgPool) {
     force_standing(&pool, subject, "approved").await;
     assert!(is_admin(&pool, subject).await);
     assert!(!plpgsql_guard_refuses(&pool, subject).await);
+
+    // Absence: a governance row on a profile with no standing row at all (profiles are born with
+    // none). Written raw, because `grant_governance` approves first.
+    let unadmitted = a_profile(&pool, "governs-unadmitted").await;
+    sqlx::query("INSERT INTO kb_principal_governance (profile_id) VALUES ($1)")
+        .bind(unadmitted)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let no_row: Option<String> = standing(&pool, unadmitted).await;
+    assert_eq!(no_row, None, "the fixture has no standing row");
+    let scalar: Option<bool> = sqlx::query_scalar("SELECT is_system_admin($1)")
+        .bind(unadmitted)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        scalar,
+        Some(false),
+        "absent standing: never admin, and never NULL"
+    );
+    assert!(!is_admin(&pool, unadmitted).await);
+    assert!(plpgsql_guard_refuses(&pool, unadmitted).await);
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]

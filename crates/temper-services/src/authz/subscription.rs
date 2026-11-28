@@ -27,7 +27,7 @@ use crate::services::team_service;
 /// The caller's authority over subscriptions authored by a given team.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SubscriptionAuthority {
-    /// A system admin (a `kb_principal_governance` grant), who reaches every authoring team but a
+    /// A system admin (`is_system_admin`: a governance grant with approved standing), who reaches every authoring team but a
     /// personal one (task `01a191b4`).
     SystemAdmin,
     /// Owner or maintainer of the authoring team — `team_service::can_manage`, the same bar the

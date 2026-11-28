@@ -583,6 +583,15 @@ current_gates() {
 # `is_system_admin_locked_raw`, which returns the database error as is so the erasure acts' retry
 # loops can classify a deadlock on the re-check. The wrapper maps that error as before, and the raw
 # function is now fingerprinted with the gate. No arm, order or answer changed.
+# REVIEWED 2026-11-28 (a revoked admin is not an admin, 20261205000010) — no fingerprint moved, and
+# that is the point of recording it: the `is_system_admin` gate fingerprints the Rust passthrough,
+# while the change is the SQL body it calls, which now requires live standing (`has_system_access`)
+# beside the governance row. The gate NARROWED: a principal holding governance with standing not
+# approved is no longer admitted. Every claim bound to `is_system_admin` and `team_membership`'s
+# admin arm says "a system admin" may act, and the narrowing only removes principals nobody would
+# call one, so each still describes its gate. Doc comments that said the predicate reads governance
+# "and nothing else" were corrected in the same change (auth/mod.rs, access_service.rs,
+# machine_authz.rs, authz/subscription.rs, authz/two_sided.rs, types/admin.rs, cli.rs).
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin

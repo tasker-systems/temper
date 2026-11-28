@@ -1998,7 +1998,7 @@ pub enum AdminAction {
     Settings {
         /// Gating team slug recorded in instance settings. Ownership of this team does NOT
         /// by itself confer system-admin: `is_system_admin` reads the principal-governance
-        /// grant and nothing else
+        /// grant and approved standing, nothing else
         #[arg(long = "gating-team")]
         gating_team_slug: Option<String>,
         /// Human-facing instance name

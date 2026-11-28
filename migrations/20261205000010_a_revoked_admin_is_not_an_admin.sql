@@ -1,38 +1,24 @@
 -- A principal whose standing is not live is never a system admin, whatever governance row remains.
 --
--- Until now is_system_admin read kb_principal_governance and nothing else (20260720000110), and
--- "admin implies approved" (spec 2026-07-20 §9) was kept by transition only: Revoke and Deactivate
--- demote in the same transaction (standing_service::judge_and_apply_conn), and promotion approves
--- before it grants (access_service::promote_admin). No production door was found that leaves a
--- revoked principal holding governance, but nothing at read time refused one either. No trigger
--- forbids a direct UPDATE of kb_principal_standing, and that is the only known way to build the
--- state; a missed demotion or a future door that ends standing without the committer would do the
--- same. The read-time AND covers all of them.
+-- Until now is_system_admin read kb_principal_governance alone (20260720000110), and "admin implies
+-- approved" (spec 2026-07-20 §9) held by transition only: Revoke and Deactivate demote in the same
+-- transaction (standing_service), and promote_admin approves before it grants. Nothing refused the
+-- drift at read. Two unguarded routes produce it: a direct UPDATE of kb_principal_standing (no
+-- trigger forbids one), and principal_governance_set(p, true, ...) on a principal not approved
+-- (it has no standing guard; its one production caller approves first). The read-time AND covers
+-- both, and any future door that ends standing without the committer.
 --
--- THIS AMENDS 20260720000110 AND THE kb_principal_governance COMMENT (20260720000010), which said
--- the invariant is kept "never by an AND at read time" (D2/D10). Ruling 37 of decision
--- 01a21d95-1e3d-70bb-a01f-c3b2d3e9e658 chose the AND as defence in depth. D2's concern was
--- admission ANDing inputs from several tables; here governance reads admission's one answer, so
--- "may you act" stays a single-table question and only "may you govern" depends on it.
+-- THIS AMENDS the "never an AND at read time" claims in 20260720000110 and in the
+-- kb_principal_governance comment, per ruling 37 of decision 01a21d95-1e3d-70bb-a01f-c3b2d3e9e658
+-- (defence in depth). Governance reads admission's one answer, so "may you act" stays one table.
 --
--- "LIVE" MEANS 'approved': exactly the set has_system_access admits.
+-- "LIVE" MEANS 'approved', and the body asks has_system_access rather than restating it, so
+-- admin-ness follows the one definition of "may use" if that ever changes.
 --
--- THE BODY ASKS has_system_access, NOT A RESTATED STANDING TEST. "You cannot govern an instance
--- you may not use" is the invariant, and has_system_access is the one definition of "may use"
--- (standing = 'approved', 20260720000110). Every state outside it is excluded: revoked,
--- deactivated, denied, requested, and absence. If "may use" ever widens or narrows, admin-ness
--- follows it without another migration.
---
--- EXISTS AND EXISTS, never a scalar. Both halves are EXISTS, so the result is never NULL and the
--- function stays fail-closed both in a WHERE clause and under a plpgsql `IF NOT is_system_admin(...)`
--- (20260715000010:76, 20260731000040:106, 20260826000120:143,204, 20260826000130:74). The
--- 20260720000110 header has the measurement showing why.
---
--- The signature is unchanged, so every caller follows with no code change: the Rust passthrough
--- access_service::is_system_admin, auth::is_system_admin_locked_raw (which takes the governance row
--- FOR KEY SHARE and then calls this), and the in-database callers above and
--- cogmap_authorable_by_profile. The demotion on Revoke and Deactivate stays: it ends the grant,
--- and this only stops a stray one from taking effect.
+-- NEVER NULL. Both halves are EXISTS, so every `IF NOT is_system_admin(...)` site and every WHERE
+-- use stays fail-closed (why that matters: the 20260720000110 header). The signature is unchanged,
+-- so every caller follows, including auth::is_system_admin_locked_raw, which locks the governance
+-- row FOR KEY SHARE first. The DO block below reports existing drift by count; it changes no row.
 
 CREATE OR REPLACE FUNCTION is_system_admin(p_profile_id UUID) RETURNS BOOLEAN
 LANGUAGE SQL STABLE AS $$
@@ -52,6 +38,20 @@ COMMENT ON TABLE kb_principal_governance IS
   'principal''s standing is approved: is_system_admin also asks has_system_access '
   '(20261205000010). Revoke and Deactivate still delete the row (standing_service), and promotion '
   'approves before it grants, so a row with standing not approved is drift that is refused at read.';
+
+-- Report drift instead of hiding it: an install holding governance rows whose standing is not
+-- approved learns how many on apply (those principals stop being admins now). Count only, no ids.
+DO $$
+DECLARE v_n bigint;
+BEGIN
+    SELECT count(*) INTO v_n
+      FROM kb_principal_governance g
+     WHERE NOT has_system_access(g.profile_id);
+    IF v_n > 0 THEN
+        RAISE WARNING '% governance row(s) belong to a principal whose standing is not approved; they no longer confer system admin',
+            v_n;
+    END IF;
+END $$;
 
 SELECT declare_migration(
     20261205000010,

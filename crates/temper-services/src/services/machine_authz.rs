@@ -2,8 +2,8 @@
 //!
 //! Two things live here, and the separation is the point:
 //!
-//! 1. **Who may register** — [`authorize`]: a system admin (under D11 a `kb_principal_governance`
-//!    grant), or the OWNER of the team that will own the machine. Two distinct authorities — a
+//! 1. **Who may register** — [`authorize`]: a system admin (`is_system_admin`: a
+//!    `kb_principal_governance` grant with approved standing), or the OWNER of the team that will own the machine. Two distinct authorities — a
 //!    governance grant and team ownership — either of which admits, except that on someone
 //!    else's personal team only its owner does (task `01a191b4`; `authz/machine.rs`).
 //! 2. **What reach they may confer** — [`AuthorizedReach`]: a value that only this module can
@@ -65,7 +65,7 @@ pub(crate) fn exceeds_machine_ceiling(role: TeamRole) -> bool {
 /// The caller's authority over a machine registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MachineRegistrationAuthority {
-    /// A system admin (a `kb_principal_governance` grant). Full, unchecked reach (Phase A D5),
+    /// A system admin (`is_system_admin`: a governance grant with approved standing). Full, unchecked reach (Phase A D5),
     /// except a cogmap grant on someone else's personal map (task `01a1933d`).
     SystemAdmin,
     /// Owner of the team that owns (or will own) the machine. Reach is contained.

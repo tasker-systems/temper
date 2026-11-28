@@ -27,7 +27,7 @@ class UpdateSettingsRequest(BaseModel):
     """
     Partial-update body for `PATCH /api/access/admin/settings`.
     """ # noqa: E501
-    gating_team_slug: Optional[StrictStr] = Field(default=None, description="Gating team slug recorded in instance settings. Ownership of it confers no authorization: `is_system_admin` reads the principal-governance grant. `None` leaves it unchanged.")
+    gating_team_slug: Optional[StrictStr] = Field(default=None, description="Gating team slug recorded in instance settings. Ownership of it confers no authorization: `is_system_admin` reads the principal-governance grant and approved standing. `None` leaves it unchanged.")
     instance_name: Optional[StrictStr] = Field(default=None, description="Human-facing instance name.")
     terms_resource_uri: Optional[StrictStr] = Field(default=None, description="URI of the terms-of-service resource.")
     terms_version: Optional[StrictStr] = Field(default=None, description="Terms-of-service version label.")

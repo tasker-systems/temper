@@ -52,7 +52,8 @@ pub async fn has_system_access(pool: &PgPool, profile_id: ProfileId) -> ApiResul
     Ok(result.unwrap_or(false))
 }
 
-/// Check if a profile is a system admin (holds a `kb_principal_governance` grant).
+/// Check if a profile is a system admin: it holds a `kb_principal_governance` grant AND its standing
+/// is approved (`is_system_admin`, 20261205000010).
 pub async fn is_system_admin(pool: &PgPool, profile_id: ProfileId) -> ApiResult<bool> {
     let result = sqlx::query_scalar!("SELECT is_system_admin($1)", *profile_id,)
         .fetch_one(pool)
