@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::act::ActName;
+use super::composition::CombineOp;
 use super::disposition::{ActRefusal, StageDisposition};
 use super::envelope::NarrowedBy;
 use super::hits::RegionDisclosure;
@@ -85,7 +86,19 @@ pub struct StageInputTrace {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct StageTrace {
     pub stage: StageName,
+    /// What ran at this stage: the act's name, or for a combinator stage the combinator's wire
+    /// name (`union`, `intersect` or `difference`). A combinator is not an act, and `ActName` is
+    /// open, so its name reaches the wire through the open arm: never `admit`, the declared
+    /// anti-act, which a combinator stage used to report here.
     pub act: ActName,
+    /// The combinator a combinator stage ran, typed. Absent on an act stage.
+    ///
+    /// **This is the typed handle; `act` is the name.** On a combinator stage `act` carries
+    /// `union`, `intersect` or `difference` through `ActName`'s open arm, so a reader that parses
+    /// `act` into its act vocabulary finds a name outside it (`ActName::Other`). Branch on this
+    /// field to tell a combinator stage from an act stage, and on `act` only to read what ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combinator: Option<CombineOp>,
     pub disposition: StageDisposition,
     /// Present iff `disposition` is `refused` — the reason and standing-aware detail. The trace
     /// covers every stage while results cover only returned ones, so this is the ONLY refusal
@@ -366,6 +379,7 @@ mod tests {
         StageTrace {
             stage: name(stage),
             act,
+            combinator: None,
             disposition,
             refusal: None,
             inputs: vec![],
@@ -379,6 +393,37 @@ mod tests {
             narrowed_by: vec![],
             disclosed_regions: vec![],
             artifact_asks: vec![],
+        }
+    }
+
+    /// **An act stage carries no `combinator` key, and a combinator stage carries its op by its
+    /// request spelling.** A trace without the key reads back as `None`, so an older producer's
+    /// trace still parses.
+    #[test]
+    fn the_combinator_key_is_absent_on_an_act_stage_and_names_the_op_on_a_combinator_stage() {
+        let act = trace("sel", ActName::FindResourcesWith, StageDisposition::Empty);
+        let json = serde_json::to_value(&act).unwrap();
+        assert!(json.get("combinator").is_none(), "got: {json}");
+        let back: StageTrace = serde_json::from_value(json).unwrap();
+        assert_eq!(back.combinator, None);
+
+        for (op, wire) in [
+            (CombineOp::Union, "union"),
+            (CombineOp::Intersect, "intersect"),
+            (CombineOp::Difference, "difference"),
+        ] {
+            let mut t = trace("c", ActName::Other(wire.into()), StageDisposition::Answered);
+            t.combinator = Some(op);
+            let json = serde_json::to_value(&t).unwrap();
+            assert_eq!(json["combinator"], wire, "got: {json}");
+            assert_eq!(json["act"], wire, "got: {json}");
+            let back: StageTrace = serde_json::from_value(json).unwrap();
+            assert_eq!(back.combinator, Some(op));
+            assert_eq!(
+                back.act,
+                ActName::Other(wire.into()),
+                "a combinator's name is not an act: it rides the open arm"
+            );
         }
     }
 

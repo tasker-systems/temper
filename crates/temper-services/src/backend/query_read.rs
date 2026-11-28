@@ -28,9 +28,9 @@ use temper_core::types::ids::{ProfileId, ResourceId, ShapeId};
 use temper_core::types::query::ActDeclaration;
 use temper_core::types::query::{
     applied_terms, declaration, text_to_embed, texts_to_embed, validate, ActName, ActRefusal,
-    CombineNode, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse, RegionDisclosure,
-    ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput,
-    StageResult, StageTrace, ValidatedComposition, ViaEntry,
+    CombineNode, CombineOp, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse,
+    RegionDisclosure, ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput, StageNode,
+    StageOutput, StageResult, StageTrace, ValidatedComposition, ViaEntry,
 };
 use temper_core::types::query::{
     ArtifactAskPopulation, ArtifactAskTrace, BoundTerm, CompositionTrace, InputSource,
@@ -888,6 +888,10 @@ fn stage_trace(
     Ok(StageTrace {
         stage: node.name().clone(),
         act: act_of(node),
+        combinator: match node {
+            StageNode::Act(_) => None,
+            StageNode::Combine(c) => Some(c.op),
+        },
         disposition: n.disposition,
         refusal: n.refusal,
         inputs: n.inputs,
@@ -1268,9 +1272,22 @@ fn narrowed_by(
 fn act_of(node: &StageNode) -> ActName {
     match node {
         StageNode::Act(inv) => inv.act.clone(),
-        // A combinator runs no act. `Admit` is the anti-act and is the honest stand-in: it names
-        // "nothing was asked of the corpus here", which is exactly what a set union is.
-        StageNode::Combine(_) => ActName::Admit,
+        // A combinator runs no act, so the trace names the combinator itself, through `ActName`'s
+        // open arm. It once named `Admit` here, the declared anti-act, so a reader of `act` saw the
+        // anti-act as the thing that answered. The typed handle is `StageTrace::combinator`.
+        StageNode::Combine(c) => ActName::Other(combinator_wire_name(c.op)),
+    }
+}
+
+/// The combinator's own wire spelling (`union`, `intersect`, `difference`), read from its serde
+/// form so the trace can never name it by a spelling the request does not accept.
+fn combinator_wire_name(op: CombineOp) -> String {
+    match serde_json::to_value(op) {
+        Ok(serde_json::Value::String(name)) => name,
+        // A unit variant under `rename_all` always serializes to a string; anything else is a
+        // change to `CombineOp`'s serde shape, which `a_combinator_stage_names_its_combinator_never_admit`
+        // catches.
+        other => format!("{other:?}"),
     }
 }
 
