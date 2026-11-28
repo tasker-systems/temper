@@ -43,15 +43,27 @@ use axum::middleware::Next;
 use axum::response::Response;
 use tracing::{Instrument, Span};
 
+use crate::after_response::AfterResponse;
+
 /// End the span and drain the queue — the ordering the module exists to own.
 ///
 /// Extracted because it now runs on **two** paths (a returned response and a propagating panic) and
 /// the ordering is the whole invariant: `drop` before flush, because until the span closes there is
 /// nothing queued to flush. Two copies of an invariant is how an invariant decoheres.
-async fn end_span_and_flush(span: Span) {
+///
+/// With an [`AfterResponse`] from the host, the flush is handed to it and this returns at once: the
+/// response is not held, and the host keeps the invocation alive until the flush settles. Without
+/// one, the flush runs inline and the response waits for it, up to `FLUSH_BUDGET`. The panic path
+/// always passes `None`. See [`crate::after_response`].
+async fn end_span_and_flush(span: Span, after_response: Option<&AfterResponse>) {
     // Dropping the last handle closes the tracing span, which is what makes `tracing-opentelemetry`
     // end the OpenTelemetry span and hand it to the processor.
     drop(span);
+
+    if let Some(after_response) = after_response {
+        after_response.run(Box::pin(crate::export::flush_after_response()));
+        return;
+    }
 
     let flush = crate::export::flush_within_budget().await;
     if !flush.is_zero() {
@@ -74,6 +86,8 @@ where
 {
     let span = make_span(&request);
     let started = std::time::Instant::now();
+    // Taken before `next.run` consumes the request.
+    let after_response = request.extensions().get::<AfterResponse>().cloned();
 
     // ## Why the handler is polled inside `catch_unwind`
     //
@@ -135,7 +149,13 @@ where
                 latency_ms = started.elapsed().as_millis() as u64,
                 "panic"
             );
-            end_span_and_flush(span).await;
+            // Inline, never handed to the host, even when an `AfterResponse` is present. The
+            // resumed unwind is not caught above this middleware, so on Vercel it ends the
+            // connection's task before the runtime waits on this request's background work and
+            // sends its `end` message. A handed-off flush would then be tracked only by the
+            // process-wide drain at shutdown, and a freeze could take the span of the request that
+            // failed.
+            end_span_and_flush(span, None).await;
             std::panic::resume_unwind(payload);
         }
     };
@@ -187,9 +207,10 @@ where
     // closes there is nothing queued to flush. No ordering fixes that; the flush is genuinely not part
     // of the span it flushes.
     //
-    // It is, however, part of what the **client** waits for — the response is returned after this line —
-    // so the cost is real and had to become visible some other way. `flush_ms` is that way, and a
-    // caller's observed latency is `latency_ms + flush_ms`.
+    // On the inline path it is, however, part of what the **client** waits for — the response is
+    // returned after this line — so the cost is real and had to become visible some other way.
+    // `flush_ms` is that way, and a caller's observed latency is `latency_ms + flush_ms`. When the host
+    // supplied an `AfterResponse`, the flush is handed to it here and the client waits for none of it.
     //
     // Worth naming the pattern: an instrument that is real, on the real path, and blind to the one
     // thing it was cited for is the same shape as an exporter whose test could not reach a transport.
@@ -204,7 +225,7 @@ where
     //
     // **This call is the reason the module exists** — see `end_span_and_flush`, which owns the
     // `drop`-then-flush ordering for both this path and the panicking one.
-    end_span_and_flush(span).await;
+    end_span_and_flush(span, after_response.as_ref()).await;
 
     response
 }

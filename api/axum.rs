@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
+use temper_telemetry::after_response::vercel::AfterResponseLayer;
 use tower::ServiceBuilder;
 use vercel_runtime::axum::VercelLayer;
 
@@ -70,7 +71,13 @@ async fn main() -> Result<(), vercel_runtime::Error> {
     let state = AppState::new(pool, jwks_store, config);
     let app = temper_api::create_app(state);
 
-    let service = ServiceBuilder::new().layer(VercelLayer::new()).service(app);
+    // `AfterResponseLayer` outside `VercelLayer`, which receives each request's `AppState` and drops
+    // it: the outer layer hands the request's span flush to that state's `wait_until`, so the response
+    // is sent without waiting on the telemetry backend (`temper_telemetry::after_response`).
+    let service = ServiceBuilder::new()
+        .layer(AfterResponseLayer)
+        .layer(VercelLayer::new())
+        .service(app);
 
     // Named for the service this binary claims above, not for the Vercel project the three
     // executables share — a log line and a span from one invocation identifying their emitter
