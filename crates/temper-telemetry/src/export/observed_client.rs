@@ -36,10 +36,11 @@
 //!
 //! Every line carries `send_ms` and `wall_ms`, the attempt's duration on the monotonic and the wall
 //! clock, and `idle_ms` and `idle_wall_ms`, the same two clocks for the gap since the previous
-//! attempt on this client finished. Whether a sandbox freeze stops the monotonic clock is not known.
-//! Both clocks are logged so that a freeze shows either way: the two readings of a span that
-//! includes one disagree if it stops the monotonic clock, and agree on a long gap if it does not. A
-//! long idle before a slow or failed attempt points at a connection that went stale while frozen.
+//! attempt on this client finished. On Vercel the two agree even across a freeze: the monotonic
+//! clock keeps running while the sandbox is frozen. So an attempt the freeze interrupted reports the
+//! frozen time in `send_ms`, and a client timeout that could not fire while frozen fires on thaw
+//! with `send_ms` far beyond it. Both clocks stay logged, because that is a property of the host,
+//! not of this code.
 //!
 //! ## What a log line never carries
 //!

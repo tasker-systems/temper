@@ -6527,6 +6527,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
+ "vercel_runtime",
 ]
 
 [[package]]

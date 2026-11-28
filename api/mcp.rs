@@ -3,6 +3,7 @@
 //! Bridges the axum Router from temper-mcp-server to Vercel's serverless interface
 //! via VercelLayer — identical pattern to api/axum.rs.
 
+use temper_telemetry::after_response::vercel::AfterResponseLayer;
 use tower::ServiceBuilder;
 use vercel_runtime::axum::VercelLayer;
 
@@ -35,7 +36,13 @@ async fn main() -> Result<(), vercel_runtime::Error> {
     let jwks_store = JwksKeyStore::new(server_config.auth.jwks_url.clone());
     let app = temper_mcp_server::build_router(server_config, jwks_store, discovery);
 
-    let service = ServiceBuilder::new().layer(VercelLayer::new()).service(app);
+    // `AfterResponseLayer` outside `VercelLayer`, which receives each request's `AppState` and drops
+    // it: the outer layer hands the request's span flush to that state's `wait_until`, so the response
+    // is sent without waiting on the telemetry backend (`temper_telemetry::after_response`).
+    let service = ServiceBuilder::new()
+        .layer(AfterResponseLayer)
+        .layer(VercelLayer::new())
+        .service(app);
 
     tracing::info!("temper-mcp: Vercel function initialized");
 

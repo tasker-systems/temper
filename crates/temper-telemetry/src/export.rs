@@ -637,6 +637,40 @@ const FLUSH_BUDGET: Duration = Duration::from_millis(500);
 /// (or, at a freeze, is lost — which is the trade batching already accepts).
 static FLUSHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Flush pending spans without holding the response: the flush a host's
+/// [`AfterResponse`](crate::AfterResponse) runs alongside it.
+///
+/// No budget, because no response waits on it. The host keeps the invocation alive until this
+/// settles, which is bounded by the SDK's own five-second `force_flush` ceiling. That is the cost:
+/// with a degraded collector an invocation can outlive its response by up to five seconds, holding
+/// its concurrency slot and a blocking-pool thread meanwhile, where the inline path made the client
+/// wait up to `FLUSH_BUDGET` and then let the invocation end. Off the reactor for the same reason
+/// as [`flush_within_budget`].
+///
+/// **What it does not guarantee.** When that ceiling expires, `force_flush` returns while the
+/// processor thread may still be exporting (the HTTP client's own timeout is longer), so the
+/// invocation can end mid-export and a freeze can take the export. And when the processor's
+/// control channel is full, `force_flush` fails at once. In both cases this request's span usually
+/// leaves on a flush queued by another in-flight invocation, but nothing here ensures it.
+///
+/// **Not single-flight.** `FLUSHING` lets a concurrent inline flush skip, because a response waiting
+/// on a flush that has nothing of its own to do is the cost it removes. Here a skip would end this
+/// invocation with its span still queued, and the freeze would take it. Concurrent flushes queue on
+/// the processor's one thread instead; one that finds the queue already drained returns as soon as
+/// the processor reaches it.
+///
+/// **No budget warning on this path.** The "span flush exceeded its budget" warning belongs to the
+/// inline flush. Where flushes are handed off, a slow export is visible as `ObservedClient`'s
+/// `span export was slow` line, and a flush the SDK gave up on as `force_flush_spans`' warning.
+pub(crate) async fn flush_after_response() {
+    if PROVIDER.get().is_none() {
+        return;
+    }
+    if let Err(error) = tokio::task::spawn_blocking(force_flush_spans).await {
+        tracing::warn!(%error, "span flush after the response did not complete; some spans may be lost");
+    }
+}
+
 /// Flush pending spans without letting the response wait longer than `FLUSH_BUDGET`.
 ///
 /// Three things this does that [`force_flush_spans`] cannot, all of which only started mattering once
