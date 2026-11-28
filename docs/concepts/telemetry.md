@@ -84,6 +84,21 @@ nothing exports, and the logs still say export is on. The signal to watch is a `
 flush exceeded its budget; spans may be lost."* If that fires routinely in a healthy deployment,
 the constant is wrong.
 
+On Vercel, where the host can keep an invocation alive after its response, the request's flush
+runs after the response instead and has no budget warning, because no response waits on it. A
+slow export there shows as *"span export was slow"*. A flush the SDK gave up on shows as *"span
+flush timed out or failed; its spans may still be exported by a later flush"*. Its `error` field
+says which: `Timeout(5s)` is the SDK's flush timeout, and anything else is a failure. After a
+timeout the spans usually do leave on a later flush, so check the trace backend before calling
+them lost.
+
+**Count these warnings by event, not by log line.** Vercel's runtime logs attribute a line that
+a function instance writes to every request in flight on that instance. One flush event can
+therefore appear 15–25 times under different request ids, with the same JSON `timestamp` down
+to the microsecond. Count distinct `timestamp` values per deployment. A raw line count, such as
+`group_by` in the log viewer, overstates the event count, and the more concurrent the instance,
+the more it overstates it.
+
 ## Span attributes and navigation
 
 A link is only navigable if the span it names was exported. The receiving side records a link

@@ -558,7 +558,19 @@ pub fn force_flush_spans() {
     if let Err(error) = provider.force_flush() {
         // Warn, never propagate: a failed flush costs visibility, and turning that into a failed
         // response would trade the thing being observed for the observation of it.
-        tracing::warn!(%error, "span flush failed; some spans may be lost");
+        //
+        // **"Timed out or failed", not "spans lost".** In production this is almost always the
+        // batch processor's five-second flush timeout, and the spans it was flushing usually
+        // still reach the collector on a later flush: for a 2026-11-28 burst of these warnings,
+        // every request they were logged against had its root span in Tempo. The SDK cannot tell
+        // us which case this is, because `TracerProvider::force_flush` folds every processor's
+        // error into one `InternalFailure` string, which its docs say not to branch on. So the
+        // message names both, and `error` carries which: `Timeout(5s)` inside it is the timeout;
+        // anything else (a full control channel, a processor already shut down) is a failure.
+        tracing::warn!(
+            %error,
+            "span flush timed out or failed; its spans may still be exported by a later flush"
+        );
     }
 }
 
