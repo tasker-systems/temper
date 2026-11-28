@@ -1,7 +1,7 @@
 title    = "A system admin whose standing is not approved is not an admin, whatever governance row remains"
 pr       = "self"
-classes  = ["behavioral"]
-surfaces = ["http", "mcp", "cli-stdout", "internal"]
+classes  = ["behavioral", "spec-correction"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "internal"]
 status   = "signal-only"
 body = '''
 is_system_admin now asks governance and live standing. Migration 20261205000010 is a body-only
@@ -23,5 +23,13 @@ loses admin-ness when the migration applies. No schema change, no response shape
 rewritten. Witnesses, each failing against the previous body:
 `governance_without_live_standing_is_not_admin` and
 `a_revoked_admin_with_governance_is_refused_at_admin_doors` in
-`crates/temper-services/tests/admin_demotion_test.rs`. Release relevance: signal-only.
+`crates/temper-services/tests/admin_demotion_test.rs`. Why spec-correction too (ruling 35, decision 01a21d95-1e3d-70bb-a01f-c3b2d3e9e658): the shape
+movement the declared-class gate charges here is not this PR's. It is #1480's oneOf→anyOf
+correction of RefusalReason (entry `open-enums-publish-any-of`), which the release-relative reading
+(v0.6.5 → head, COMPAT-1) re-charges on every operation this PR touches that reaches RefusalReason
+through ErrorBody: GET /api/access/admin/profiles and PATCH /api/access/admin/settings. This PR's
+own wire change is two field descriptions (AdminDirectoryEntry.is_system_admin,
+UpdateSettingsRequest.gating_team_slug), plus the behavioral narrowing of is_system_admin above.
+
+Release relevance: signal-only.
 '''
