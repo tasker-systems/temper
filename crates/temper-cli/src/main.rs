@@ -2034,12 +2034,16 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         Commands::Config { action } => match action {
             ConfigAction::Edit => commands::config::edit(),
         },
-        Commands::Query { plan, check } => {
+        Commands::Query {
+            plan,
+            check,
+            strict,
+        } => {
             // Resolved at the call site, mirroring `resource create`/`update`: the actions layer
             // takes it as a parameter so the body-source precedence is testable without a terminal.
             use std::io::IsTerminal;
             let stdin_is_tty = std::io::stdin().is_terminal();
-            commands::query_cmd::run(plan.as_deref(), check, stdin_is_tty, output_format)
+            commands::query_cmd::run(plan.as_deref(), check, strict, stdin_is_tty, output_format)
         }
         Commands::Search {
             query,

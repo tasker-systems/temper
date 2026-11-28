@@ -243,10 +243,11 @@ async fn a_refused_plans_payload_carries_its_refusals_as_details(pool: sqlx::PgP
 /// Only reachable through the real binary: the exit code comes from `std::process::exit`, which no
 /// in-process test can observe, and "did it reach the server" is a claim about a whole process.
 ///
-/// **It reports FEWER refusals than the server does, and that is the contract, not a shortfall.**
-/// The same plan comes back from `POST /api/query` with a third — `follow-from`'s mechanic is not
-/// reachable on this deployment — which is a *capability* refusal that a local shape pass cannot
-/// see. That gap is exactly what the disclosure exists to state.
+/// **Its refusals are the shape tier only, and that is the contract, not a shortfall.** What the
+/// server would refuse beyond the shape is reported beside them as `capability_findings`, this
+/// client's build speaking, which never makes a plan inexpressible and never fails the check
+/// without `--strict` `[ruled — 2026-11-27, Pete, ruling 33]`. That gap is what both disclosures
+/// exist to state.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn check_reports_shape_refusals_on_stdout_and_never_calls_the_server(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
@@ -276,6 +277,51 @@ async fn check_reports_shape_refusals_on_stdout_and_never_calls_the_server(pool:
     assert!(
         report["disclosure"].as_str().is_some_and(|d| !d.is_empty()),
         "the disclosure must ride on the wire, not only on the terminal: {report:#}"
+    );
+    assert!(
+        report["capability_findings"].is_array(),
+        "the capability tier rides on the wire too: {report:#}"
+    );
+    assert!(
+        report["capability_disclosure"]
+            .as_str()
+            .is_some_and(|d| d.contains("only as current as")),
+        "and so does what it can and cannot say: {report:#}"
+    );
+}
+
+/// **A capability finding alone exits zero, and `--strict` makes it fail.** A resource filter on a
+/// ranked find act is well-formed (shape-clean) and refused by this build's capability pass with
+/// `filter_not_applicable`, the reason the server would give.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_capability_finding_exits_zero_unless_strict(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    let plan = r#"{"stages":[{"name":"hits","act":"find-exact","intention":{"query":"q"},
+                   "resource_filter":{"doc_type":["task"]}}],
+                   "outcome":{"returns":[{"stage":"hits"}]}}"#;
+
+    let out = common::run_temper_cli_with_stdin(&app, plan, &["query", "--check"])
+        .await
+        .expect("spawn temper query --check");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "a capability finding alone must not fail the check: {stdout}"
+    );
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("JSON on stdout");
+    assert_eq!(report["expressible"], true, "{report:#}");
+    assert_eq!(
+        report["capability_findings"][0]["reason"], "filter_not_applicable",
+        "{report:#}"
+    );
+
+    let strict = common::run_temper_cli_with_stdin(&app, plan, &["query", "--check", "--strict"])
+        .await
+        .expect("spawn temper query --check --strict");
+    assert!(
+        !strict.status.success(),
+        "--strict fails on a capability finding: {}",
+        String::from_utf8_lossy(&strict.stdout)
     );
 }
 

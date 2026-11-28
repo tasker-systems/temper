@@ -22,12 +22,17 @@ Options:
           Check the plan's shape locally and exit — no network, no token, no server consulted.
           
           Reports EXPRESSIBILITY: whether the plan is well-formed against the published contract. A clean result does not promise the server will run it; only the server knows what it has built. Refusals print to stdout as data and the exit code is non-zero.
+          
+          Also reports CAPABILITY FINDINGS: what this client's build would refuse beyond the shape, with the server's own reasons. They are only as current as this client, are not refusals, and leave the exit code zero unless `--strict` is given.
 
       --format <FORMAT>
           Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
 
       --embed-threads <N>
           ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --strict
+          With `--check`: fail (exit non-zero) on capability findings too. For a caller that knows this client matches the server it will send the plan to
 
       --color <COLOR>
           Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto

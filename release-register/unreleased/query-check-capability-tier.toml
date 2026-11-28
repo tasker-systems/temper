@@ -1,0 +1,43 @@
+title    = "temper query --check reports this build's capability findings beside its shape refusals, and --strict makes them fatal"
+pr       = "self"
+classes  = ["additive", "behavioral", "spec-correction"]
+surfaces = ["cli-stdout", "http", "mcp"]
+status   = "signal-only"
+body = '''
+What changed, CLI: `temper query --check` now also runs the capability pass the server runs
+(`validate_capability`, the same code), and reports its findings in a new `capability_findings`
+list beside `refusals`, with the server's own typed reasons (`filter_not_applicable`,
+`unknown_filter_field`, `not_implemented`, ...), plus a `capability_disclosure` saying the tier is
+this client's build and only as current as it is. They are findings, never refusals: `expressible`
+is unchanged, and the exit code stays zero when only capability findings exist. A new flag,
+`--strict` (only with `--check`), exits non-zero on them too. Shape refusals fail as before.
+Ruled as the standing rule for `--check` (ruling 33, decision 01a21d95-1e3d-70bb-a01f-c3b2d3e9e658).
+
+What changed, server: the capability pass decides whether an act admits a `resource_filter` from
+the registry's `accepts_filters`, not by act name, and the three ranked find acts' `accepts_filters`
+are corrected from `[resource]` to `[]` (they always refused it; the registry said otherwise). The
+registry's values are published on no door. Two refusal-list differences follow, both
+`filter_not_applicable`: an act that admits no resource filter now gets one refusal per set field
+and no extra generic refusal beside them (acts outside the selections used to get both), and an
+empty `resource_filter: {}` on a ranked find act, which narrowed nothing and was accepted, is now
+declined with one refusal. No first-party caller sends either (the UI sends `null`).
+
+Who observes: `temper query --check` users (new fields, a new flag; a plan with only capability
+findings still exits zero), and callers of POST /api/query or the MCP query tool whose plan carries
+a resource filter on an act that does not admit one (the refusal list changes as above).
+
+Why additive + behavioral: two new fields in `--check`'s JSON and one new flag; no field or flag
+removed or retyped, no openapi change. The behavioral half is the refusal-list change and the
+capability tier's appearance. Witnesses: `the_capability_pass_admits_exactly_the_filters_the_registry_declares`
+and `the_offline_passes_together_raise_what_the_server_raises` (temper-core validate tests),
+`a_capability_finding_is_reported_and_fails_only_under_strict` (temper-cli), and
+`a_capability_finding_exits_zero_unless_strict` (tests/e2e/tests/query_cli_e2e.rs).
+
+Why spec-correction too (ruling 35, decision 01a21d95-1e3d-70bb-a01f-c3b2d3e9e658): the shape
+movement the declared-class gate charges here is not this PR's. It is #1480's oneOf→anyOf
+correction of RefusalReason (entry `open-enums-publish-any-of`), which the release-relative reading
+re-charges on every operation this PR touches that reaches RefusalReason (COMPAT-1's residue: an
+earlier declared break can be re-charged). This PR's own change stays additive + behavioral.
+
+Release relevance: signal-only.
+'''

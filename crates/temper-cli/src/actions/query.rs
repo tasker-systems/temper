@@ -65,6 +65,19 @@ pub const SHAPE_DISCLOSURE: &str =
      for form only: no shape was loaded, so none of them was checked against its shape \
      (`shapes_not_checked`).";
 
+/// What the capability tier of a `--check` can answer: this client's build, not the server's.
+///
+/// `[ruled — 2026-11-27, Pete, ruling 33]` `--check` runs the capability pass this binary carries
+/// and reports its findings with the server's own typed reasons, but **never as refusals**: the
+/// server the plan is sent to may be newer or older than this client, and only it knows what it has
+/// built. Carried as a field for the same reason as [`SHAPE_DISCLOSURE`].
+pub const CAPABILITY_DISCLOSURE: &str =
+    "Capability findings are this client's build, and only as current as it is: what this client's \
+     registry has built and admits, with the reasons a server of the same build would refuse with. \
+     They are not refusals. A newer server may admit what is listed here, and an older one may \
+     refuse what is not; the server that runs the plan decides. They do not fail the check unless \
+     `--strict` is given.";
+
 /// The verdict of a local `--check`.
 #[derive(Debug, serde::Serialize)]
 pub struct ShapeReport {
@@ -72,6 +85,13 @@ pub struct ShapeReport {
     pub expressible: bool,
     /// Every shape refusal at once, never just the first.
     pub refusals: Vec<PlanRefusal>,
+    /// What this client's build would refuse beyond the shape: the capability pass the server runs
+    /// ([`temper_core::types::query::validate_capability`]), with the same typed reasons, reported
+    /// as findings and never as refusals. Empty when this build would run the plan. Always
+    /// present, like the disclosures.
+    pub capability_findings: Vec<PlanRefusal>,
+    /// Always [`CAPABILITY_DISCLOSURE`].
+    pub capability_disclosure: &'static str,
     /// Every shape the plan's artifact asks name, none of which this check loaded: whether each
     /// ask's paths, operators and values lie inside its shape is the server's to say (spec
     /// `2026-10-19-asking-artifacts-by-what-they-are` §4.3 item 5). Empty when the plan asks
@@ -95,9 +115,12 @@ pub struct ShapeReport {
 /// `SHAPE_DISCLOSURE` says on every report; the set of things it cannot speak to simply grew.
 pub fn check_plan(composition: &Composition) -> ShapeReport {
     let refusals = temper_core::types::query::validate::validate_shape(composition);
+    let capability_findings = temper_core::types::query::validate_capability(composition);
     ShapeReport {
         expressible: refusals.is_empty(),
         refusals,
+        capability_findings,
+        capability_disclosure: CAPABILITY_DISCLOSURE,
         shapes_not_checked: asked_shapes(composition),
         disclosure: SHAPE_DISCLOSURE,
     }

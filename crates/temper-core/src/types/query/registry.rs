@@ -157,7 +157,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_bounds: vec![IdKind::Resource, IdKind::Context, IdKind::Cogmap],
             accepts_seeds: vec![],
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
-            accepts_filters: vec![FilterField::Resource],
+            // No resource filter: the narrowing is `find-resources-with`'s, and the capability
+            // pass refuses every `resource_filter` field here, reading this list (`[2026-11-27]`).
+            accepts_filters: vec![],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             accepts_order: false,
             produces: Some(IdKind::Resource),
@@ -204,7 +206,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_bounds: vec![],
             accepts_seeds: vec![],
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
-            accepts_filters: vec![FilterField::Resource],
+            // No resource filter: the narrowing is `find-resources-with`'s, and the capability
+            // pass refuses every `resource_filter` field here, reading this list (`[2026-11-27]`).
+            accepts_filters: vec![],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             accepts_order: false,
             produces: Some(IdKind::Resource),
@@ -231,7 +235,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             accepts_bounds: vec![IdKind::Resource, IdKind::Context, IdKind::Cogmap],
             accepts_seeds: vec![],
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
-            accepts_filters: vec![FilterField::Resource],
+            // No resource filter: the narrowing is `find-resources-with`'s, and the capability
+            // pass refuses every `resource_filter` field here, reading this list (`[2026-11-27]`).
+            accepts_filters: vec![],
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             accepts_order: false,
             produces: Some(IdKind::Resource),
@@ -1429,17 +1435,23 @@ mod tests {
     }
 
     #[test]
-    fn follow_from_filters_edges_and_the_find_acts_filter_resources() {
+    fn follow_from_filters_edges_and_only_the_selections_filter_resources() {
         // The two slots never cross: an edge-walking act has no resource predicate to apply, and
         // a lexical/vector act has no edge to filter.
         assert_eq!(
             declaration(&ActName::FollowFrom).unwrap().accepts_filters,
             vec![FilterField::Edge]
         );
-        assert_eq!(
-            declaration(&ActName::FindExact).unwrap().accepts_filters,
-            vec![FilterField::Resource]
-        );
+        // `[corrected — 2026-11-27]` The three ranked find acts declared `[Resource]` while the
+        // capability pass refused every resource filter on them, so the registry said yes where
+        // the door said no. Only the two selection acts admit one.
+        for a in [
+            ActName::FindExact,
+            ActName::FindAboutAnywhere,
+            ActName::FindAboutWithin,
+        ] {
+            assert_eq!(declaration(&a).unwrap().accepts_filters, vec![], "{a:?}");
+        }
     }
 
     #[test]

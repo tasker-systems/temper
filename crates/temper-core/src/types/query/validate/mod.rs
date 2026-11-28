@@ -532,6 +532,34 @@ pub fn validate_shape(c: &Composition) -> Vec<PlanRefusal> {
     errs
 }
 
+/// The capability pass alone, as THIS build declares it: what this binary's registry has built and
+/// admits. It exists for `temper query --check`, which reports these findings as a separate,
+/// advisory tier beside [`validate_shape`]'s refusals `[ruled — 2026-11-27, Pete, ruling 33]`.
+///
+/// **Its findings are only as current as the build that ran it.** A server newer than the client
+/// may admit what this refuses (a new act, a new filter field, a wider section list), and an older
+/// one may refuse what this admits. So a caller reporting them must never call them refusals: the
+/// server that runs the plan decides. That is the shape module's rule for the seam, kept by the
+/// caller rather than by moving any check across it.
+///
+/// **The same halves [`validate`] runs, in the same order, gated the same way**: the `returns`
+/// half and the embed budget always, the per-stage half only over a plan whose stages sort. What it
+/// leaves out is the asks' shape-dependent checks, which need shapes only the server loads;
+/// [`validate_shape`] already checks the asks' form. `validate_shape` plus this is therefore every
+/// refusal [`validate`] raises for an ask-free plan, which
+/// `the_offline_passes_together_raise_what_the_server_raises` holds.
+pub fn validate_capability(c: &Composition) -> Vec<PlanRefusal> {
+    let (_, ordered) = shape::validate_shape_indexed(c);
+    let mut errs = Vec::new();
+    capability::validate_returns(c, &mut errs);
+    capability::validate_intention_budget(c, &mut errs);
+    if ordered.is_some() {
+        let by_name = index_by_name(c);
+        capability::validate_stages(c, &by_name, &mut errs);
+    }
+    errs
+}
+
 /// Whether the shape pass refused a composition-wide budget — text or predicate values. Such a
 /// composition is refused whatever its asks say, and an ask's refusal is not actionable until the
 /// plan is shrunk, so neither [`validate`] nor [`validate_shape`] reads its asks: the server reads
@@ -6178,6 +6206,168 @@ mod tests {
     // ---- `list-resources-with` ----------------------------------------------------------------
 
     /// A `list-resources-with` stage with `order` set, for the tests whose subject is the order.
+    /// **The two offline passes together raise what the server raises.** For ask-free plans,
+    /// `validate_shape` plus `validate_capability` is the same multiset of `(stage, reason, detail)`
+    /// as the full `validate` the server runs, so `temper query --check`'s two tiers answer what the
+    /// server would refuse, with the same typed refusals. A capability finding never appears in the
+    /// shape tier.
+    ///
+    /// FAILS IF: `validate_capability` skips a half `validate` runs, or gates one differently.
+    #[test]
+    fn the_offline_passes_together_raise_what_the_server_raises() {
+        fn key(e: &PlanRefusal) -> (Option<String>, String, String) {
+            (
+                e.stage.as_ref().map(|s| s.as_str().to_string()),
+                format!("{:?}", e.reason),
+                e.detail.clone(),
+            )
+        }
+        let mut on_find = act("hits", ActName::FindExact, None);
+        if let StageNode::Act(inv) = &mut on_find {
+            inv.resource_filter = Some(ResourceFilter {
+                doc_type: vec!["task".into()],
+                ..Default::default()
+            });
+        }
+        let mut unknown = act("sel", ActName::FindResourcesWith, None);
+        if let StageNode::Act(inv) = &mut unknown {
+            inv.resource_filter = Some(
+                serde_json::from_value(serde_json::json!({"created_at": {}})).expect("parses"),
+            );
+        }
+        let plans = vec![
+            ("a filter on a find act", plan(vec![on_find], vec!["hits"])),
+            ("an unknown filter field", plan(vec![unknown], vec!["sel"])),
+            (
+                "the unbuilt anti-act",
+                plan(vec![act("a", ActName::Admit, None)], vec!["a"]),
+            ),
+            (
+                "a cycle beside a capability finding",
+                plan(
+                    vec![
+                        act("a", ActName::FindExact, upstream("b")),
+                        act("b", ActName::FindExact, upstream("a")),
+                    ],
+                    vec!["a"],
+                ),
+            ),
+            (
+                "a clean plan",
+                plan(vec![act("hits", ActName::FindExact, None)], vec!["hits"]),
+            ),
+        ];
+        for (what, c) in plans {
+            let shape = super::validate_shape(&c);
+            let capability = super::validate_capability(&c);
+            let mut offline: Vec<_> = shape.iter().chain(&capability).map(key).collect();
+            let mut server: Vec<_> = validate(&c)
+                .err()
+                .unwrap_or_default()
+                .iter()
+                .map(key)
+                .collect();
+            offline.sort();
+            server.sort();
+            assert_eq!(offline, server, "{what}");
+            // The tiers are disjoint: shape refusals stay in shape.
+            let shape_keys: Vec<_> = shape.iter().map(key).collect();
+            assert!(
+                capability.iter().all(|e| !shape_keys.contains(&key(e))),
+                "{what}: a capability finding repeated in the shape tier"
+            );
+        }
+    }
+
+    /// **The capability pass admits exactly the filter slots the registry declares, act by act.**
+    /// The admitted set is derived from `accepts_filters`, never restated: for every declared act
+    /// and every `resource_filter` field (and the empty filter), the pass raises
+    /// `FilterNotApplicable` if and only if the act does not declare `FilterField::Resource`, and
+    /// likewise for `edge_filter` and `FilterField::Edge`.
+    ///
+    /// FAILS IF: the pass decides the resource slot by act name again (the three ranked find acts
+    /// declared `[Resource]` while the pass refused them), or a declaration changes without the
+    /// pass following it.
+    #[test]
+    fn the_capability_pass_admits_exactly_the_filters_the_registry_declares() {
+        use crate::types::query::filter::{FilterField, RESOURCE_FILTER_FIELDS};
+        use crate::types::query::registry::{declaration, search_family};
+
+        let sample = |field: &str| -> serde_json::Value {
+            match field {
+                "doc_type" | "tags" => serde_json::json!(["x"]),
+                "facets" => serde_json::json!([{"key": "k", "value": "v"}]),
+                "properties" => serde_json::json!([{"key": "k", "op": {"op": "has_key"}}]),
+                "created" | "updated" => serde_json::json!({"from": "2026-01-01T00:00:00Z"}),
+                _ => serde_json::json!("x"),
+            }
+        };
+        let not_applicable = |c: &Composition| -> Vec<PlanRefusal> {
+            validate(c)
+                .err()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|e| e.reason == RefusalReason::FilterNotApplicable)
+                .collect()
+        };
+        let with = |a: &ActName, set: &dyn Fn(&mut ActInvocation)| -> Composition {
+            let mut node = act("s", a.clone(), None);
+            if let StageNode::Act(inv) = &mut node {
+                set(inv);
+            }
+            plan(vec![node], vec!["s"])
+        };
+
+        let acts: Vec<ActName> = search_family().into_iter().map(|d| d.name).collect();
+        assert!(acts.len() >= 7, "every declared act is walked: {acts:?}");
+        for a in &acts {
+            let decl = declaration(a).expect("a family member is declared");
+            let admits_resource = decl.accepts_filters.contains(&FilterField::Resource);
+            let mut filters: Vec<(String, ResourceFilter)> = RESOURCE_FILTER_FIELDS
+                .iter()
+                .map(|field| {
+                    let f: ResourceFilter =
+                        serde_json::from_value(serde_json::json!({ *field: sample(field) }))
+                            .unwrap_or_else(|e| panic!("`{field}` sample parses: {e}"));
+                    assert!(f.unrecognized.is_empty(), "`{field}` is a declared field");
+                    (field.to_string(), f)
+                })
+                .collect();
+            filters.push(("resource_filter".to_string(), ResourceFilter::default()));
+            for (field, f) in filters {
+                let c = with(a, &|inv| inv.resource_filter = Some(f.clone()));
+                let hit = not_applicable(&c);
+                if admits_resource {
+                    assert!(
+                        hit.is_empty(),
+                        "{a:?} declares Resource, `{field}`: {hit:?}"
+                    );
+                } else {
+                    assert_eq!(hit.len(), 1, "{a:?} declines `{field}` once: {hit:?}");
+                    assert!(
+                        hit[0].detail.contains(&format!("`{field}`")),
+                        "{a:?}: the refusal names `{field}`: {}",
+                        hit[0].detail
+                    );
+                }
+            }
+
+            let admits_edge = decl.accepts_filters.contains(&FilterField::Edge);
+            let c = with(a, &|inv| {
+                inv.edge_filter = Some(EdgeFilter {
+                    labels: vec!["x".to_string()],
+                    ..Default::default()
+                })
+            });
+            let hit = not_applicable(&c);
+            assert_eq!(
+                hit.is_empty(),
+                admits_edge,
+                "{a:?}: an edge filter is refused iff Edge is undeclared: {hit:?}"
+            );
+        }
+    }
+
     fn list_stage(name: &str, input: Option<StageInput>) -> StageNode {
         act(name, ActName::ListResourcesWith, input)
     }

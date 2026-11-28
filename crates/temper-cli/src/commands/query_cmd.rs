@@ -23,6 +23,7 @@ use crate::format::OutputFormat;
 pub fn run(
     plan_flag: Option<&str>,
     check: bool,
+    strict: bool,
     stdin_is_tty: bool,
     fmt: OutputFormat,
 ) -> Result<()> {
@@ -32,7 +33,7 @@ pub fn run(
     let composition = query_actions::parse_composition(&raw)?;
 
     if check {
-        return run_check(&composition, fmt);
+        return run_check(&composition, strict, fmt);
     }
 
     let outcome = runtime::with_client(|client| {
@@ -60,20 +61,114 @@ pub fn run(
 /// **No network is touched on this path at all** — `run` returns before `with_client`, so `--check`
 /// works with no token, offline, against a server that does not exist yet. That is the point:
 /// spec §C, *"No network, no declarations."*
+///
+/// **Two tiers, and only one fails by default** `[ruled — 2026-11-27, Pete, ruling 33]`. A shape
+/// refusal exits non-zero: no server could run the plan. A capability finding is this client's
+/// build speaking, so it is reported and exits zero, unless `--strict` says the caller knows this
+/// client matches the server it will send to.
 fn run_check(
     composition: &temper_core::types::query::Composition,
+    strict: bool,
     fmt: OutputFormat,
 ) -> Result<()> {
     let report = query_actions::check_plan(composition);
-    let expressible = report.expressible;
+    let fails = check_fails(&report, strict);
     let rendered = crate::format::render(&report, fmt)?;
     crate::output::plain(rendered);
 
-    if !expressible {
+    if fails {
         // `process::exit` runs no destructors, so any spans this process opened would be lost.
         // See `main`'s drain comment — this is a counted exit, not an uncounted one.
         temper_telemetry::shutdown_telemetry();
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Whether a `--check` report fails the command: any shape refusal, and a capability finding only
+/// under `--strict`.
+fn check_fails(report: &query_actions::ShapeReport, strict: bool) -> bool {
+    !report.expressible || (strict && !report.capability_findings.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(plan: serde_json::Value) -> query_actions::ShapeReport {
+        let c = query_actions::parse_composition(&plan.to_string()).expect("the plan parses");
+        query_actions::check_plan(&c)
+    }
+
+    /// A plan only a capability finding stands against: a resource filter on a ranked find act.
+    fn capability_only() -> serde_json::Value {
+        serde_json::json!({
+            "stages": [{"name": "hits", "act": "find-exact", "intention": {"query": "q"},
+                        "resource_filter": {"doc_type": ["task"]}}],
+            "outcome": {"returns": [{"stage": "hits"}]}
+        })
+    }
+
+    /// **A capability finding is reported with the server's typed reason and fails only under
+    /// `--strict`; a shape refusal always fails.**
+    ///
+    /// FAILS IF: `--check` stops running the capability pass (no finding), reports it as a refusal
+    /// (`expressible` false), or fails on it without `--strict`.
+    #[test]
+    fn a_capability_finding_is_reported_and_fails_only_under_strict() {
+        let r = report(capability_only());
+        assert!(
+            r.expressible,
+            "a capability finding is not a shape refusal: {:?}",
+            r.refusals
+        );
+        assert!(r.refusals.is_empty());
+        assert_eq!(
+            r.capability_findings.len(),
+            1,
+            "{:?}",
+            r.capability_findings
+        );
+        assert_eq!(
+            r.capability_findings[0].reason,
+            temper_core::types::query::RefusalReason::FilterNotApplicable
+        );
+        assert!(!check_fails(&r, false), "exit 0 without --strict");
+        assert!(check_fails(&r, true), "exit 1 under --strict");
+
+        // A shape refusal fails either way: two stages under one name.
+        let shape = report(serde_json::json!({
+            "stages": [{"name": "a", "act": "find-exact", "intention": {"query": "q"}},
+                       {"name": "a", "act": "find-exact", "intention": {"query": "q"}}],
+            "outcome": {"returns": [{"stage": "a"}]}
+        }));
+        assert!(!shape.expressible);
+        assert!(check_fails(&shape, false) && check_fails(&shape, true));
+
+        // A clean plan passes either way, with nothing in either tier.
+        let clean = report(serde_json::json!({
+            "stages": [{"name": "hits", "act": "find-exact", "intention": {"query": "q"}}],
+            "outcome": {"returns": [{"stage": "hits"}]}
+        }));
+        assert!(clean.refusals.is_empty() && clean.capability_findings.is_empty());
+        assert!(!check_fails(&clean, false) && !check_fails(&clean, true));
+    }
+
+    /// Both tiers and both disclosures reach `--format json`, the form an agent reads.
+    #[test]
+    fn the_capability_tier_and_its_disclosure_survive_json() {
+        let json = serde_json::to_value(report(capability_only())).expect("serializes");
+        assert_eq!(
+            json["capability_findings"][0]["reason"],
+            "filter_not_applicable"
+        );
+        assert_eq!(
+            json["capability_disclosure"],
+            query_actions::CAPABILITY_DISCLOSURE
+        );
+        assert!(json["capability_disclosure"]
+            .as_str()
+            .is_some_and(|d| d.contains("only as current as")));
+        assert_eq!(json["disclosure"], query_actions::SHAPE_DISCLOSURE);
+    }
 }

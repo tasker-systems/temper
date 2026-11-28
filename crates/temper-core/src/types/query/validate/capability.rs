@@ -48,7 +48,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::types::query::act::{ActName, BuildState};
+use crate::types::query::act::BuildState;
 use crate::types::query::composition::{
     intention_budget_bytes, Composition, ReturnSpec, StageNode,
 };
@@ -647,10 +647,12 @@ fn check_act(
     // mechanic, never before it.
     if let Some(f) = &inv.resource_filter {
         check_unrecognized_resource_fields(name, f, errs);
-        if matches!(
-            inv.act,
-            ActName::FindResourcesWith | ActName::ListResourcesWith
-        ) {
+        // **Read from the registry, never by act name** `[2026-11-27]`. This matched
+        // `FindResourcesWith | ListResourcesWith` while the three ranked find acts declared
+        // `accepts_filters: [Resource]`, so the registry said yes where this said no. Now the
+        // declaration is the only source, and `the_capability_pass_admits_exactly_the_filters_the_registry_declares`
+        // holds the two together act by act.
+        if decl.accepts_filters.contains(&FilterField::Resource) {
             // The two acts whose parameter this is — the selection, and the act that returns its
             // rows over the same fragment. Its fragment has a slot for every field, `doc_type`
             // takes a set rather than one value, and there is nothing here to refuse — except the
@@ -708,15 +710,27 @@ fn check_act(
                 ("created", f.created.is_some()),
                 ("updated", f.updated.is_some()),
             ];
+            let mut refused_a_field = false;
             for field in declared
                 .iter()
                 .filter(|(_, present)| *present)
                 .map(|(field, _)| field)
             {
+                refused_a_field = true;
                 errs.push(refusal(
                     Some(name),
                     RefusalReason::FilterNotApplicable,
                     narrow_by_selecting(field),
+                ));
+            }
+            // A filter that sets no declared field still is one, and is declined, never ignored.
+            // Once per stage, and only when no field above was refused: this was a second, generic
+            // refusal beside every per-field one on the acts outside the registry's list.
+            if !refused_a_field {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::FilterNotApplicable,
+                    narrow_by_selecting("resource_filter"),
                 ));
             }
         }
@@ -841,14 +855,8 @@ fn check_act(
         ));
     }
 
-    // Filters — declined, never silently ignored.
-    if inv.resource_filter.is_some() && !decl.accepts_filters.contains(&FilterField::Resource) {
-        errs.push(refusal(
-            Some(name),
-            RefusalReason::FilterNotApplicable,
-            "act does not admit a resource filter",
-        ));
-    }
+    // Filters — declined, never silently ignored. The resource filter is declined above, per field,
+    // against the same `accepts_filters`; this block used to refuse it a second time generically.
     // **The surviving edge-filter refusal, and the only one now** `[2026-08-14]`. It was
     // unreachable while an unconditional site above refused every edge filter first; retiring that
     // site is what put this one into service.
