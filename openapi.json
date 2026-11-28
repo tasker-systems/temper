@@ -17051,7 +17051,7 @@
           },
           "is_system_admin": {
             "type": "boolean",
-            "description": "Reads the principal-governance grant and nothing else."
+            "description": "`is_system_admin`: the principal-governance grant AND approved standing. A grant on a\nprincipal whose standing is not approved reads `false` here."
           },
           "matched_email": {
             "type": [
@@ -30991,7 +30991,7 @@
               "string",
               "null"
             ],
-            "description": "Gating team slug recorded in instance settings. Ownership of it confers no authorization:\n`is_system_admin` reads the principal-governance grant. `None` leaves it unchanged."
+            "description": "Gating team slug recorded in instance settings. Ownership of it confers no authorization:\n`is_system_admin` reads the principal-governance grant and approved standing. `None` leaves\nit unchanged."
           },
           "instance_name": {
             "type": [

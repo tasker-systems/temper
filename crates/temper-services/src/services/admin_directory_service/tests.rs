@@ -359,7 +359,9 @@ async fn list_rows_carry_row_shape_and_clamps_apply(pool: PgPool) {
         .find(|e| e.profile_id == *b)
         .expect("row b");
     assert_eq!(row_b.standing, "requested");
-    assert!(row_b.is_system_admin);
+    // A governance row without approved standing confers nothing (20261205000010), and the
+    // directory reports is_system_admin, not the row.
+    assert!(!row_b.is_system_admin);
     assert!(row_b.has_pending_request);
     assert_eq!(row_b.email.as_deref(), Some("row-b@corp.example"));
     assert_eq!(row_b.provisioned_via.as_deref(), Some("saml:okta"));

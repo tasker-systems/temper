@@ -76,17 +76,18 @@ already so the profile row exists):
 SELECT id, handle FROM kb_profiles WHERE handle = '<the-operator-handle>';
 ```
 
-Then admit the profile and promote it. **These are two separate things**, and
-each reads exactly one table:
+Then admit the profile and promote it. **These are two separate things**:
 
 - **Admission** — may this principal use the instance at all?
   `has_system_access` reads `kb_principal_standing` and nothing else. Without
   an `approved` row there, every gated request is a `403 SYSTEM_ACCESS_REQUIRED`.
 - **Governance** — may this principal change the rules?
-  `is_system_admin` reads `kb_principal_governance` and nothing else.
+  `is_system_admin` reads `kb_principal_governance`, and holds only while the
+  principal is also admitted (`has_system_access`).
 
 Neither reads team membership. Owning the gating team does not make anyone an
-admin, and being an admin does not admit you.
+admin. Governance without admission confers nothing, which is why the root step
+does both.
 
 The root step is `migrations/templates/system_initialization.sql`. Run it with
 psql, filling in the gating slug (`temper-system` is the conventional one) and

@@ -115,7 +115,8 @@ impl ScopedAuthority for TwoSidedAuthority {
     /// **Contexts — the reassign path's plpgsql twin.** The reason once recorded here ("sharing into
     /// the root team is an instance-level escalation") was true while gating-team membership *was*
     /// instance access, and D11 ended that: `has_system_access` reads `kb_principal_standing` and
-    /// `is_system_admin` reads `kb_principal_governance`, neither consulting the gating team. What
+    /// `is_system_admin` reads `kb_principal_governance` and live standing, neither consulting the
+    /// gating team. What
     /// keeps the exclusion is narrower — this gate also fronts `context_service::reassign`, a
     /// transfer of *ownership* into the root team that `context_reassign` independently forbids in
     /// plpgsql, so relaxing the Rust half would split one act across two error paths.

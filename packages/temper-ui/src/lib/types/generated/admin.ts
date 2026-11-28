@@ -14,7 +14,8 @@ standing: string,
  */
 standing_updated: string | null, 
 /**
- * Reads the principal-governance grant and nothing else.
+ * `is_system_admin`: the principal-governance grant AND approved standing. A grant on a
+ * principal whose standing is not approved reads `false` here.
  */
 is_system_admin: boolean, 
 /**
@@ -125,7 +126,8 @@ team_id: string | null, };
 export type UpdateSettingsRequest = { 
 /**
  * Gating team slug recorded in instance settings. Ownership of it confers no authorization:
- * `is_system_admin` reads the principal-governance grant. `None` leaves it unchanged.
+ * `is_system_admin` reads the principal-governance grant and approved standing. `None` leaves
+ * it unchanged.
  */
 gating_team_slug: string | null, 
 /**

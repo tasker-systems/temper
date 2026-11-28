@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # Partial-update body for `PATCH /api/access/admin/settings`.
   class UpdateSettingsRequest < ApiModelBase
-    # Gating team slug recorded in instance settings. Ownership of it confers no authorization: `is_system_admin` reads the principal-governance grant. `None` leaves it unchanged.
+    # Gating team slug recorded in instance settings. Ownership of it confers no authorization: `is_system_admin` reads the principal-governance grant and approved standing. `None` leaves it unchanged.
     attr_accessor :gating_team_slug
 
     # Human-facing instance name.

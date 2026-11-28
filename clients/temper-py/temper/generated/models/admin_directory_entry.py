@@ -33,7 +33,7 @@ class AdminDirectoryEntry(BaseModel):
     email: Optional[StrictStr] = Field(default=None, description="The profile's default verified email (default link if verified, else earliest-verified), `None` when no verified link exists. An unverified email never renders here.")
     handle: StrictStr
     has_pending_request: StrictBool = Field(description="The profile holds an open (`pending`) join request — the direct bridge to `admin requests review <id>`.")
-    is_system_admin: StrictBool = Field(description="Reads the principal-governance grant and nothing else.")
+    is_system_admin: StrictBool = Field(description="`is_system_admin`: the principal-governance grant AND approved standing. A grant on a principal whose standing is not approved reads `false` here.")
     matched_email: Optional[StrictStr] = Field(default=None, description="Present only when the `email_contains` filter drove the match: the address that satisfied it, so \"why was this person enumerated\" is answerable from the row itself.")
     profile_id: UUID
     provisioned_via: Optional[StrictStr] = Field(default=None, description="Auth-link provider of the link [`Self::email`] came from (or of the earliest link when no verified link exists) — the \"provisioned via Google / saml:idp-key\" answer.")

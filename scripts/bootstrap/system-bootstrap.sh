@@ -78,8 +78,9 @@ LANDMARKS_MANIFEST="$(prof '.org_identity.landmarks_manifest')"
 
 # ── Phase 0 — the irreducible SQL root step (operator-with-DB-credentials) ────────────────────────
 # Set gating_team_slug, then ADMIT and PROMOTE the first admin. Since D11 these are two independent
-# rows and each predicate reads exactly one table: has_system_access -> kb_principal_standing
-# ('approved'), is_system_admin -> kb_principal_governance. Neither reads team membership, and the
+# rows: has_system_access -> kb_principal_standing ('approved'); is_system_admin ->
+# kb_principal_governance AND has_system_access (20261205000010), so the grant alone confers
+# nothing and the template does both. Neither reads team membership, and the
 # kb_profiles.system_access / kb_system_settings.access_mode columns were dropped in Phase 2.
 # The SQL itself is migrations/templates/system_initialization.sql, run as-is: the operator
 # template, this script and that template's test (system_initialization_template_test.rs) share it.

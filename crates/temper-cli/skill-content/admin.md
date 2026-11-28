@@ -7,8 +7,8 @@ subscriptions, settings) or when a refusal suggests you lack standing. Flags: `r
 
 - **Every `temper admin` verb is gated server-side on system-admin standing,** identically in cloud
   and self-host. A CLI flag cannot widen it, and an MCP or API caller is refused by the same rule.
-- **Standing is the principal-governance grant and nothing else.** `admin promote` writes it and
-  `admin demote` revokes it. Owning the gating team does not make you a system admin; `promote`'s
+- **Standing is the principal-governance grant, held while your admission is approved.** `admin
+  promote` writes it and `admin demote` revokes it; a revoke or deactivate ends it too. Owning the gating team does not make you a system admin; `promote`'s
   `owner` row on a team is a side effect, not the source of admin.
 - **A refusal is the gate working, not a syntax problem.** Check `temper auth status` for your own
   standing, and its `api_url` for the deployment you are asking. Escalating past a refusal is an

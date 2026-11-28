@@ -116,8 +116,10 @@ pub async fn admit(pool: &PgPool, profile_id: ProfileId) -> Result<AdmittedPrinc
 ///      reality.
 ///   2. The "admin implies approved" invariant (§9) was a *second* statement after the standing
 ///      write on the pool; if the standing `Revoke` committed but the governance demotion then
-///      failed, a principal could be left `revoked` yet still an admin (`is_system_admin` reads
-///      governance alone). Sharing one transaction makes the pair atomic — both land or neither.
+///      failed, a principal could be left `revoked` yet still holding governance. Sharing one transaction
+///      makes the pair atomic — both land or neither. (`is_system_admin` also requires approved
+///      standing since 20261205000010, so such a row would confer nothing; the demotion still
+///      ends it.)
 pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Standing> {
     let mut tx = pool.begin().await?;
     let resulting = apply_conn(&mut tx, params).await?;
@@ -231,8 +233,9 @@ pub(crate) async fn judge_and_apply_conn(
     debug_assert_eq!(committed.as_deref(), Some(resulting.as_str()));
 
     // §9 — Revoke and Deactivate demote, so "admin, but admission revoked" is never representable.
-    // The invariant is maintained BY TRANSITION: a one-directional write (admission → governance),
-    // never a read-time AND (`is_system_admin` reads governance alone). Fired unconditionally on
+    // The invariant is maintained BY TRANSITION: a one-directional write (admission → governance).
+    // Since 20261205000010 `is_system_admin` also ANDs live standing at read, as defence in depth,
+    // so a row a missed demotion leaves behind confers nothing. Fired unconditionally on
     // these two terminals — `principal_governance_set(_, false, _)` is a no-op on the common case of
     // a principal that was never an admin. Task 14 routes machine-credential revocation through this
     // same `apply`, so the hook also fires when a machine is credential-revoked from `Approved`: a

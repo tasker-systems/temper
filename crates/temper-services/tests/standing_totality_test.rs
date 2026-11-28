@@ -285,11 +285,8 @@ async fn admin_ness_no_longer_reads_gating_team_ownership(pool: PgPool) {
         "owning the gating team must confer nothing once governance holds its own state (D10)"
     );
 
-    sqlx::query("INSERT INTO kb_principal_governance (profile_id) VALUES ($1)")
-        .bind(p)
-        .execute(&pool)
-        .await
-        .unwrap();
+    // Governance confers admin-ness only with approved standing (20261205000010).
+    temper_services::test_support::grant_governance(&pool, p).await;
     let v: Option<bool> = sqlx::query_scalar("SELECT is_system_admin($1)")
         .bind(p)
         .fetch_one(&pool)
